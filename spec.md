@@ -1,0 +1,399 @@
+# Budget App — Build Plan
+
+A private, local-only desktop budgeting app for Windows, organized around **pay periods** (one view per paycheck, like a spreadsheet tab per paycheck), with optional access from an iPhone over the home network or Tailscale.
+
+This plan is written for Claude Code. Build it **one phase at a time**, in order (§10). Finish each phase's acceptance criteria and tests before starting the next. If anything here is ambiguous or seems wrong once you're in the code, **stop and ask** rather than guessing.
+
+Mockups for every screen are in `design/` (see §9). They show layout, hierarchy and behavior. **All numbers in them are sample data — never hard-code them.**
+
+---
+
+## 1. Ground rules (apply to every phase)
+
+### Privacy — non-negotiable
+- **All data stays on the user's computer.** No cloud services, no third-party APIs, no bank connections, no sync services.
+- **No telemetry, analytics, crash reporting, or update checks.** Do not add any dependency that phones home.
+- **No runtime internet requests.** Fonts, icons, chart libraries and all assets are bundled locally (no Google Fonts or CDN links, even though the mockups use them for preview).
+- PDF reading (pay stubs, receipts) and any text recognition (OCR) run **on the PC**.
+- The only network listener is the app's own local HTTP server (§3). It binds to `127.0.0.1` by default. Phone access is **off by default**.
+- Strict Content Security Policy in Tauri that blocks external origins.
+
+### Money, rates and dates
+- **Store money as integer cents** (`INTEGER` in SQLite, `long` in Java, number of cents in TypeScript). $14.99 is stored as `1499`. Convert to dollars only for display. Wrap it in a small `Money` value type rather than passing raw longs around.
+- **Store rates as basis points** (4.10% = `410`). Interest, growth and amortization use `BigDecimal` internally and round to cents with one documented rule (`RoundingMode.HALF_EVEN`) before storing or displaying. Never use `double` for money.
+- Dates are local calendar dates stored as `YYYY-MM-DD` text.
+
+### Every amount is the user's to change
+- Any amount the app calculates or estimates (bill estimates, interest, growth, card estimates, suggestions, projected balances) can be typed over. The typed value simply **becomes the value**.
+- There is **no "revert to calculated" button**. The original projected value is kept in the database and shown on hover (desktop) / long-press (phone), and in the Projected vs. Actual report.
+- **Estimated amounts** are shown inside a **light blue box** (not an "est." tag). Final amounts use the same box size with no fill, so amount columns stay aligned. A small key ("$0.00 = estimate") appears where estimates are shown. An amount stops being an estimate when the user edits it, marks it paid, or unchecks "Estimate, not final yet".
+
+### Pickers, not free text
+- Anything chosen from a list (category, tag, account, bucket, payee, frequency, month, day, settings options) uses a **dropdown**, never a free-text field.
+- Lists the user builds (categories, tags, payees, accounts) use a **type-to-filter picker**: typing filters existing entries; if nothing matches, the last option is **Add "…" as new**. This prevents misspellings. See `design/picker.png`.
+
+### Colors are the user's choice
+- **Categories, tags, accounts and buckets** each have a color the user picks. Clicking any color dot opens a **color picker**: a row of preset swatches, the user's recently used colors first, and a custom option that accepts any hex code.
+- The app's **accent color** (buttons, highlights, current pay period) is a setting under Appearance, using the same picker.
+- The mockup colors are only defaults for new installs.
+- **Readability**: text drawn on a user color automatically switches between dark and light to keep at least 4.5:1 contrast. The user's color is never changed.
+- Charts, pills, bucket bars and dots all read colors from the data, never from hard-coded values.
+
+### Code quality
+- Calculation logic (pay periods, recurrence, period assignment, balances, interest, growth, amortization, suggestions, planner) lives in a **separate Java module (`engine`) with no database, HTTP or UI dependencies**, covered by JUnit tests. Write the tests from §5 **before** wiring up the UI.
+- Use Java records for data, `java.time.LocalDate` for dates, and constructor injection without a DI framework. Keep it plain and readable.
+- Commit at the end of each phase with a clear message.
+
+---
+
+## 2. Tech stack
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Desktop shell | **Tauri 2** | Native Windows window and installer. Its own code is a small Rust file (~50–100 lines) that only starts/stops the Java backend and opens the window. No business logic in Rust. |
+| Backend | **Java 21 LTS** (or newer LTS) | HTTP API, database, calculation engine, file storage. |
+| Build | **Maven** (multi-module: `engine`, `server`) | Gradle is fine if preferred; pick one in Phase 0 and keep it. |
+| HTTP server | **Javalin** | Lightweight, starts in about a second. Serves the API and the built React app. No Spring. |
+| JSON | Jackson (with `jsr310` module for dates) | |
+| Database | **SQLite** via `sqlite-jdbc` (xerial) + **JDBI 3** (or plain JDBC) | `%APPDATA%\<AppName>\budget.db`. WAL mode, foreign keys on. |
+| Migrations | **Flyway** (`flyway-core`) | `src/main/resources/db/migration/V1__init.sql`, `V2__…`. Run at startup. Never edit a committed migration. |
+| Money/dates | `long` cents, `BigDecimal`, `java.time` | |
+| PIN hashing | Argon2 (Password4j or Bouncy Castle) | |
+| PDF text | **Apache PDFBox** | Pay stubs and receipts, read by text position. |
+| OCR (optional, Phase 9) | Tess4J (Tesseract), bundled and run locally | Scanned stubs only. |
+| Logging | SLF4J + Logback, **local log file only** | Rotating file in the app data folder. No remote appenders. |
+| Frontend | **React + TypeScript + Vite** | |
+| Styling | **Tailwind CSS** (v4) | Theme tokens (colors, spacing, radius, fonts) defined once as CSS variables and exposed to Tailwind, so light/dark and the user's accent color switch by changing variables. User-chosen colors (categories, tags, accounts, buckets) come from data and are applied with inline `style`/CSS variables, never generated class names. |
+| Data fetching | TanStack Query | |
+| Charts | Recharts (bundled) | |
+| Dates (UI) | date-fns | |
+| Tests | JUnit 5 + AssertJ (engine, API); Vitest + React Testing Library (UI) | |
+| Packaging | **jlink** trimmed Java runtime + **jpackage** app image, bundled inside the Tauri installer | No separate Java install needed. |
+
+The frontend talks to the backend **only through the HTTP API** (no Tauri `invoke` commands), so the desktop window and the phone's browser run the same React app against the same API.
+
+### The installer (what the end user experiences)
+- **One `.exe` installer** (Tauri's NSIS bundle). Double-click, Next, Finish. Nothing else to install or configure.
+- Installs **per user, no admin rights needed**, into the user's app folder, with Start menu and optional desktop shortcuts.
+- Bundles everything: the trimmed Java runtime, the backend, the React build, fonts and icons. **No separate Java, Node or database install.**
+- **WebView2** (Windows' built-in browser engine, already on Windows 10/11): use Tauri's embedded bootstrapper so it's installed automatically if missing.
+- First launch creates the app data folder and database, runs migrations, and opens the setup wizard.
+- Upgrades: running a newer installer over an existing install keeps all data; migrations run on next launch. A database backup is taken automatically before migrations run.
+- Uninstall removes the program but **keeps the data folder** unless the user ticks "also delete my data".
+- No auto-update (no network). Updating means running a newer installer.
+
+### Development environment
+- **Builds of the installer happen on Windows** (Tauri and jpackage produce Windows output only when run on Windows). Install once: JDK 21, Maven, Node LTS, Rust toolchain (only so Tauri can compile its small wrapper), and the Visual Studio C++ Build Tools that Tauri requires.
+- **Docker is optional for day-to-day work.** A `docker-compose.dev.yml` may run the backend (with hot reload) and the Vite dev server, so most development happens in the browser at `localhost` without Tauri. The engine and API tests run the same in the container or on Windows.
+- One script (`build-installer.ps1`) runs on Windows and produces the installer: tests → backend jar → jlink/jpackage app image → frontend build → Tauri bundle.
+
+### Project layout
+```
+budget/
+  PLAN.md  CLAUDE.md  design/
+  backend/
+    pom.xml
+    engine/   ← pure calculation code + JUnit tests (no I/O)
+    server/   ← Javalin routes, JDBI repositories, Flyway migrations, files, PDF reading
+  frontend/   ← React + TS + Vite
+  desktop/    ← Tauri project (src-tauri/), bundles backend app image + frontend build
+```
+
+---
+
+## 3. Architecture
+
+```
+┌──────────────── Windows PC ──────────────────────┐
+│  Tauri app (window only)                         │
+│  ┌──────────────┐  HTTP (127.0.0.1:port)         │
+│  │ WebView      │ ─────────────┐                 │
+│  │ (React app)  │              ▼                 │
+│  └──────────────┘   ┌──────────────────────┐     │
+│        starts/stops │ Java backend process │     │
+│        ───────────► │ Javalin + engine     │     │
+│                     │ SQLite + Flyway      │     │
+│                     │ files/ (receipts…)   │     │
+│                     └──────────┬───────────┘     │
+└────────────────────────────────┼─────────────────┘
+                                 ▼ (only when enabled)
+                  iPhone Safari over home Wi-Fi or Tailscale
+```
+
+### Backend lifecycle (solve this in Phase 0 — it's the riskiest part)
+1. Tauri starts the bundled backend launcher (from the jpackage app image in Tauri's resources), passing its own process ID and the app data folder.
+2. The backend runs Flyway migrations, binds Javalin to `127.0.0.1` on the configured port (default 4873; if busy, the next free port), then prints one line to stdout: `READY port=NNNN`.
+3. Tauri waits for that line (with a timeout and a friendly error screen if it never comes), then points the window at `http://127.0.0.1:NNNN/`. The backend serves the React build itself, so there is one origin and no CORS.
+4. On window close, Tauri asks the backend to shut down (`POST /api/shutdown`, local only), then kills the process if it hasn't exited after a few seconds.
+5. The backend also watches Tauri's process ID (`ProcessHandle.of(pid).onExit()`) and exits by itself if Tauri dies, so no stray server is ever left running.
+6. Only one backend may run at a time (lock file in the app data folder).
+- Attachments (receipts, invoices, pay stubs) are copied into `%APPDATA%\<AppName>\files\`, named by content hash, and referenced from the database. Originals are never modified.
+- **Phone access (Phase 7):** when enabled, the server also listens on the chosen interface (LAN IP or Tailscale IP). Plain HTTP on home Wi-Fi is unencrypted, so Settings shows a warning and recommends Tailscale. The PIN is always required. The phone shows "Can't reach your PC" when the app isn't running.
+
+---
+
+## 4. Data model
+
+Names are suggestions; keep the concepts. Money = integer cents, rates = basis points.
+
+### 4.1 App and security
+- **settings** — key/value: theme (`light` | `dark` | `system`), density, accent color, projection horizon (default 12 months), budget timing (start of period), budget year start (month + day, default Jan 1), plan-next-year reminder date (default Oct 1), auto-lock minutes, promo warning days (default 60), unpaid-bill highlight days (default 3), start with amounts hidden, backup folder and count, phone access settings, primary income source.
+- **auth** — `pin_hash`, `recovery_code_hash`, failed attempts, lockout-until.
+- **change_log** — before/after of every edit, powering Undo.
+
+### 4.2 Accounts, buckets, assets
+- **accounts** — `id, name, institution, type, subtype_label, color, low_balance_threshold (nullable), sort_order, archived`.
+  - `type`: `checking` | `savings` | `credit_card` | `investment` | `loan`. `subtype_label` is free text chosen by the user (e.g. "401(k)", "Brokerage", "HSA", "Mortgage").
+- **balance_entries** — `account_id, date, amount, note`. A user-entered **actual** balance. Projections roll forward from the latest entry on or before a date. (Not reconciliation — just "the real number is X".)
+- **rate_history** — `account_id, kind (apy | growth | apr | loan_rate), rate_bp, effective_date`. A change applies from its date forward.
+- **buckets** — `id, account_id, name, color, goal_amount (nullable), note, sort_order, archived`. **Checking and savings only.** Buckets don't change the account balance; they reduce **available**.
+- **bucket_changes** — `bucket_id, date, amount (+/−), source (manual | transfer | bucket_move | interest | income_split)`.
+- **interest_settings** — `account_id, credit_day (number or 'last'), destination (unassigned | bucket | proportional), destination_bucket_id`.
+- **assets** — `id, name, kind (home | vehicle | other), color, appreciation_bp (nullable), linked_loan_account_id`.
+- **asset_values** — `asset_id, date, value`.
+
+### 4.3 Income and pay stubs
+- **income_sources** — `id, name, deposit_account_id, gross_amount, net_amount, schedule_rule_id, is_primary`. Multiple sources allowed; the **primary** source's schedule defines pay periods.
+- **paycheck_deductions** — `income_source_id, name, amount, to_account_id` (401(k), HSA…). These never pass through checking.
+- **employer_match** — `income_source_id, to_account_id, mode (fixed | formula), fixed_amount, match_bp, cap_bp_of_gross`.
+- **pay_stubs** — `id, income_source_id, pay_date, file_id, status (review | saved)`.
+- **pay_stub_lines** — `pay_stub_id, section (earnings | pre_tax | tax | net | employer), label, amount, ytd_amount, maps_to (gross | contribution | benefit | tax | net | match), maps_to_account_id, confidence`.
+- **stub_layouts** — per employer: remembered positions/labels of each line so later stubs fill automatically.
+
+### 4.4 Schedules
+- **schedule_rules** — `id, frequency, interval, day_1, day_2, month, start_date, end_date, weekend_rule`.
+  - `frequency`: `every_pay_period` | `weekly` | `biweekly` | `semi_monthly` | `monthly` | `every_n_months` | `yearly` | `one_time` | `manual_dates`.
+  - `monthly` accepts a day or `last`; days that don't exist in a month fall to its last day.
+  - `weekend_rule`: `none` | `previous_business_day` | `next_business_day`.
+- **manual_dates**, **holidays** (user-entered, optional).
+
+### 4.5 Categories and tags
+- **categories** — `id, name, color, parent_id (nullable), sort_order`. One per item. Includes income categories (e.g. Income › Bonus).
+- **tags** — `id, name, color`. Many per item, via **item_tags** / **entry_tags** link tables.
+
+### 4.6 Recurring items
+- **items** — `id, name, kind, amount, amount_mode (per_occurrence | annual), is_estimate, category_id, pay_from_account_id, pay_to_account_id, bucket_id, autopay, placement, schedule_rule_id, save_up_bucket_id (nullable), note, archived`.
+  - `kind`: `bill` | `transfer` | `budget` | `bucket_move` | `card_payment`.
+  - `pay_from_account_id` can be **any** account, including a credit card (the charge then lands on the card).
+  - `bucket_move` moves money from available into a bucket inside the same account (e.g. $50 every paycheck to Holiday gifts).
+  - `amount_mode = annual`: the user enters a yearly total. With `save_up_bucket_id` set, the app creates a matching per-paycheck bucket move so the money is there by the due date.
+  - `placement`: `due_period` | `one_early` (§5.2).
+- **item_versions** — "this and all future" edits start a new version effective from a date.
+- **occurrence_overrides** — `item_id, original_due_date, amount, due_date, period_override, paid, paid_date, confirmation_code, note, skipped, projected_amount`. "Just this one" edits live here. Occurrences are computed on the fly; only changes are stored.
+
+### 4.7 One-off entries (money in and out)
+- **entries** — `id, kind (money_out | money_in | transfer), date, amount, is_estimate, description, payee, category_id, account_id, to_account_id (transfers), note, reimburses_entry_id (nullable)`.
+  - Used for one-off expenses (vet emergency, gift, donation), one-off income (bonus, refund, gift, side cash), and one-off transfers.
+  - **entry_bucket_splits** — `entry_id, bucket_id, amount` (e.g. put $500 of a bonus into a bucket).
+  - **Reimbursement** — `reimbursement_status (none | to_submit | submitted | reimbursed)` on money-out entries; a money-in entry can link to the expense it pays back.
+- **card_charges** are entries whose account is a credit card.
+
+### 4.8 Attachments
+- **files** — `id, hash, original_name, mime, size, created_at`.
+- **attachments** — `file_id, owner_type (entry | occurrence | pay_stub | statement), owner_id`.
+
+### 4.9 Credit cards and loans
+- **card_settings** — `account_id, statement_close_day, due_day, payment_mode (full_balance | statement_balance | minimum | fixed), fixed_payment_amount, autopay, pay_from_account_id`.
+- **card_statements** — `account_id, close_date, statement_balance, minimum_due, due_date`.
+- **card_promos** — `account_id, label, kind (balance_transfer | purchase | other), rate_bp, start_date, end_date, original_balance, rate_after_bp (nullable → regular APR), deferred_interest`. Several per card allowed.
+- **loan_settings** — `account_id, original_principal, rate_bp, term_months, start_date, payment_amount, escrow_insurance, escrow_taxes`.
+
+### 4.10 Yearly plans
+- **plan_years** — `id, year, status (draft | active | closed), basis (last_12 | last_12_trend | prior_year), created_at`.
+- **plan_year_amounts** — `plan_year_id, item_id (or income_source_id), suggested_amount, chosen_amount, chosen_by (suggestion | user)`.
+- A **draft** plan can be deleted and redone any time **before its start date**. When the budget year starts, the draft becomes active and its amounts become new item versions effective that day. History is never rewritten.
+
+### 4.11 Reports
+- **saved_reports** — `id, name, definition_json` (date range, filters by tag/category/account/payee/kind, group by, chart type).
+
+---
+
+## 5. Calculation engine (`engine` module, pure Java, JUnit-tested)
+
+### 5.1 Pay periods
+- Periods come from the **primary** income source. A period runs from one payday up to the day before the next.
+- Generated through the projection horizon. Weekend/holiday rules move paydays and therefore boundaries.
+- **Tests:** semi-monthly 1st & 15th; semi-monthly 15th & last (Feb leap/non-leap); biweekly across a year boundary; weekly; monthly; manual dates; payday Sunday Nov 1, 2026 with `previous_business_day` → Fri Oct 30; with a user holiday on that Friday → Thu Oct 29.
+
+### 5.2 Which period an item lands in
+For an occurrence due on **D**, with **P** = the period containing D:
+- It lands in **P − 1** if `placement = one_early`, **or** if D is a payday (first day of P) **and** the item is **not** autopay.
+- Otherwise it lands in **P**.
+- A user can move a single occurrence to another period (stored as an override).
+- **Tests:** rent due Oct 1 (payday), manual → Sep 15–30 period; same rent on autopay → Oct 1–14; electric due Oct 16 `one_early` → Oct 1–14; `due_period` → Oct 15–31; an item that is both `one_early` and due on payday moves back **one** period, not two.
+
+### 5.3 Balance projection (per account)
+- Start from the latest `balance_entry` on or before the period start.
+- Apply in date order: paychecks (net), one-off money in/out, bills, transfers, card payments, interest, growth, charges.
+- Budget lines come out at the **start** of the period (setting).
+- Per period and account: starting balance, total in, total out, projected ending, **lowest point**, **available after buckets**.
+- Low-balance flag only if the user set a threshold for that account.
+
+### 5.4 Savings interest
+- On the account's credit day: estimated interest = balance × ((1 + APY)^(1/12) − 1), credited to the chosen destination, shown as an estimate.
+- A user-entered balance replaces the projection from that date.
+
+### 5.5 Investments
+- Contributions: paycheck deductions, employer match, transfers.
+- Growth: monthly from the user's assumed rate, always labeled as an assumption.
+- **Gain/loss uses only user-entered balances**: ending − starting − net contributions. A projection being off is never a loss.
+- **Match formula tests:** gross $3,600, employee $150 (4.17%), match 50% up to 6% → $75. Employee $216 (6%) → $108. Employee $300 → capped at 50% × 6% × $3,600 = $108.
+
+### 5.6 Credit cards
+- Balance rises with charges (actual or estimated), bills paid from the card, one-offs on the card, and estimated interest; falls with payments.
+- Payment by mode: full balance, statement balance (user-entered or estimated), minimum, fixed.
+- Interest estimate when a balance is carried, using the promo rate while active, then `rate_after` / regular APR.
+- **Promos:** warn within the user's lead time; stronger warning for deferred interest. **Payoff helper:** remaining promo balance ÷ number of primary paydays before the end date, rounded up to the cent; one-click "add as recurring payment". Test: $2,400 before Mar 15, 2027 with 10 paydays left → $240.00.
+
+### 5.7 Loans, home, net worth
+- Amortization: each payment splits into interest and principal; escrow is part of the payment but not principal.
+- Home value from user entries, with optional appreciation between entries. Equity = value − linked loan balance.
+- Net worth = cash + savings + investments + assets − card balances − loan balances.
+
+### 5.8 Annual costs and suggestions
+- **Annual totals** per item and category for calendar years and **rolling 12 months**, plus % change.
+- **Suggestions for next year**, using the plan's basis:
+  - `last_12`: total of the last 12 full months.
+  - `last_12_trend`: last 12 months × (1 + year-over-year % change), rounded to the dollar.
+  - `prior_year`: the most recent full calendar year.
+- Because planning normally happens in **October**, the default basis is `last_12_trend` and the window is the 12 months ending last month (e.g. Oct 2025 – Sep 2026).
+- Fixed-amount items (loan payments) are suggested unchanged.
+- Annual items with a save-up show the per-paycheck amount (annual ÷ paydays before the due date).
+
+### 5.9 Debt & decisions planner
+Inputs: extra amount per month, comparison period, and the user's options. Rates for debts come from the accounts; **growth rates for investments are editable inputs** (prefilled from the account's assumed rate).
+- **Pay down a debt:** amortize with the extra payment; report interest saved, new payoff date.
+- **Invest:** future value of monthly contributions at the assumed rate; for a 401(k), include employer match on the portion under the match cap.
+- **Payoff order:** highest rate first or smallest balance first; when a debt is paid off, its payment rolls into the next.
+- Flags shown first: unclaimed employer match, promos ending.
+- Always labeled as estimates for comparison, not advice.
+
+### 5.10 Overrides and edits
+- Inline edit asks **Just this one** (default) or **This and all future**.
+- The value at first edit is saved as `projected_amount`.
+
+---
+
+## 6. UX rules (apply to all screens)
+
+- **Pay period screen fits one screen with no scrolling** at 1440×900; must also fit 1366×768 and 1280×800 using a compact density. Panels scroll internally only as a last resort.
+- Amounts: right-aligned, tabular digits, same box width whether estimate or not. Negatives use a minus sign.
+- Status is never color alone (labels/icons too). Text contrast ≥ 4.5:1. Real buttons and inputs, keyboard reachable, visible focus.
+- Inline editing: click an amount to edit; Tab to next; Enter saves; Esc cancels.
+- **Undo** toast after every change plus Ctrl+Z. No "are you sure?" except deleting whole items, accounts, or a draft plan year.
+- Light, dark, or follow Windows. All colors via CSS variables; user colors from data.
+- **Hide amounts** blurs every number. **Auto-lock** after idle; **Lock now** in the sidebar. Sidebar footer: "Data stored only on this PC."
+- Confirmation codes display as plain monospace text once entered; a pencil button edits them; empty ones show "+ Add confirmation".
+- **"+ Add item"** (header, Ctrl+N) opens a menu: **Money out**, **Money in**, **Transfer**, **Recurring item**, then "Upload a pay stub or receipt…". Every choice opens the **same form** with that kind preselected.
+
+---
+
+## 7. Security, backups, recovery
+
+- **PIN** (4–8 digits) is an app lock, not encryption. Argon2 hash.
+- **Recovery code** shown once at PIN setup; can reset the PIN.
+- Increasing delays after wrong PINs.
+- If both are lost: running the backend launcher with `--reset-pin` on the PC clears the PIN without touching data, then exits. Not available over HTTP.
+- Remote sessions always require the PIN and expire with auto-lock.
+- **Backups:** daily copy (SQLite backup API) plus the `files/` folder to a user-chosen folder; keep the last N. "Back up now" and "Restore…".
+- Docs recommend Windows BitLocker for at-rest protection.
+
+---
+
+## 8. Screens
+
+| Screen | Mockup | Key contents |
+|---|---|---|
+| Pay period (home) | `pay-period.png` | Header with period dates, prev/next, Current badge, estimate key, Hide amounts, **+ Add item ▾**. Period strip of ending balances (low-balance and promo flags). Five numbers: starting, coming in, going out, projected ending (with formula), available after buckets. Column 1: Income (incl. one-off money in), Auto-pay & transfers, Spending budgets. Column 2: **Pay manually & one-offs** in one list (manual bills with paid checkbox, pay-by date, account, confirmation code; then one-offs, each labeled "One-off"). Column 3: Accounts & buckets (tab per account), Credit cards. |
+| Add menu / Add form | `add-menu.png`, `add-form.png` | Menu as in §6. Form: kind switch; amount with "Estimate, not final yet"; description; date; account; category picker; tags; set some aside in a bucket; "pays back an expense"; link to upload a stub; live preview of the period's new ending and available. |
+| Dashboard | `dashboard.png` | Net worth, **lowest balance ahead**, saved & invested this year, total debt. Spending by category (donut, range switch), net worth over time (entries solid, projection dashed), "coming up & needs attention" list. |
+| Recurring items | `recurring.png` | Filterable table (estimates in blue boxes, aligned). Edit drawer: type, category picker, paid-from dropdown, per-occurrence vs annual amount, estimate checkbox, schedule dropdowns (frequency/month/day), autopay, which paycheck pays it, save-up per paycheck into a bucket, price history. |
+| Picker | `picker.png` | Type-to-filter with "Add … as new". |
+| Accounts | `accounts.png` | Net worth, assets, liabilities; groups for checking & savings, cards, investments, loans, home & assets, each with "last entered" dates. |
+| Account detail | `account-detail.png` | Balance, projection, change this year, rate; chart; balances you entered (growth = change − deposits); buckets with goals; interest settings; rate history. |
+| Credit cards | `cards.png` | Card list; promo warning; balance, payment setting, statement/due days, APR; promos with progress; statements; payoff helper; "if it's not paid off" estimate. |
+| Income | `income.png` | Sources (primary defines periods), schedule, weekend rule, gross/net, money to accounts, taxes & benefits from stubs, match (fixed or formula) with a hint when under the cap; second job with estimated pay; pay stub list and drop zone; upcoming paychecks with weekend shifts. |
+| Pay stub review | `pay-stub.png` | Preview of the PDF; every line read, this stub and YTD, grouped (earnings, before tax, taxes, paid to you/from employer), what each tracks as; check that gross − deductions = net; hard-to-read lines flagged; layout remembered per employer. |
+| Expenses & receipts | `expenses.png` | One-off spending list filtered by tag; detail panel with tags, reimbursement status, note, attachments with preview and drop zone. |
+| Reports | `reports.png` | Saved reports; builder (dates, include, filters, group by, show); totals; chart; table; export CSV or PDF with receipts. |
+| Categories & tags | `categories.png` | Categories (with sub-categories, colors, counts, totals) and tags. Color dots open the color picker. |
+| Annual costs | `annual.png` | Calendar years / rolling 12 months switch; totals and change; per-item table; selected item's monthly history and whether its budget is too low; "Plan next year →". |
+| Plan next year | `plan-year.png` | Plans list (active, draft), **Delete draft & start over**; six steps (Income & benefits, Bills, Annual & save-ups, Spending budgets, Saving & investing, Review); suggestion basis switch; table of last 12 months, trend, suggestion, your amount ("YOURS" when typed), per-month/per-paycheck. First-time setup reuses this wizard. |
+| Debt & decisions | `planner.png` | Extra per month and period; flags first; option cards (debts with rates from accounts, investments with **editable growth**); payoff timeline with method switch; "estimates, not advice". |
+| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget timing, budget year start month/day, plan reminder), warnings, security, backups, phone access. |
+| Phone: pay period | `phone-pay-period.png` | Current period's ending and available; mark bills paid (44px targets); auto-pay list; bottom tabs. |
+| Phone: add expense | `phone-add-expense.png` | Amount, payee, date, account, category, tags, receipt photo straight to the PC, reimbursement. |
+
+---
+
+## 9. Mockups
+
+- Screen images are in `design/`, named as in §8.
+- Match layout, sections, hierarchy and behavior. Spacing and type should be close; exact pixels are not required.
+- Mockup colors are **default** colors only (§1). Use CSS variables and user-chosen colors.
+- Mockup numbers are sample data.
+
+---
+
+## 10. Phases
+
+### Phase 0 — Scaffold and packaging
+Project layout per §2; Maven multi-module backend (`engine`, `server`) on Java 21; Javalin with `/api/health`; SQLite + Flyway (`V1__init.sql` with `settings`); engine module with a placeholder JUnit test; React + TS + Vite served by the backend; Tauri project with the **backend lifecycle from §3** (start, `READY` line, window, shutdown, parent-PID watch, single instance); jlink/jpackage build bundled into the Tauri installer; CSP; bundled fonts/icons; Tailwind set up with theme tokens as CSS variables (light/dark/system and an accent-color variable) and base layout with the sidebar; one build script that produces the Windows installer; `CLAUDE.md` summarizing §1.
+Also: per-user NSIS installer with WebView2 bootstrapper, shortcuts, uninstall that keeps data by default, pre-migration backup on upgrade, `build-installer.ps1`, and the optional `docker-compose.dev.yml`.
+**Done when** the installer runs on a clean Windows machine with **no Java, Node or admin rights**, the app launches and shows the shell, the health check passes, closing the window leaves no Java process running, installing a newer build keeps the data, and both test suites run.
+
+### Phase 1 — Accounts, income, pay periods
+Accounts (all types, user colors), balance entries; schedule rules and the pay period generator with §5.1 tests; income sources (multiple, one primary), per-paycheck amount edits, deductions; projection horizon setting. The type-to-filter picker and color picker components are built here and reused everywhere.
+**Done when** the user can add accounts and paychecks and see generated pay periods; §5.1 tests pass.
+
+### Phase 2 — Pay period screen, recurring items, one-offs
+Categories and tags (basic); recurring items (bill, transfer, budget, card payment) with pay-from any account, placement, per-occurrence or annual amounts, estimate flag; period assignment (§5.2) with tests; balance projection (§5.3); one-off entries (money in, money out, transfer); **+ Add item** menu and form; the pay period screen per §8; inline editing, just-this-one / this-and-future, paid checkbox, confirmation codes, estimate boxes, hover projected value, undo.
+**Done when** the user can replace their spreadsheet: every paycheck has a period view with the right bills, one-offs and an accurate projected ending, fitting one screen at 1440×900.
+
+### Phase 3 — Buckets, savings, save-ups
+Buckets, bucket moves (e.g. $50 every paycheck), bucket splits on money in; available after buckets; Accounts & buckets panel; annual items with save-up per paycheck; savings interest (§5.4) with credit day and destination; rate history; low-balance thresholds; account detail screen.
+**Done when** checking plus savings at different banks show buckets, save-ups and projected interest, and balances can be updated.
+
+### Phase 4 — Investments, home, net worth
+Investment accounts (401(k), IRA, brokerage, HSA via subtype); contributions from deductions and transfers; employer match fixed or formula with §5.5 tests; assumed growth; gain/loss from actual balances only; home value and appreciation; net worth; Accounts screen.
+**Done when** a 401(k) with a formula match and a brokerage project forward, and net worth is shown.
+
+### Phase 5 — Credit cards and loans
+Card settings, payment modes, statements, charges; bills and one-offs paid by card; interest estimates; promos with warnings and payoff helper; loans with amortization and escrow, linked to the home for equity; Credit cards screen and pay-period panel.
+**Done when** a 0%-until-date promo shows a countdown and warning, and the payoff helper adds a per-paycheck payment in one click.
+
+### Phase 6 — Lock, settings, backups, appearance
+PIN, recovery code, lockout, `--reset-pin`, auto-lock, Lock now, hide amounts; Settings screen (all dropdowns); accent color; backups and restore (database + files).
+**Done when** the app locks after idle, settings change behavior, and a backup restores.
+
+### Phase 7 — Phone access
+Remote access setting, interface choice, URL and QR code; HTTP warning and optional self-signed HTTPS; responsive phone layouts (pay period, add expense with receipt photo); "Add to Home Screen" manifest; PIN for remote sessions.
+**Done when** the iPhone can open the app over Tailscale, unlock, mark a bill paid, add a confirmation code and add an expense with a photo.
+
+### Phase 8 — Expenses, receipts, reimbursements, reports
+Attachments (files on disk, previews); expenses screen; reimbursement status and "pays back an expense"; tags fully wired; report builder, saved reports, CSV and PDF export (PDF can include receipts).
+**Done when** a "Medical out-of-pocket 2026" report shows totals by month, reimbursed vs waiting, and exports with receipts.
+
+### Phase 9 — Pay stubs
+Upload a stub PDF; read text locally; map lines to gross, contributions, benefits, taxes, net and match; check gross − deductions = net; flag low-confidence lines; remember the layout per employer; update the income source from the latest stub; YTD figures; optional local OCR for scanned stubs.
+**Done when** uploading a second stub from the same employer fills in every line with no manual mapping.
+
+### Phase 10 — Dashboard and annual costs
+Dashboard per §8 (lowest balance ahead, category donut, net worth timeline, attention list); annual costs with calendar / rolling 12 months, price history per item, budget-too-low hints; Projected vs. Actual view.
+**Done when** both screens show the user's real data.
+
+### Phase 11 — Plan next year
+Plan years (draft/active), six-step wizard, suggestion bases (§5.8), "YOURS" for typed amounts, delete draft & start over before it starts, activation on the budget year start date, plan reminder; first-time setup reuses the wizard.
+**Done when** a 2027 draft can be built in October from the last 12 months, deleted, rebuilt, and becomes active on Jan 1 without changing 2026 history.
+
+### Phase 12 — Debt & decisions
+Planner per §5.9 with editable growth rates, option cards, payoff order (highest rate / smallest balance, with rollover), flags, and the "estimates, not advice" label.
+**Done when** comparing an extra $300/month across car loan, mortgage, 401(k) and brokerage produces consistent, tested numbers.
+
+---
+
+## 11. Open questions to confirm during the build
+- Holidays: user-entered only, or also prefill common US bank holidays (stored locally)?
+- Budget timing: keep "start of period" only, or also offer "spread evenly"?
+- Cards without itemized charges: estimate per pay period or per month by default?
+- Pay stubs: which employers' formats to test against first (use the user's real stubs, kept local).
