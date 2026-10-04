@@ -15,7 +15,12 @@ target/
 ### Frontend / Tauri build output ###
 node_modules/
 dist/
+desktop/build/
 desktop/src-tauri/target/
+desktop/src-tauri/gen/
+# Generated from desktop/app-icon.png by build-installer.ps1
+desktop/src-tauri/icons/
+.dev-data/
 
 ### IntelliJ IDEA ###
 .idea/

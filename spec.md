@@ -84,13 +84,13 @@ The frontend talks to the backend **only through the HTTP API** (no Tauri `invok
 
 ### Development environment
 - **Builds of the installer happen on Windows** (Tauri and jpackage produce Windows output only when run on Windows). Install once: JDK 21, Maven, Node LTS, Rust toolchain (only so Tauri can compile its small wrapper), and the Visual Studio C++ Build Tools that Tauri requires.
-- **Docker is optional for day-to-day work.** A `docker-compose.dev.yml` may run the backend (with hot reload) and the Vite dev server, so most development happens in the browser at `localhost` without Tauri. The engine and API tests run the same in the container or on Windows.
+- **No Docker.** Day-to-day work runs straight on Windows: the backend jar from the Maven wrapper and the Vite dev server (`npm run dev`, which forwards `/api` to the backend), so most development happens in the browser without Tauri. See `README.md`.
 - One script (`build-installer.ps1`) runs on Windows and produces the installer: tests → backend jar → jlink/jpackage app image → frontend build → Tauri bundle.
 
 ### Project layout
 ```
 budget/
-  PLAN.md  CLAUDE.md  design/
+  spec.md  proposals.md  CLAUDE.md  design/
   backend/
     pom.xml
     engine/   ← pure calculation code + JUnit tests (no I/O)
@@ -290,6 +290,8 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 
 ## 7. Security, backups, recovery
 
+- **Session gate (built in Phase 0).** Every `/api` route except `GET /api/health`, `POST /api/session` and `POST /api/shutdown` requires a live session: an opaque random token in an HttpOnly, SameSite=Strict cookie, held in memory only and expiring after the auto-lock idle time. Until the PIN exists, `POST /api/session` issues a session without credentials **to requests from this PC only**; Phase 6 puts the PIN in front of it. `POST /api/shutdown` is loopback-only and needs the per-launch token the desktop shell generated.
+- Requests whose `Host` header is a domain name the app was not told about are refused (DNS-rebinding protection); a strict Content-Security-Policy is sent on every response.
 - **PIN** (4–8 digits) is an app lock, not encryption. Argon2 hash.
 - **Recovery code** shown once at PIN setup; can reset the PIN.
 - Increasing delays after wrong PINs.
@@ -339,7 +341,8 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 
 ### Phase 0 — Scaffold and packaging
 Project layout per §2; Maven multi-module backend (`engine`, `server`) on Java 21; Javalin with `/api/health`; SQLite + Flyway (`V1__init.sql` with `settings`); engine module with a placeholder JUnit test; React + TS + Vite served by the backend; Tauri project with the **backend lifecycle from §3** (start, `READY` line, window, shutdown, parent-PID watch, single instance); jlink/jpackage build bundled into the Tauri installer; CSP; bundled fonts/icons; Tailwind set up with theme tokens as CSS variables (light/dark/system and an accent-color variable) and base layout with the sidebar; one build script that produces the Windows installer; `CLAUDE.md` summarizing §1.
-Also: per-user NSIS installer with WebView2 bootstrapper, shortcuts, uninstall that keeps data by default, pre-migration backup on upgrade, `build-installer.ps1`, and the optional `docker-compose.dev.yml`.
+Also: per-user NSIS installer with WebView2 bootstrapper, shortcuts, uninstall that keeps data by default, pre-migration backup on upgrade, and `build-installer.ps1`.
+Also: the **session gate** (§7) lands here rather than in Phase 6, so every endpoint is born behind it and has its 401 test from day one; and a minimal `GET /api/settings` / `PUT /api/settings/{key}` (theme, accent color) so the shell can apply the theme.
 **Done when** the installer runs on a clean Windows machine with **no Java, Node or admin rights**, the app launches and shows the shell, the health check passes, closing the window leaves no Java process running, installing a newer build keeps the data, and both test suites run.
 
 ### Phase 1 — Accounts, income, pay periods

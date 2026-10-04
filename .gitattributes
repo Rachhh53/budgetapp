@@ -1,0 +1,9 @@
+* text=auto
+
+# Shell scripts must keep LF or they will not run; Windows scripts keep CRLF.
+mvnw      text eol=lf
+*.sh      text eol=lf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
+*.png     binary
