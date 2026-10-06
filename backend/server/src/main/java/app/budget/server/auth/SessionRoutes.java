@@ -3,8 +3,8 @@ package app.budget.server.auth;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Requests;
-import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.router.JavalinDefaultRoutingApi;
 import java.util.Set;
 
 /**
@@ -28,11 +28,11 @@ public final class SessionRoutes {
         this.sessions = sessions;
     }
 
-    public void register(Javalin app) {
-        app.before("/api/*", this::requireSession);
-        app.post("/api/session", this::unlock);
-        app.get("/api/session", ctx -> ApiResponse.ok(ctx, new SessionStatus(true)));
-        app.delete("/api/session", this::lock);
+    public void register(JavalinDefaultRoutingApi routes) {
+        routes.before("/api/*", this::requireSession);
+        routes.post("/api/session", this::unlock);
+        routes.get("/api/session", ctx -> ApiResponse.ok(ctx, new SessionStatus(true)));
+        routes.delete("/api/session", this::lock);
     }
 
     public record SessionStatus(boolean unlocked) {}

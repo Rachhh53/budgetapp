@@ -1,0 +1,180 @@
+import { type FormEvent, useId, useState } from "react";
+import {
+  type Account,
+  ACCOUNT_TYPES,
+  type AccountType,
+  useDeleteAccount,
+  useSaveAccount,
+} from "../../api/accounts";
+import { ColorPicker, PRESET_COLORS } from "../ColorPicker";
+import { ConfirmDelete } from "../ConfirmDelete";
+import { Modal } from "../Modal";
+import { TextPicker } from "../Picker";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { LABEL_SUGGESTIONS, TYPE_LABELS } from "./labels";
+
+interface AccountFormProps {
+  /** The account being changed; leave out to add a new one. */
+  account?: Account;
+  /** Every account, for the bank and label suggestions and recently used colors. */
+  accounts: readonly Account[];
+  onClose: () => void;
+  /** Called after the account was deleted, so the caller can leave its screen. */
+  onDeleted?: () => void;
+}
+
+/** Add or change an account. Everything chosen from a list is a picker, never free text. */
+export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFormProps) {
+  const id = useId();
+  const save = useSaveAccount(account?.id);
+
+  // Newest accounts first, so the colors offered first are the ones used most recently.
+  const usedColors = [...accounts].reverse().map((existing) => existing.color);
+  const [name, setName] = useState(account?.name ?? "");
+  const [type, setType] = useState<AccountType>(account?.type ?? "checking");
+  const [subtypeLabel, setSubtypeLabel] = useState(account?.subtypeLabel ?? "");
+  const [institution, setInstitution] = useState(account?.institution ?? "");
+  const [color, setColor] = useState(account?.color ?? firstUnusedColor(usedColors));
+  const [archived, setArchived] = useState(account?.archived ?? false);
+
+  const institutions = unique(accounts.map((existing) => existing.institution));
+  const labels = unique([
+    ...LABEL_SUGGESTIONS[type],
+    ...accounts.filter((existing) => existing.type === type).map((existing) => existing.subtypeLabel),
+  ]);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    save.mutate(
+      { name, type, subtypeLabel: subtypeLabel || null, institution: institution || null, color, archived },
+      { onSuccess: onClose },
+    );
+  };
+
+  return (
+    <Modal title={account ? "Edit account" : "Add an account"} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label htmlFor={`${id}-name`} className={LABEL}>
+            Name
+          </label>
+          <input
+            id={`${id}-name`}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={80}
+            required
+            autoComplete="off"
+            className={INPUT}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor={`${id}-type`} className={LABEL}>
+              Kind of account
+            </label>
+            <select
+              id={`${id}-type`}
+              value={type}
+              onChange={(event) => setType(event.target.value as AccountType)}
+              className={INPUT}
+            >
+              {ACCOUNT_TYPES.map((option) => (
+                <option key={option} value={option}>
+                  {TYPE_LABELS[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <TextPicker
+            label="Label (optional)"
+            noun="label"
+            placeholder="e.g. 401(k), Mortgage"
+            suggestions={labels}
+            value={subtypeLabel}
+            onChange={setSubtypeLabel}
+          />
+        </div>
+
+        <TextPicker
+          label="Bank or institution (optional)"
+          noun="bank"
+          placeholder="Choose or type a bank"
+          suggestions={institutions}
+          value={institution}
+          onChange={setInstitution}
+        />
+
+        <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
+
+        {account && (
+          <div>
+            <label className="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={archived}
+                onChange={(event) => setArchived(event.target.checked)}
+                className="size-5 accent-(--accent)"
+              />
+              <span className="font-medium">Archived</span>
+            </label>
+            <p className={HINT}>An archived account keeps its history but is tucked away at the bottom of the list.</p>
+          </div>
+        )}
+
+        {save.isError && (
+          <p role="alert" className="text-danger">
+            {save.error.message}
+          </p>
+        )}
+
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+            Cancel
+          </button>
+          <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
+            {save.isPending ? "Saving…" : account ? "Save changes" : "Add account"}
+          </button>
+        </div>
+      </form>
+
+      {account && (
+        <div className="mt-6 border-t border-line pt-4">
+          <DeleteAccount
+            account={account}
+            onDeleted={() => {
+              onClose();
+              onDeleted?.();
+            }}
+          />
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function DeleteAccount({ account, onDeleted }: { account: Account; onDeleted: () => void }) {
+  const remove = useDeleteAccount(account.id);
+  return (
+    <ConfirmDelete
+      action="Delete account…"
+      question={`Delete ${account.name}?`}
+      detail="The account and every balance you entered for it will be gone for good. This can't be undone."
+      confirmLabel="Yes, delete it"
+      pending={remove.isPending}
+      error={remove.error?.message}
+      onConfirm={() => remove.mutate(undefined, { onSuccess: onDeleted })}
+    />
+  );
+}
+
+/** The first preset no account uses yet, so new accounts start out easy to tell apart. */
+function firstUnusedColor(used: readonly string[]): string {
+  const free = PRESET_COLORS.find((preset) => !used.includes(preset.hex));
+  return (free ?? PRESET_COLORS[0])?.hex ?? "#0f766e";
+}
+
+function unique(values: readonly (string | null)[]): string[] {
+  return [...new Set(values.filter((value): value is string => value !== null && value !== ""))];
+}

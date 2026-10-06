@@ -2,8 +2,8 @@ package app.budget.server.settings;
 
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
-import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.router.JavalinDefaultRoutingApi;
 
 /** {@code GET /api/settings} and {@code PUT /api/settings/{key}}. */
 public final class SettingsRoutes {
@@ -14,9 +14,9 @@ public final class SettingsRoutes {
         this.settings = settings;
     }
 
-    public void register(Javalin app) {
-        app.get("/api/settings", ctx -> ApiResponse.ok(ctx, settings.all()));
-        app.put("/api/settings/{key}", this::update);
+    public void register(JavalinDefaultRoutingApi routes) {
+        routes.get("/api/settings", ctx -> ApiResponse.ok(ctx, settings.all()));
+        routes.put("/api/settings/{key}", this::update);
     }
 
     /** Request body for an update. */

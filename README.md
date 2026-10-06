@@ -6,6 +6,7 @@ All data stays on your PC: no cloud, no telemetry, no update checks, no outbound
 - `spec.md` — the build plan and source of truth
 - `proposals.md` — the features being tracked
 - `design/` — mockups for every screen (sample data only)
+- `.github/workflows/ci.yml` — tests and dependency checks on every push; the installer on `main`
 
 ## Layout
 
@@ -49,7 +50,8 @@ Additionally needs the Rust toolchain and the Visual Studio C++ Build Tools.
 
 Produces one per-user NSIS installer (no admin rights) under
 `desktop\src-tauri\target\release\bundle\nsis\`, bundling a trimmed Java runtime, the backend
-and the UI. Commit `desktop/src-tauri/Cargo.lock` after the first build.
+and the UI. Before bundling, the script starts the packaged backend once and stops the build if
+it does not come up and serve the UI.
 
 ## Installing, test installs and your data
 
@@ -92,8 +94,57 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/session` | lock |
 | GET | `/api/settings` | all settings with effective values |
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
+| GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel? }` |
+| GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances; change; delete (refused while income uses it) |
+| POST | `/api/accounts/{id}/balances` | enter a balance `{ date, amountCents, note? }`; the same day again replaces it |
+| DELETE | `/api/accounts/{id}/balances/{entryId}` | remove one entry |
+| GET, POST | `/api/income-sources` | list; add `{ name, depositAccountId, netCents, grossCents?, netIsEstimate?, primary?, schedule, deductions? }` |
+| PUT, DELETE | `/api/income-sources/{id}` | change; delete (the primary one only when it is the last) |
+| PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
+| GET | `/api/paychecks` | paychecks, today to the horizon; optional `from`, `to` |
+| GET | `/api/pay-periods` | pay periods from the primary source; optional `from`, `to` |
+| GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
+| PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
+
+Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Settings keys: `theme`,
+`accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36).
+
+## CI and dependency checks
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push:
+
+- **Backend tests** on Windows, and the **frontend** typecheck, tests and build.
+- **Dependency checks:** OSV-Scanner fails the build on any known vulnerability in a Maven, npm or
+  Cargo dependency, and `check-dependency-age.ps1` fails it if a dependency version is less than
+  14 days old. Both also run weekly.
+- On `main` only, the **installer** is built and kept as a workflow artifact for 30 days.
+
+To run the dependency age check yourself (it needs the network; the app itself never does):
+
+```powershell
+cd backend
+.\mvnw.cmd -DskipTests package org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+cd ..
+.\check-dependency-age.ps1
+```
+
+When adding or upgrading a dependency, pick the newest version that is at least 14 days old;
+`frontend/.npmrc` makes npm do this by itself.
+
+A real, known vulnerability never passes. If its only fix is younger than 14 days, then in order:
+
+1. use an older version that never had the vulnerability;
+2. drop or replace the package, if nothing the app needs is lost;
+3. only then take the fixed version early, as a named entry in `dependency-age-exceptions.json`
+   (what it fixes, and why 1 and 2 were not possible). For npm, install it once with
+   `npm install --min-release-age=0`.
+
+An exception ends by itself: the check fails once the version is 14 days old, or no longer used,
+until the entry is deleted. A finding that genuinely cannot apply (code that is not in the Windows
+build) goes in `desktop/src-tauri/osv-scanner.toml` with the reason; anything temporary there
+carries an `ignoreUntil` date.
 
 ## Data and privacy
 

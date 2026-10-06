@@ -22,15 +22,15 @@
 
         <!-- Every version is pinned here so a build is reproducible and nothing
              drifts in silently (privacy: no dependency may phone home). -->
-        <javalin.version>6.7.0</javalin.version>
-        <jackson.version>2.19.2</jackson.version>
+        <javalin.version>7.2.3</javalin.version>
+        <jackson.version>2.21.7</jackson.version>
         <sqlite-jdbc.version>3.50.3.0</sqlite-jdbc.version>
         <jdbi.version>3.49.5</jdbi.version>
         <flyway.version>11.10.5</flyway.version>
         <slf4j.version>2.0.17</slf4j.version>
-        <logback.version>1.5.18</logback.version>
+        <logback.version>1.5.38</logback.version>
         <junit.version>5.13.4</junit.version>
-        <assertj.version>3.27.3</assertj.version>
+        <assertj.version>3.27.7</assertj.version>
 
         <maven-compiler-plugin.version>3.14.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
@@ -38,6 +38,7 @@
         <maven-dependency-plugin.version>3.8.1</maven-dependency-plugin.version>
         <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
         <exec-maven-plugin.version>3.5.1</exec-maven-plugin.version>
+        <cyclonedx-maven-plugin.version>2.9.3</cyclonedx-maven-plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -131,6 +132,18 @@
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>exec-maven-plugin</artifactId>
                     <version>${exec-maven-plugin.version}</version>
+                </plugin>
+                <!-- Not part of the normal build. CI runs it by hand to list every dependency,
+                     direct and transitive, into target/bom.json for the vulnerability scan. -->
+                <plugin>
+                    <groupId>org.cyclonedx</groupId>
+                    <artifactId>cyclonedx-maven-plugin</artifactId>
+                    <version>${cyclonedx-maven-plugin.version}</version>
+                    <configuration>
+                        <outputFormat>json</outputFormat>
+                        <!-- Test libraries run on the build machine too, so they are checked as well. -->
+                        <includeTestScope>true</includeTestScope>
+                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>

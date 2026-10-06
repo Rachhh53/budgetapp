@@ -14,7 +14,10 @@ public enum SettingKey {
     THEME("theme", "system", Set.of("light", "dark", "system")::contains,
             "Please choose light, dark, or follow Windows."),
     ACCENT_COLOR("accent_color", "#0f766e", Pattern.compile("#[0-9a-fA-F]{6}").asMatchPredicate(),
-            "Colors need to be a six-digit hex code, like #0f766e.");
+            "Colors need to be a six-digit hex code, like #0f766e."),
+    /** How far ahead pay periods and balances are projected. */
+    PROJECTION_HORIZON_MONTHS("projection_horizon_months", "12", Set.of("6", "12", "18", "24", "36")::contains,
+            "Please choose 6, 12, 18, 24 or 36 months.");
 
     private final String key;
     private final String defaultValue;

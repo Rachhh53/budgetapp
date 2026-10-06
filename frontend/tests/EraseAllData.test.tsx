@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeBackend, renderApp } from "./helpers";
 
-const DEFAULTS = { theme: "system", accent_color: "#0f766e" };
+const DEFAULTS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
 
 function calls(fetchMock: ReturnType<typeof fakeBackend>): string[] {
   return fetchMock.mock.calls.map(([path, init]) => `${init?.method ?? "GET"} ${path}`);
@@ -41,7 +41,7 @@ describe("erase all data", () => {
   });
 
   it("erases on confirmation, says so, and reloads the fresh settings", async () => {
-    let settings = { theme: "dark", accent_color: "#0f766e" };
+    let settings = { ...DEFAULTS, theme: "dark" };
     let confirmation: unknown;
     const fetchMock = fakeBackend({
       "GET /api/settings": () => ({ status: 200, data: settings }),

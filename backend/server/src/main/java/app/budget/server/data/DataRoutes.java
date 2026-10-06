@@ -5,8 +5,8 @@ import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Requests;
 import app.budget.server.auth.SessionStore;
 import app.budget.server.db.Database;
-import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.router.JavalinDefaultRoutingApi;
 
 /**
  * {@code DELETE /api/data} — "Erase all data": wipes everything and leaves a fresh app.
@@ -28,8 +28,8 @@ public final class DataRoutes {
         this.sessions = sessions;
     }
 
-    public void register(Javalin app) {
-        app.delete("/api/data", this::eraseEverything);
+    public void register(JavalinDefaultRoutingApi routes) {
+        routes.delete("/api/data", this::eraseEverything);
     }
 
     /** Request body. */

@@ -5,14 +5,15 @@ description = "Budget desktop shell: opens the window and starts/stops the Java 
 edition = "2021"
 publish = false
 
-# Exact versions are recorded in Cargo.lock (commit it). No updater plugin, by design:
-# the app never makes outbound network calls.
+# Pinned exactly, so a routine `cargo update` cannot pull in a release younger than 14 days
+# (spec §7); transitive versions are recorded in Cargo.lock (commit it). No updater plugin,
+# by design: the app never makes outbound network calls.
 [build-dependencies]
-tauri-build = { version = "2.7", features = [] }
+tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.12", features = [] }
-tauri-plugin-single-instance = "2.5"
+tauri = { version = "=2.11.6", features = [] }
+tauri-plugin-single-instance = "=2.4.5"
 getrandom = "0.3"
 
 [profile.release]

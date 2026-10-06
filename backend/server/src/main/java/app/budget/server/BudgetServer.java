@@ -1,5 +1,7 @@
 package app.budget.server;
 
+import app.budget.server.accounts.AccountsRepository;
+import app.budget.server.accounts.AccountsRoutes;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.HostGuard;
@@ -7,8 +9,13 @@ import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
 import app.budget.server.data.DataRoutes;
 import app.budget.server.db.Database;
+import app.budget.server.income.IncomeRepository;
+import app.budget.server.income.IncomeRoutes;
+import app.budget.server.income.PayCalendar;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import app.budget.server.schedule.HolidaysRepository;
+import app.budget.server.schedule.HolidaysRoutes;
 import app.budget.server.settings.SettingsRepository;
 import app.budget.server.settings.SettingsRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +26,8 @@ import io.javalin.http.Context;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.json.JavalinJackson;
+import io.javalin.router.Endpoint;
+import io.javalin.router.JavalinDefaultRoutingApi;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Clock;
@@ -62,8 +71,14 @@ public final class BudgetServer {
         this.config = config;
         byte[] indexHtml = readIndexHtml();
 
+        SettingsRepository settings = new SettingsRepository(database.jdbi(), clock);
+        AccountsRepository accounts = new AccountsRepository(database.jdbi(), clock);
+        HolidaysRepository holidays = new HolidaysRepository(database.jdbi());
+        IncomeRepository income = new IncomeRepository(database.jdbi(), clock);
+        PayCalendar payCalendar = new PayCalendar(income, holidays, settings, clock);
+
         app = Javalin.create(javalin -> {
-            javalin.showJavalinBanner = false;
+            javalin.startup.showJavalinBanner = false;
             javalin.jsonMapper(new JavalinJackson(jsonMapper(), false));
             if (indexHtml != null) {
                 javalin.staticFiles.add(files -> {
@@ -72,27 +87,33 @@ public final class BudgetServer {
                     files.location = Location.CLASSPATH;
                 });
             }
+
+            JavalinDefaultRoutingApi routes = javalin.routes;
+            routes.before(new HostGuard(config.allowedHosts()));
+            routes.before(BudgetServer::addSecurityHeaders);
+
+            // Registers the session gate first, so it runs ahead of every route added below.
+            new SessionRoutes(sessions).register(routes);
+            routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
+            new SettingsRoutes(settings).register(routes);
+            new AccountsRoutes(accounts, clock).register(routes);
+            new HolidaysRoutes(holidays, clock).register(routes);
+            new IncomeRoutes(income, accounts, payCalendar).register(routes);
+            new DataRoutes(database, sessions).register(routes);
+            new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
+
+            routes.exception(ApiException.class, (e, ctx) -> ApiResponse.fail(ctx, e.status(), e.getMessage()));
+            routes.exception(HttpResponseException.class, (e, ctx) -> ApiResponse.fail(ctx, e.getStatus(),
+                    e.getStatus() >= 500 ? GENERIC_ERROR : "We couldn't understand that request."));
+            routes.exception(Exception.class, (e, ctx) -> {
+                // Full detail stays in the local log; the client only ever sees the generic message.
+                // The route's pattern is logged, never the address itself, which can hold ids.
+                Endpoint endpoint = ctx.endpoints().lastHttpEndpoint();
+                log.error("Unhandled error on {} {}", ctx.method(), endpoint == null ? "(no route)" : endpoint.path, e);
+                ApiResponse.fail(ctx, 500, GENERIC_ERROR);
+            });
+            routes.error(404, ctx -> notFound(ctx, indexHtml));
         });
-
-        app.before(new HostGuard(config.allowedHosts()));
-        app.before(BudgetServer::addSecurityHeaders);
-
-        // Registers the session gate first, so it runs ahead of every route added below.
-        new SessionRoutes(sessions).register(app);
-        app.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
-        new SettingsRoutes(new SettingsRepository(database.jdbi(), clock)).register(app);
-        new DataRoutes(database, sessions).register(app);
-        new ShutdownRoutes(config.shutdownToken(), onShutdown).register(app);
-
-        app.exception(ApiException.class, (e, ctx) -> ApiResponse.fail(ctx, e.status(), e.getMessage()));
-        app.exception(HttpResponseException.class, (e, ctx) -> ApiResponse.fail(ctx, e.getStatus(),
-                e.getStatus() >= 500 ? GENERIC_ERROR : "We couldn't understand that request."));
-        app.exception(Exception.class, (e, ctx) -> {
-            // Full detail stays in the local log; the client only ever sees the generic message.
-            log.error("Unhandled error on {} {}", ctx.method(), ctx.matchedPath(), e);
-            ApiResponse.fail(ctx, 500, GENERIC_ERROR);
-        });
-        app.error(404, ctx -> notFound(ctx, indexHtml));
     }
 
     /** Starts listening and returns the port actually bound. */

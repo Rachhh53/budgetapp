@@ -1,0 +1,20 @@
+{
+  "_about": [
+    "Dependency versions allowed in although they were published less than 14 days ago.",
+    "An entry is only for a version that fixes a real, known vulnerability, and only after",
+    "checking that (1) no older version is free of it and (2) the package cannot be dropped or",
+    "replaced without losing something the app needs. Say so in 'reason'.",
+    "check-dependency-age.ps1 fails the build once an entry's version is 14 days old (it is no",
+    "longer an exception: delete the entry) or is no longer used at all."
+  ],
+  "exceptions": [
+    {
+      "ecosystem": "npm",
+      "package": "source-map-js",
+      "version": "1.2.2",
+      "fixes": "GHSA-68fv-2mgg-jv7q",
+      "reason": "Every version before 1.2.2 has the vulnerability, and Vite, Tailwind and jsdom all depend on the package, so it cannot be dropped. Build and test tooling only; not part of the installed app. Forced through 'overrides' in frontend/package.json.",
+      "added": "2026-10-06"
+    }
+  ]
+}

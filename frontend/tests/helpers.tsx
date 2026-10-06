@@ -6,11 +6,24 @@ import { App } from "../src/App";
 
 type Handler = (body: unknown) => { status: number; data?: unknown; error?: string };
 
+export const DEFAULT_SETTINGS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
+
+/** What a brand-new install answers: default settings and nothing entered yet. */
+const FRESH_INSTALL: Record<string, Handler> = {
+  "GET /api/settings": () => ({ status: 200, data: DEFAULT_SETTINGS }),
+  "GET /api/accounts": () => ({ status: 200, data: [] }),
+  "GET /api/income-sources": () => ({ status: 200, data: [] }),
+  "GET /api/paychecks": () => ({ status: 200, data: [] }),
+  "GET /api/pay-periods": () => ({ status: 200, data: { primarySourceId: null, periods: [] } }),
+  "GET /api/holidays": () => ({ status: 200, data: [] }),
+};
+
 /**
- * Replaces `fetch` with a tiny fake backend. Routes are keyed `"METHOD /path"`;
- * anything unlisted answers 404, in the same envelope the real backend uses.
+ * Replaces `fetch` with a tiny fake backend. Routes are keyed `"METHOD /path"` and are laid
+ * over a fresh install; anything else answers 404, in the same envelope the real backend uses.
  */
-export function fakeBackend(routes: Record<string, Handler>) {
+export function fakeBackend(overrides: Record<string, Handler> = {}) {
+  const routes = { ...FRESH_INSTALL, ...overrides };
   const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
     const handler = routes[`${init?.method ?? "GET"} ${path}`];
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
@@ -19,6 +32,18 @@ export function fakeBackend(routes: Record<string, Handler>) {
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** Every request the app made, as `"METHOD /path"`, in order. */
+export function calls(fetchMock: ReturnType<typeof fakeBackend>): string[] {
+  return fetchMock.mock.calls.map(([path, init]) => `${init?.method ?? "GET"} ${path}`);
+}
+
+/** The JSON bodies sent to one route, in order. */
+export function bodiesSentTo(fetchMock: ReturnType<typeof fakeBackend>, route: string): unknown[] {
+  return fetchMock.mock.calls
+    .filter(([path, init]) => `${init?.method ?? "GET"} ${path}` === route)
+    .map(([, init]) => (typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined));
 }
 
 export function renderApp(startAt = "/") {

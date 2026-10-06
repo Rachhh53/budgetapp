@@ -3,8 +3,8 @@ package app.budget.server.lifecycle;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Requests;
-import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.router.JavalinDefaultRoutingApi;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Optional;
@@ -31,8 +31,8 @@ public final class ShutdownRoutes {
         this.shutdown = shutdown;
     }
 
-    public void register(Javalin app) {
-        app.post("/api/shutdown", this::handle);
+    public void register(JavalinDefaultRoutingApi routes) {
+        routes.post("/api/shutdown", this::handle);
     }
 
     public record ShutdownStatus(boolean stopping) {}

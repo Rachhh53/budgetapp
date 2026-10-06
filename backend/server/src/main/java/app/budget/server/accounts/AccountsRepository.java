@@ -1,0 +1,169 @@
+package app.budget.server.accounts;
+
+import app.budget.server.accounts.Account.BalanceEntry;
+import app.budget.server.api.Inputs;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import org.jdbi.v3.core.Jdbi;
+
+/** Reads and writes {@code accounts} and {@code balance_entries}. */
+public final class AccountsRepository {
+
+    /** Every account column plus its newest balance entry (NULLs when none has been entered). */
+    private static final String SELECT_WITH_LATEST_BALANCE = """
+            SELECT a.id, a.name, a.institution, a.type, a.subtype_label, a.color, a.archived,
+                   b.id AS balance_id, b.date AS balance_date, b.amount AS balance_amount, b.note AS balance_note
+            FROM accounts a
+            LEFT JOIN balance_entries b ON b.id = (
+                SELECT id FROM balance_entries WHERE account_id = a.id ORDER BY date DESC LIMIT 1)
+            """;
+
+    private final Jdbi jdbi;
+    private final Clock clock;
+
+    public AccountsRepository(Jdbi jdbi, Clock clock) {
+        this.jdbi = jdbi;
+        this.clock = clock;
+    }
+
+    /** What the user can set on an account. */
+    public record Fields(
+            String name, String institution, AccountType type, String subtypeLabel, String color, boolean archived) {}
+
+    public List<Account> all() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery(SELECT_WITH_LATEST_BALANCE + "ORDER BY a.sort_order, a.id")
+                .map((rs, ctx) -> account(rs))
+                .list());
+    }
+
+    public Optional<Account> find(long id) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery(SELECT_WITH_LATEST_BALANCE + "WHERE a.id = :id")
+                .bind("id", id)
+                .map((rs, ctx) -> account(rs))
+                .findOne());
+    }
+
+    public boolean exists(long id) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = :id)")
+                .bind("id", id)
+                .mapTo(Boolean.class)
+                .one());
+    }
+
+    /** Adds an account at the end of the list and returns its id. */
+    public long create(Fields fields) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        INSERT INTO accounts (name, institution, type, subtype_label, color, archived, sort_order, created_at)
+                        VALUES (:name, :institution, :type, :subtypeLabel, :color, :archived,
+                                (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM accounts), :now)
+                        RETURNING id
+                        """)
+                .bind("name", fields.name())
+                .bind("institution", fields.institution())
+                .bind("type", Inputs.code(fields.type()))
+                .bind("subtypeLabel", fields.subtypeLabel())
+                .bind("color", fields.color())
+                .bind("archived", fields.archived())
+                .bind("now", clock.instant().toString())
+                .mapTo(Long.class)
+                .one());
+    }
+
+    /** @return false when there is no such account */
+    public boolean update(long id, Fields fields) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("""
+                        UPDATE accounts
+                        SET name = :name, institution = :institution, type = :type,
+                            subtype_label = :subtypeLabel, color = :color, archived = :archived
+                        WHERE id = :id
+                        """)
+                .bind("id", id)
+                .bind("name", fields.name())
+                .bind("institution", fields.institution())
+                .bind("type", Inputs.code(fields.type()))
+                .bind("subtypeLabel", fields.subtypeLabel())
+                .bind("color", fields.color())
+                .bind("archived", fields.archived())
+                .execute()) > 0;
+    }
+
+    /** True when a paycheck is deposited to, or a deduction goes into, this account. */
+    public boolean isUsedByIncome(long id) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        SELECT EXISTS (SELECT 1 FROM income_sources WHERE deposit_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM paycheck_deductions WHERE to_account_id = :id)
+                        """)
+                .bind("id", id)
+                .mapTo(Boolean.class)
+                .one());
+    }
+
+    /** Deletes the account and, with it, the balances entered for it. */
+    public boolean delete(long id) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("DELETE FROM accounts WHERE id = :id")
+                .bind("id", id)
+                .execute()) > 0;
+    }
+
+    /** Balances entered for an account, newest first. */
+    public List<BalanceEntry> balances(long accountId) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        SELECT id, date, amount, note FROM balance_entries
+                        WHERE account_id = :accountId ORDER BY date DESC
+                        """)
+                .bind("accountId", accountId)
+                .map((rs, ctx) -> new BalanceEntry(
+                        rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note")))
+                .list());
+    }
+
+    /** Records the balance for a day. Entering the same day again replaces what was there. */
+    public void saveBalance(long accountId, LocalDate date, long amountCents, String note) {
+        jdbi.useHandle(handle -> handle
+                .createUpdate("""
+                        INSERT INTO balance_entries (account_id, date, amount, note)
+                        VALUES (:accountId, :date, :amount, :note)
+                        ON CONFLICT (account_id, date) DO UPDATE SET amount = excluded.amount, note = excluded.note
+                        """)
+                .bind("accountId", accountId)
+                .bind("date", date.toString())
+                .bind("amount", amountCents)
+                .bind("note", note)
+                .execute());
+    }
+
+    public boolean deleteBalance(long accountId, long entryId) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("DELETE FROM balance_entries WHERE id = :entryId AND account_id = :accountId")
+                .bind("entryId", entryId)
+                .bind("accountId", accountId)
+                .execute()) > 0;
+    }
+
+    private static Account account(ResultSet rs) throws SQLException {
+        String balanceDate = rs.getString("balance_date");
+        BalanceEntry latest = balanceDate == null ? null : new BalanceEntry(
+                rs.getLong("balance_id"), LocalDate.parse(balanceDate), rs.getLong("balance_amount"), rs.getString("balance_note"));
+        return new Account(
+                rs.getLong("id"),
+                rs.getString("name"),
+                rs.getString("institution"),
+                rs.getString("type"),
+                rs.getString("subtype_label"),
+                rs.getString("color"),
+                rs.getBoolean("archived"),
+                latest);
+    }
+}

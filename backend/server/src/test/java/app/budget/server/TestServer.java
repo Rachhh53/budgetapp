@@ -116,6 +116,10 @@ public final class TestServer implements AutoCloseable {
         return send("GET", path, null, cookieHeader(cookie));
     }
 
+    public Reply post(String path, String jsonBody, String cookie) throws IOException, InterruptedException {
+        return send("POST", path, jsonBody, cookieHeader(cookie));
+    }
+
     public Reply put(String path, String jsonBody, String cookie) throws IOException, InterruptedException {
         return send("PUT", path, jsonBody, cookieHeader(cookie));
     }

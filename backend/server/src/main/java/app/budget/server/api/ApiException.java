@@ -32,4 +32,9 @@ public final class ApiException extends RuntimeException {
     public static ApiException notFound() {
         return new ApiException(404, "We couldn't find that.");
     }
+
+    /** The request is fine in itself, but something else that exists stands in its way. */
+    public static ApiException conflict(String message) {
+        return new ApiException(409, message);
+    }
 }
