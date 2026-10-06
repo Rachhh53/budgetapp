@@ -78,7 +78,7 @@ public final class TestServer implements AutoCloseable {
                 "BUDGET_SHUTDOWN_TOKEN", SHUTDOWN_TOKEN));
         server = new BudgetServer(
                 config,
-                Database.open(dataDir).jdbi(),
+                Database.open(dataDir),
                 new SessionStore(clock, SESSION_IDLE),
                 clock,
                 () -> shutdownRequested.set(true));

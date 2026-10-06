@@ -51,6 +51,24 @@ Produces one per-user NSIS installer (no admin rights) under
 `desktop\src-tauri\target\release\bundle\nsis\`, bundling a trimmed Java runtime, the backend
 and the UI. Commit `desktop/src-tauri/Cargo.lock` after the first build.
 
+## Installing, test installs and your data
+
+You can install Budget now to try it and install a newer build later, but they are not two
+separate apps: every install is "Budget" to Windows, and every install uses the same data.
+
+- **Install location.** The installer lets you choose a folder (for example `budget-test`).
+  Running a later installer detects the existing install and upgrades or replaces it rather
+  than adding a second copy.
+- **Data.** Your data always lives in `%APPDATA%\Budget`, wherever the program itself is
+  installed. Anything you enter while testing is still there when you install a newer version.
+- **Starting clean.** To go from test data to real use, either
+  - open **Settings → Erase all data** in the app, which permanently removes everything and
+    leaves a fresh app (backups you saved to another folder are not touched), or
+  - uninstall with **Delete the application data** ticked, or
+  - delete the `%APPDATA%\Budget` folder by hand while the app is closed.
+- **A separate test copy** that runs alongside the real one with its own data is not available
+  yet; it would need its own app name, identifier and data folder in the build.
+
 ## How it runs
 
 1. The Tauri shell starts the bundled backend, passing its own process id, the data folder and
@@ -74,12 +92,16 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/session` | lock |
 | GET | `/api/settings` | all settings with effective values |
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
+| DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
 
 ## Data and privacy
 
-- Data folder: `%APPDATA%\Budget` — `budget.db`, `logs/`, `backups/`. Uninstalling keeps it unless
-  you tick "Delete the application data".
+- Data folder: `%APPDATA%\Budget` — `budget.db`, `logs/`, `backups/`, `files/`. Uninstalling keeps
+  it unless you tick "Delete the application data".
+- **Settings → Erase all data** deletes the database files outright and rebuilds an empty one, and
+  deletes `files/` and `backups/`, so nothing is left behind on disk. Logs stay (they hold no
+  financial data). It cannot be undone.
 - The session token lives in an HttpOnly, SameSite=Strict cookie and in memory only.
 - A strict Content-Security-Policy blocks every external origin; requests with an unrecognised
   `Host` header are refused (protection against DNS rebinding).

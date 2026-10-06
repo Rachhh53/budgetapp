@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import app.budget.server.TestServer.Reply;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
@@ -185,6 +186,63 @@ class ApiTest {
             Reply reply = server.put("/api/settings/nope", "{\"value\":\"x\"}", server.unlock());
 
             assertThat(reply.status()).isEqualTo(404);
+        }
+    }
+
+    @Nested
+    class EraseAllData {
+        private static final String CONFIRMED = "{\"confirm\":\"erase-all-data\"}";
+
+        @Test
+        void requiresASession() throws Exception {
+            Reply reply = server.send("DELETE", "/api/data", CONFIRMED, Map.of());
+
+            assertThat(reply.status()).isEqualTo(401);
+        }
+
+        @Test
+        void erasesNothingWithoutTheConfirmation() throws Exception {
+            String cookie = server.unlock();
+            server.put("/api/settings/theme", "{\"value\":\"dark\"}", cookie);
+
+            Reply missing = server.send("DELETE", "/api/data", null, Map.of("Cookie", cookie));
+            Reply wrong = server.send("DELETE", "/api/data", "{\"confirm\":\"yes\"}", Map.of("Cookie", cookie));
+
+            assertThat(missing.status()).isEqualTo(400);
+            assertThat(wrong.status()).isEqualTo(400);
+            assertThat(wrong.error()).contains("Nothing was erased");
+            assertThat(server.get("/api/settings", cookie).data().get("theme").asText()).isEqualTo("dark");
+        }
+
+        @Test
+        void leavesAFreshAppBehind() throws Exception {
+            String cookie = server.unlock();
+            server.put("/api/settings/theme", "{\"value\":\"dark\"}", cookie);
+            Path receipt = Files.createDirectories(dataDir.resolve("files")).resolve("receipt.pdf");
+            Path backup = Files.createDirectories(dataDir.resolve("backups")).resolve("pre-migration-x.db");
+            Files.writeString(receipt, "receipt");
+            Files.writeString(backup, "backup");
+
+            Reply reply = server.send("DELETE", "/api/data", CONFIRMED, Map.of("Cookie", cookie));
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.data().get("erased").asBoolean()).isTrue();
+            assertThat(receipt).doesNotExist();
+            assertThat(backup).doesNotExist();
+            // Everyone is signed out, and after unlocking again the settings are back to defaults.
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", server.unlock()).data().get("theme").asText()).isEqualTo("system");
+        }
+
+        @Test
+        void theAppKeepsWorkingAfterwards() throws Exception {
+            server.send("DELETE", "/api/data", CONFIRMED, Map.of("Cookie", server.unlock()));
+            String cookie = server.unlock();
+
+            Reply saved = server.put("/api/settings/theme", "{\"value\":\"light\"}", cookie);
+
+            assertThat(saved.status()).isEqualTo(200);
+            assertThat(saved.data().get("theme").asText()).isEqualTo("light");
         }
     }
 

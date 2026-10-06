@@ -46,6 +46,11 @@ public final class SessionStore {
                 lastSeen == null || lastSeen.plus(idleLimit).isBefore(now) ? null : now) != null;
     }
 
+    /** Ends every session at once (used when all data is erased). */
+    public void revokeAll() {
+        lastSeenByToken.clear();
+    }
+
     public void revoke(String token) {
         if (token != null) {
             lastSeenByToken.remove(token);

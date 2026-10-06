@@ -1,5 +1,6 @@
 import { type Theme, THEMES, useSettings, useUpdateSetting } from "../api/settings";
 import { Card } from "../components/Card";
+import { EraseAllData } from "../components/EraseAllData";
 
 const THEME_LABELS: Record<Theme, string> = {
   system: "Follow Windows",
@@ -8,7 +9,7 @@ const THEME_LABELS: Record<Theme, string> = {
 };
 
 /**
- * Settings. Phase 0 has Appearance → Theme only; the full screen (design/settings.png)
+ * Settings. Phase 0 has Appearance → Theme and Erase all data; the full screen (design/settings.png)
  * arrives in Phase 6. Every value here is picked from a list, never typed.
  */
 export function SettingsPage() {
@@ -51,6 +52,9 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+      <div className="mt-4 md:mt-6">
+        <EraseAllData />
+      </div>
     </>
   );
 }

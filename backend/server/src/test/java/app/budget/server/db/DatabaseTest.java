@@ -92,6 +92,33 @@ class DatabaseTest {
                 .noneMatch(file -> file.getFileName().toString().contains("20260901"));
     }
 
+    @Test
+    void erasingRemovesTheDataFromTheFileItselfNotJustFromView() throws IOException {
+        Database database = Database.open(dataDir);
+        String marker = "MARKER-" + "x".repeat(40);
+        database.jdbi().useHandle(handle -> handle
+                .createUpdate("INSERT INTO settings (key, value, updated_at) VALUES (:key, :value, :now)")
+                .bind("key", "note")
+                .bind("value", marker)
+                .bind("now", "2026-10-01T12:00:00Z")
+                .execute());
+
+        database.eraseEverything();
+
+        assertThat(tableExists(database, "settings")).isTrue();
+        Integer rows = database.jdbi().withHandle(handle ->
+                handle.createQuery("SELECT count(*) FROM settings").mapTo(Integer.class).one());
+        assertThat(rows).isZero();
+        // Scan the raw files: a dropped-but-not-vacuumed row would still be readable here.
+        try (Stream<Path> files = Files.list(dataDir)) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                assertThat(new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.ISO_8859_1))
+                        .as(file.getFileName().toString())
+                        .doesNotContain(marker);
+            }
+        }
+    }
+
     private List<Path> backups() throws IOException {
         try (Stream<Path> files = Files.list(dataDir.resolve(Database.BACKUP_DIR))) {
             return files.sorted().toList();

@@ -35,7 +35,7 @@ public final class Main {
             // shutdown hook below then closes things down in order.
             Runnable exit = () -> System.exit(0);
             BudgetServer server = new BudgetServer(
-                    config, database.jdbi(), new SessionStore(clock, config.sessionIdle()), clock, exit);
+                    config, database, new SessionStore(clock, config.sessionIdle()), clock, exit);
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 server.stop();

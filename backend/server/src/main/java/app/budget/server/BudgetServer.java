@@ -5,6 +5,8 @@ import app.budget.server.api.ApiResponse;
 import app.budget.server.api.HostGuard;
 import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
+import app.budget.server.data.DataRoutes;
+import app.budget.server.db.Database;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
 import app.budget.server.settings.SettingsRepository;
@@ -21,7 +23,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.Clock;
 import java.util.Map;
-import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,7 +58,7 @@ public final class BudgetServer {
     private final Config config;
     private final Javalin app;
 
-    public BudgetServer(Config config, Jdbi jdbi, SessionStore sessions, Clock clock, Runnable onShutdown) {
+    public BudgetServer(Config config, Database database, SessionStore sessions, Clock clock, Runnable onShutdown) {
         this.config = config;
         byte[] indexHtml = readIndexHtml();
 
@@ -79,7 +80,8 @@ public final class BudgetServer {
         // Registers the session gate first, so it runs ahead of every route added below.
         new SessionRoutes(sessions).register(app);
         app.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
-        new SettingsRoutes(new SettingsRepository(jdbi, clock)).register(app);
+        new SettingsRoutes(new SettingsRepository(database.jdbi(), clock)).register(app);
+        new DataRoutes(database, sessions).register(app);
         new ShutdownRoutes(config.shutdownToken(), onShutdown).register(app);
 
         app.exception(ApiException.class, (e, ctx) -> ApiResponse.fail(ctx, e.status(), e.getMessage()));

@@ -71,4 +71,5 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
+  delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, body),
 };

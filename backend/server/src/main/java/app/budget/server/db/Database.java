@@ -31,16 +31,28 @@ public final class Database {
 
     public static final String DB_FILE = "budget.db";
     public static final String BACKUP_DIR = "backups";
+    /** Attachments (receipts, pay stubs) — spec §3. */
+    public static final String FILES_DIR = "files";
     static final String PRE_MIGRATION_PREFIX = "pre-migration-";
     static final int PRE_MIGRATION_BACKUPS_KEPT = 5;
     private static final String DEFAULT_MIGRATIONS = "classpath:db/migration";
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS");
     private static final Logger log = LoggerFactory.getLogger(Database.class);
 
+    /** Folders inside the data folder that hold the user's data besides the database itself. */
+    private static final List<String> DATA_FOLDERS = List.of(BACKUP_DIR, FILES_DIR);
+
+    /** The database file plus SQLite's write-ahead log and shared-memory companions. */
+    private static final List<String> DB_FILE_SUFFIXES = List.of("", "-wal", "-shm");
+
+    private final Path dataDir;
+    private final Flyway flyway;
     private final Jdbi jdbi;
 
-    private Database(Jdbi jdbi) {
-        this.jdbi = jdbi;
+    private Database(Path dataDir, DataSource dataSource, Flyway flyway) {
+        this.dataDir = dataDir;
+        this.flyway = flyway;
+        this.jdbi = Jdbi.create(dataSource);
     }
 
     public static Database open(Path dataDir) {
@@ -61,11 +73,52 @@ public final class Database {
             backupBeforeMigration(dataSource, dataDir.resolve(BACKUP_DIR), clock);
         }
         flyway.migrate();
-        return new Database(Jdbi.create(dataSource));
+        return new Database(dataDir, dataSource, flyway);
     }
 
     public Jdbi jdbi() {
         return jdbi;
+    }
+
+    /**
+     * Permanently erases everything the user has entered and leaves a fresh, empty app:
+     * every table is dropped and rebuilt, and attachments and in-app backups are deleted.
+     * Logs stay (they hold no financial data), as do backups saved to a folder elsewhere.
+     *
+     * <p>There is no undo, which is the point — callers must have confirmed with the user.
+     */
+    public synchronized void eraseEverything() {
+        // Delete the database files outright and rebuild from the migrations, rather than
+        // emptying tables: deleted rows otherwise linger in the file's free pages and in the
+        // write-ahead log. Connections are opened per request and closed again, so nothing
+        // holds the file open here. The main file goes first — if it cannot be deleted,
+        // nothing has changed yet.
+        try {
+            for (String suffix : DB_FILE_SUFFIXES) {
+                Files.deleteIfExists(dataDir.resolve(DB_FILE + suffix));
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not erase the database", e);
+        }
+        flyway.migrate();
+        for (String folder : DATA_FOLDERS) {
+            deleteFolder(dataDir.resolve(folder));
+        }
+        log.info("All data erased at the user's request");
+    }
+
+    private static void deleteFolder(Path folder) {
+        if (!Files.exists(folder)) {
+            return;
+        }
+        try (Stream<Path> contents = Files.walk(folder)) {
+            // Deepest paths first, so every folder is empty by the time it is deleted.
+            for (Path path : contents.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not erase " + folder.getFileName(), e);
+        }
     }
 
     private static DataSource dataSource(Path dbFile) {
