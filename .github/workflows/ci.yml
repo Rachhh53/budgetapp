@@ -1,0 +1,131 @@
+# Build-time checks only. Nothing here ships in the app, which makes no outbound network
+# calls of any kind (spec §1).
+name: CI
+
+on:
+  # Every branch. A pull request shows the checks of its latest commit, so there is no
+  # separate pull_request trigger running everything twice.
+  push:
+  # New vulnerabilities are published without anyone touching the code: re-scan weekly.
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+# Read-only token, no secrets: no job here needs to write to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every action is pinned to a commit, not a tag, so a retagged release cannot change what runs.
+jobs:
+  backend:
+    name: Backend tests
+    if: github.event_name != 'schedule'
+    # The app only ships on Windows, so its tests (file locks, data folder, lifecycle) run there.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build and test
+        working-directory: backend
+        run: .\mvnw.cmd -B verify
+
+  frontend:
+    name: Frontend tests
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  dependencies:
+    name: Dependency checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, so the age check can compare lockfiles with the main branch.
+          fetch-depth: 0
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      # pom.xml only names direct dependencies. This writes every library the backend really
+      # uses, transitive ones included, to backend/target/bom.json for the two checks below.
+      - name: List backend dependencies
+        working-directory: backend
+        run: ./mvnw -B -q -DskipTests package org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+      # Fails the build if any Maven, npm or Cargo dependency has a known vulnerability in the
+      # OSV database. Findings the scan may pass over are listed, with reasons, in
+      # desktop/src-tauri/osv-scanner.toml; the temporary ones there carry an end date.
+      - name: Scan for known vulnerabilities
+        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+        with:
+          scan-args: |-
+            --lockfile=backend/target/bom.json
+            --lockfile=frontend/package-lock.json
+            --lockfile=desktop/src-tauri/Cargo.lock
+      # Fails the build if a dependency version was published less than 14 days ago, unless it
+      # is a named exception in dependency-age-exceptions.json. Runs on the weekly run too, so
+      # that an exception which has reached 14 days is reported and removed even if nobody
+      # pushes; and still runs when the scan above has findings.
+      - name: Check that no dependency is newer than 14 days
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./check-dependency-age.ps1 -BaseRef ${{ github.ref == 'refs/heads/main' && 'HEAD^' || 'origin/main' }}
+
+  installer:
+    name: Windows installer
+    # Only for main, and only once everything above has passed on the same commit.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, dependencies]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # The Rust toolchain and the Visual Studio C++ Build Tools are already on the runner.
+      - name: Build the installer
+        shell: pwsh
+        run: .\build-installer.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: budget-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 30

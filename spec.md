@@ -85,7 +85,7 @@ The frontend talks to the backend **only through the HTTP API** (no Tauri `invok
 ### Development environment
 - **Builds of the installer happen on Windows** (Tauri and jpackage produce Windows output only when run on Windows). Install once: JDK 21, Maven, Node LTS, Rust toolchain (only so Tauri can compile its small wrapper), and the Visual Studio C++ Build Tools that Tauri requires.
 - **No Docker.** Day-to-day work runs straight on Windows: the backend jar from the Maven wrapper and the Vite dev server (`npm run dev`, which forwards `/api` to the backend), so most development happens in the browser without Tauri. See `README.md`.
-- One script (`build-installer.ps1`) runs on Windows and produces the installer: tests → backend jar → jlink/jpackage app image → frontend build → Tauri bundle.
+- One script (`build-installer.ps1`) runs on Windows and produces the installer: tests → backend jar → jlink/jpackage app image → frontend build → Tauri bundle. Before bundling it starts the packaged backend once on a throwaway data folder and requires it to serve the UI, because the tests run on the full JDK and cannot notice a module missing from the trimmed runtime.
 
 ### Project layout
 ```
@@ -153,7 +153,8 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
 - **asset_values** — `asset_id, date, value`.
 
 ### 4.3 Income and pay stubs
-- **income_sources** — `id, name, deposit_account_id, gross_amount, net_amount, schedule_rule_id, is_primary`. Multiple sources allowed; the **primary** source's schedule defines pay periods.
+- **income_sources** — `id, name, deposit_account_id, gross_amount (nullable), net_amount, net_is_estimate, schedule_rule_id, is_primary`. Multiple sources allowed; the **primary** source's schedule defines pay periods. The first source is always primary, and there is exactly one while any source exists.
+- **paycheck_overrides** — `income_source_id, scheduled_date, net_amount, projected_amount`. One paycheck's amount typed over ("just this one"), keyed by the date the schedule names (which stays put when a holiday moves the payday). `projected_amount` keeps what was shown before the first edit.
 - **paycheck_deductions** — `income_source_id, name, amount, to_account_id` (401(k), HSA…). These never pass through checking.
 - **employer_match** — `income_source_id, to_account_id, mode (fixed | formula), fixed_amount, match_bp, cap_bp_of_gross`.
 - **pay_stubs** — `id, income_source_id, pay_date, file_id, status (review | saved)`.
@@ -165,7 +166,7 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
   - `frequency`: `every_pay_period` | `weekly` | `biweekly` | `semi_monthly` | `monthly` | `every_n_months` | `yearly` | `one_time` | `manual_dates`.
   - `monthly` accepts a day or `last`; days that don't exist in a month fall to its last day.
   - `weekend_rule`: `none` | `previous_business_day` | `next_business_day`.
-- **manual_dates**, **holidays** (user-entered, optional).
+- **manual_dates**, **holidays**. US bank holidays are worked out locally (no download) and added a year at a time; each can be switched off, changed or removed, and the user can add their own. `holiday_years_seeded` records which years were added, so a removed holiday never comes back.
 
 ### 4.5 Categories and tags
 - **categories** — `id, name, color, parent_id (nullable), sort_order`. One per item. Includes income categories (e.g. Income › Bonus).
@@ -301,6 +302,12 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 - **Erase all data** (Settings; built in Phase 0): permanently removes everything and leaves a fresh app, as if newly installed. The database files are deleted outright and rebuilt from the migrations (so nothing lingers in free pages or the write-ahead log), and the `files/` and in-app `backups/` folders are deleted. Logs stay; backups the user saved to another folder are not touched. It asks for confirmation with "Keep my data" as the focused default, cannot be undone (Undo does not cover it), ends every session, and from Phase 6 also removes the PIN. `DELETE /api/data` requires a session, an explicit confirmation phrase in the body, and a request from this PC — it is never available from the phone.
 - Docs recommend Windows BitLocker for at-rest protection.
 
+### Dependencies and the build pipeline
+- **CI** (`.github/workflows/ci.yml`, GitHub Actions) runs on every push: backend tests (on Windows, where the app ships), frontend typecheck/tests/build, and the dependency checks below. On `main` it also builds the installer with `build-installer.ps1` and keeps it as a workflow artifact. Actions are pinned to commit hashes; the workflow token is read-only and needs no secrets. This is build-time only — the app itself still makes no outbound calls.
+- **Known vulnerabilities:** OSV-Scanner checks every Maven (direct and transitive, from a CycloneDX list), npm and Cargo dependency on every push and weekly, and fails the build on a finding. A real, known vulnerability never passes. `desktop/src-tauri/osv-scanner.toml` lists, with reasons, the only findings the scan passes over: two Linux-only crates that are not in the Windows build, and — until 2026-10-15 only — five "unmaintained" notices (no known flaw) on `unic-*` crates that go away with Tauri 2.12 once that is 14 days old.
+- **No dependency younger than 14 days.** A release that new has not been out long enough for a vulnerable or hijacked version to be noticed. `check-dependency-age.ps1` enforces it in CI for versions a branch adds or changes, and `min-release-age=14` in `frontend/.npmrc` at install time. The same applies to pinned Actions.
+- **When the two rules collide** (the only fix for a vulnerability is younger than 14 days), in this order: (1) use an older version that never had the vulnerability; (2) drop or replace the package, if nothing the app needs is lost; (3) only then take the fixed version early, as a named entry in `dependency-age-exceptions.json` saying what it fixes and why 1 and 2 were not possible. An exception ends by itself: the check looks every entry up on every run (weekly included) and fails once the version is 14 days old, or no longer used, until the entry is deleted. Current exceptions: `source-map-js` 1.2.2 (npm, build tooling only), until 2026-10-14.
+
 ---
 
 ## 8. Screens
@@ -398,7 +405,7 @@ Planner per §5.9 with editable growth rates, option cards, payoff order (highes
 ---
 
 ## 11. Open questions to confirm during the build
-- Holidays: user-entered only, or also prefill common US bank holidays (stored locally)?
+- ~~Holidays: user-entered only, or also prefill common US bank holidays (stored locally)?~~ **Decided 2026-10-06:** prefill US bank holidays (calculated locally, Federal Reserve rules: a Sunday holiday is observed on Monday, a Saturday one is not moved); each can be switched off, changed or removed, and the user can add their own.
 - Budget timing: keep "start of period" only, or also offer "spread evenly"?
 - Cards without itemized charges: estimate per pay period or per month by default?
 - Pay stubs: which employers' formats to test against first (use the user's real stubs, kept local).
@@ -419,6 +426,19 @@ Where the build stands, kept up to date as work lands. `proposals.md` is the fea
 | Gate all outbound network access with a strict CSP, bundled assets and local-only logging | Done | CSP on every response, local log file only, bundled font and icons, unrecognised `Host` headers refused. |
 | Create per-user NSIS installer bundling a jlink/jpackage Java runtime, built by build-installer.ps1 | Done; uninstall check pending | `build-installer.ps1` produces `Budget_0.1.0_x64-setup.exe` (57 MB). Rachel installed it on 2026-10-06, then installed a newer build over it, and the app works. Not yet checked by hand: that settings survive an upgrade, and that uninstall keeps data unless "Delete the application data" is ticked (the uninstall hook has never been run). Built with JDK 26; switch `JAVA_HOME` to JDK 21 for an LTS runtime. |
 | Erase all data (new; not in `proposals.md`) | Done | Settings → Erase all data, `DELETE /api/data`. 54 backend tests in total, including one that scans the raw database files to prove erased data is gone from disk. Rachel confirmed it works in the installed app on 2026-10-06. |
+
+### Phase 1 — Accounts, income, pay periods (`milestone/1-accounts-income-periods`)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Create schedule rules and the pay period generator in the engine module | Done | `engine/schedule`: all eight §5.1 cases pass, plus US bank holidays. Projection horizon is a setting (6–36 months, default 12). `every_pay_period` is defined but resolved in Phase 2, when items need it. |
+| Create the type-to-filter picker and color picker components reused across the app | Done | `Picker` / `TextPicker` (filter, arrow keys, Enter, `Add "…" as a new …`) and `ColorPicker` (recently used first, named presets, custom hex). Recently used colors come from the colors already on accounts. |
+| Add accounts of all types with user colors and user-entered balance entries | Done | Accounts screen grouped by kind, account detail with "Balances you entered", archive and delete (asks first). Net worth, the bulk "Update balances" button, chart, buckets, interest and rates on these screens belong to Phases 3–5. `low_balance_threshold` is in the table but not used until Phase 3. |
+| Add income sources with a primary source, paycheck deductions and per-paycheck amount edits | Done | Income screen with source cards, deductions and Upcoming paychecks (amounts editable in place; weekend/holiday moves explained). Pay periods are listed on the Pay periods screen until Phase 2 replaces it with the full view. Taxes & benefits, pay stubs and employer match on this screen belong to Phases 4 and 9. |
+| Bank holidays (decided in §11; not a separate `proposals.md` feature) | Done | Settings → Bank holidays. |
+| CI pipeline with dependency checks (new; not in `proposals.md`) | Written; first run pending | See §7. It runs on GitHub for the first time when this branch is pushed. |
+
+Also in this branch: Javalin 6 → 7 (Jetty 11 → 12), Jackson 2.21.7, Logback 1.5.38 and AssertJ 3.27.7, because the new vulnerability scan found known issues in the old versions and Jetty 11 no longer gets fixes. 135 backend tests (34 engine, 101 API) and 91 frontend tests. Phone width checked at 375px with real screenshots. Every npm and Cargo package that was under 14 days old was rolled back (Tauri is pinned at 2.11.6 for that reason); the one named exception and the dated `unic-*` ignores are described in §7, and both run out in mid-October 2026, when Tauri 2.12 can be taken. The installer was rebuilt on 2026-10-06: the first build could not start, because Jetty 12 needs the `jdk.zipfs` module and the trimmed runtime lacked it; the module is now included and the build script starts the packaged backend once to catch this kind of fault. Not yet done: Undo for these screens, which arrives with the change log in Phase 2 — until then deleting an account or income source asks first.
 
 ### Carried forward into later phases
 

@@ -28,10 +28,12 @@ $AppInput  = Join-Path $Backend 'server\target\app'
 $MainJar   = 'budget-server.jar'
 $ImageName = 'budget-backend'   # must match BACKEND_EXE in desktop/src-tauri/src/main.rs
 $MinJava   = 21
-$TauriCli  = '2.12.1'
+$TauriCli  = '2.11.5'   # keep in step with tauri in desktop/src-tauri/Cargo.toml; at least 14 days old
 
 # Modules the backend's libraries load by reflection, which jdeps cannot see.
-$ReflectiveModules = @('java.sql', 'java.naming', 'java.management', 'jdk.unsupported')
+# jdk.zipfs: Jetty 12 opens the jar as a file system to serve the UI from it; without the
+# module the backend cannot start at all.
+$ReflectiveModules = @('java.sql', 'java.naming', 'java.management', 'jdk.unsupported', 'jdk.zipfs')
 
 function Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 
@@ -95,6 +97,42 @@ Invoke-Checked (Join-Path $JavaBin 'jpackage.exe') @(
     '--type', 'app-image', '--name', $ImageName, '--input', $AppInput, '--main-jar', $MainJar,
     '--runtime-image', $Runtime, '--dest', $BuildDir, '--win-console',
     '--java-options', '-Dfile.encoding=UTF-8')
+
+Step 'Backend app image: start it once'
+# The tests run on the full JDK, so only this catches a module missing from the trimmed
+# runtime. Starts the image exactly as the shell does, on an empty throwaway data folder, and
+# requires both the READY line and the UI to be served.
+$SmokeData = Join-Path $BuildDir 'smoke-data'
+$SmokeOut  = Join-Path $BuildDir 'smoke-out.log'
+$SmokeEnv  = @{ BUDGET_DATA_DIR = $SmokeData; BUDGET_PORT = '4990'; BUDGET_PARENT_PID = "$PID" }
+$Previous  = @{}
+foreach ($name in $SmokeEnv.Keys) {
+    $Previous[$name] = [Environment]::GetEnvironmentVariable($name)
+    [Environment]::SetEnvironmentVariable($name, $SmokeEnv[$name])
+}
+try {
+    $Smoke = Start-Process (Join-Path $BuildDir "$ImageName\$ImageName.exe") -PassThru -WindowStyle Hidden `
+        -RedirectStandardOutput $SmokeOut -RedirectStandardError (Join-Path $BuildDir 'smoke-err.log')
+} finally {
+    foreach ($name in $SmokeEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $Previous[$name]) }
+}
+try {
+    $Ready = $null
+    for ($waited = 0; $waited -lt 45 -and -not $Ready -and -not $Smoke.HasExited; $waited++) {
+        Start-Sleep -Seconds 1
+        $Ready = Select-String -Path $SmokeOut -Pattern '^READY port=(\d+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if (-not $Ready) { throw "The packaged backend did not start. See $SmokeData\logs\budget.log and $SmokeOut." }
+    $SmokePort = $Ready.Matches[0].Groups[1].Value
+    # 127.0.0.1 is the backend's own address on this PC, the one the shell opens.
+    $Page = Invoke-WebRequest -Uri "http://127.0.0.1:$SmokePort/" -UseBasicParsing
+    if ($Page.StatusCode -ne 200) { throw "The packaged backend started but did not serve the UI (status $($Page.StatusCode))." }
+    Write-Host "Started and served the UI on port $SmokePort."
+} finally {
+    if (-not $Smoke.HasExited) { Stop-Process -Id $Smoke.Id -Force }
+    $Smoke.WaitForExit()
+    Remove-Item -Recurse -Force $SmokeData -ErrorAction SilentlyContinue
+}
 
 Step 'Desktop shell and installer: Tauri'
 $InstalledCli = if (Get-Command 'cargo-tauri' -ErrorAction SilentlyContinue) { & cargo tauri --version } else { '' }

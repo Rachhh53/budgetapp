@@ -33,6 +33,16 @@ public final class SettingsRepository {
         return effective;
     }
 
+    /** One setting's effective value. */
+    public String get(SettingKey setting) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT value FROM settings WHERE key = :key")
+                .bind("key", setting.key())
+                .mapTo(String.class)
+                .findOne()
+                .orElse(setting.defaultValue()));
+    }
+
     public void put(SettingKey setting, String value) {
         jdbi.useHandle(handle -> handle
                 .createUpdate("""
