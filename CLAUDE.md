@@ -12,7 +12,7 @@ Senior engineer. No hand-holding — ship clean code.
 - Security and data privacy are first-class, never deferred
 - Never hardcode localhost - make code ready to deploy
 - **Never edit a migration file in `db/migration/` outside the branch where it was created, and never after it has been merged to main.** Flyway checksums are immutable. Fix a migration only on its own branch before merge; after merge, always create a new versioned migration (next `V` number) instead.
-- Never edit proposals.md. These are the features we are actually tracking. When one is implemented or needs a comment, tell Rachel which item (by `Ref`) and what to note — she updates the feature tracker herself
+- Never edit proposals.md. These are the features we are actually tracking. When one is implemented or needs a comment, tell Rachel which item (by its full feature name — never the `Ref`, which is internal to the tracker and not visible to her) and what to note — she updates the feature tracker herself. Record implementation status in `spec.md` §12 (Build status) instead
 
 ## Stack
 * Frontend: React + TypeScript + Tailwind (Vite). All fonts, icons and libraries bundled locally — no CDNs.

@@ -400,3 +400,26 @@ Planner per §5.9 with editable growth rates, option cards, payoff order (highes
 - Budget timing: keep "start of period" only, or also offer "spread evenly"?
 - Cards without itemized charges: estimate per pay period or per month by default?
 - Pay stubs: which employers' formats to test against first (use the user's real stubs, kept local).
+
+---
+
+## 12. Build status
+
+Where the build stands, kept up to date as work lands. `proposals.md` is the feature tracker and is maintained by Rachel only; this section is the in-repo record.
+
+### Phase 0 — Scaffold and packaging (`milestone/0-scaffold`)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Create Maven multi-module backend with Javalin /api/health and SQLite + Flyway | Done | 49 backend tests. Also carries the session gate and `GET`/`PUT /api/settings` (theme, accent color). |
+| Wire Tauri backend lifecycle: start, READY handshake, shutdown, parent-PID watch, single instance | Done | Verified on the built app: window opens on the READY port, a second launch focuses the first, closing the window or killing the shell leaves no backend process. |
+| Create React + TypeScript + Vite + Tailwind frontend shell with CSS-variable theme tokens and sidebar | Done, visual check pending | 14 frontend tests. Recharts and date-fns are added with the first screen that needs them. Still to be looked at by eye at 375px and 1440×900, light and dark. |
+| Gate all outbound network access with a strict CSP, bundled assets and local-only logging | Done | CSP on every response, local log file only, bundled font and icons, unrecognised `Host` headers refused. |
+| Create per-user NSIS installer bundling a jlink/jpackage Java runtime, built by build-installer.ps1 | Built, install checks pending | `build-installer.ps1` produces `Budget_0.1.0_x64-setup.exe` (57 MB). Still to be checked by hand: install without admin, upgrade keeps data, uninstall keeps data unless "Delete the application data" is ticked. Built with JDK 26; switch `JAVA_HOME` to JDK 21 for an LTS runtime. |
+
+### Carried forward into later phases
+
+| Feature | Notes |
+|---|---|
+| Gate the app behind a PIN with recovery code, lockout, --reset-pin, auto-lock and hide amounts | The session cookie and 401 gate already exist (Phase 0). This feature adds the PIN, Argon2, lockout, recovery and the lock screen on top. |
+| Expose the Settings screen with dropdown values and the accent color | Theme and accent color endpoints exist; the screen has only a theme dropdown so far. |

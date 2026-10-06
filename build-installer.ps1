@@ -56,8 +56,12 @@ $JavaBin = Join-Path $env:JAVA_HOME 'bin'
 foreach ($tool in 'java', 'jdeps', 'jlink', 'jpackage') {
     if (-not (Test-Path (Join-Path $JavaBin "$tool.exe"))) { throw "$tool.exe is missing from $JavaBin. JAVA_HOME must be a full JDK." }
 }
-$JavaMajor = [int](& (Join-Path $JavaBin 'java.exe') -XshowSettings:properties -version 2>&1 |
-    Select-String 'java\.specification\.version = (\d+)').Matches[0].Groups[1].Value
+# Read the version from the JDK's `release` file rather than running `java -version`: that
+# prints to stderr, which Windows PowerShell 5.1 turns into a terminating error.
+$ReleaseFile = Join-Path $env:JAVA_HOME 'release'
+$VersionLine = if (Test-Path $ReleaseFile) { Select-String -Path $ReleaseFile -Pattern '^JAVA_VERSION="(\d+)' } else { $null }
+if (-not $VersionLine) { throw "Could not read the Java version from $ReleaseFile. JAVA_HOME must be a full JDK." }
+$JavaMajor = [int]$VersionLine.Matches[0].Groups[1].Value
 if ($JavaMajor -lt $MinJava) { throw "JAVA_HOME is Java $JavaMajor; Budget needs $MinJava or newer." }
 Assert-Tool 'npm'   'Install Node LTS.'
 Assert-Tool 'cargo' 'Install the Rust toolchain from rustup.rs (and the Visual Studio C++ Build Tools).'
@@ -93,8 +97,8 @@ Invoke-Checked (Join-Path $JavaBin 'jpackage.exe') @(
     '--java-options', '-Dfile.encoding=UTF-8')
 
 Step 'Desktop shell and installer: Tauri'
-$InstalledCli = (& cargo tauri --version 2>$null)
-if ($LASTEXITCODE -ne 0 -or $InstalledCli -notmatch [regex]::Escape($TauriCli)) {
+$InstalledCli = if (Get-Command 'cargo-tauri' -ErrorAction SilentlyContinue) { & cargo tauri --version } else { '' }
+if ($InstalledCli -notmatch [regex]::Escape($TauriCli)) {
     Invoke-Checked 'cargo' @('install', 'tauri-cli', '--version', $TauriCli, '--locked')
 }
 Invoke-Checked 'cargo' @('tauri', 'icon', (Join-Path $Desktop 'app-icon.png')) $TauriDir
