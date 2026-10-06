@@ -84,13 +84,13 @@ The frontend talks to the backend **only through the HTTP API** (no Tauri `invok
 
 ### Development environment
 - **Builds of the installer happen on Windows** (Tauri and jpackage produce Windows output only when run on Windows). Install once: JDK 21, Maven, Node LTS, Rust toolchain (only so Tauri can compile its small wrapper), and the Visual Studio C++ Build Tools that Tauri requires.
-- **Docker is optional for day-to-day work.** A `docker-compose.dev.yml` may run the backend (with hot reload) and the Vite dev server, so most development happens in the browser at `localhost` without Tauri. The engine and API tests run the same in the container or on Windows.
+- **No Docker.** Day-to-day work runs straight on Windows: the backend jar from the Maven wrapper and the Vite dev server (`npm run dev`, which forwards `/api` to the backend), so most development happens in the browser without Tauri. See `README.md`.
 - One script (`build-installer.ps1`) runs on Windows and produces the installer: tests → backend jar → jlink/jpackage app image → frontend build → Tauri bundle.
 
 ### Project layout
 ```
 budget/
-  PLAN.md  CLAUDE.md  design/
+  spec.md  proposals.md  CLAUDE.md  design/
   backend/
     pom.xml
     engine/   ← pure calculation code + JUnit tests (no I/O)
@@ -280,7 +280,7 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 - Amounts: right-aligned, tabular digits, same box width whether estimate or not. Negatives use a minus sign.
 - Status is never color alone (labels/icons too). Text contrast ≥ 4.5:1. Real buttons and inputs, keyboard reachable, visible focus.
 - Inline editing: click an amount to edit; Tab to next; Enter saves; Esc cancels.
-- **Undo** toast after every change plus Ctrl+Z. No "are you sure?" except deleting whole items, accounts, or a draft plan year.
+- **Undo** toast after every change plus Ctrl+Z. No "are you sure?" except deleting whole items, accounts, or a draft plan year, and erasing all data (§7).
 - Light, dark, or follow Windows. All colors via CSS variables; user colors from data.
 - **Hide amounts** blurs every number. **Auto-lock** after idle; **Lock now** in the sidebar. Sidebar footer: "Data stored only on this PC."
 - Confirmation codes display as plain monospace text once entered; a pencil button edits them; empty ones show "+ Add confirmation".
@@ -290,12 +290,15 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 
 ## 7. Security, backups, recovery
 
+- **Session gate (built in Phase 0).** Every `/api` route except `GET /api/health`, `POST /api/session` and `POST /api/shutdown` requires a live session: an opaque random token in an HttpOnly, SameSite=Strict cookie, held in memory only and expiring after the auto-lock idle time. Until the PIN exists, `POST /api/session` issues a session without credentials **to requests from this PC only**; Phase 6 puts the PIN in front of it. `POST /api/shutdown` is loopback-only and needs the per-launch token the desktop shell generated.
+- Requests whose `Host` header is a domain name the app was not told about are refused (DNS-rebinding protection); a strict Content-Security-Policy is sent on every response.
 - **PIN** (4–8 digits) is an app lock, not encryption. Argon2 hash.
 - **Recovery code** shown once at PIN setup; can reset the PIN.
 - Increasing delays after wrong PINs.
 - If both are lost: running the backend launcher with `--reset-pin` on the PC clears the PIN without touching data, then exits. Not available over HTTP.
 - Remote sessions always require the PIN and expire with auto-lock.
 - **Backups:** daily copy (SQLite backup API) plus the `files/` folder to a user-chosen folder; keep the last N. "Back up now" and "Restore…".
+- **Erase all data** (Settings; built in Phase 0): permanently removes everything and leaves a fresh app, as if newly installed. The database files are deleted outright and rebuilt from the migrations (so nothing lingers in free pages or the write-ahead log), and the `files/` and in-app `backups/` folders are deleted. Logs stay; backups the user saved to another folder are not touched. It asks for confirmation with "Keep my data" as the focused default, cannot be undone (Undo does not cover it), ends every session, and from Phase 6 also removes the PIN. `DELETE /api/data` requires a session, an explicit confirmation phrase in the body, and a request from this PC — it is never available from the phone.
 - Docs recommend Windows BitLocker for at-rest protection.
 
 ---
@@ -320,7 +323,7 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 | Annual costs | `annual.png` | Calendar years / rolling 12 months switch; totals and change; per-item table; selected item's monthly history and whether its budget is too low; "Plan next year →". |
 | Plan next year | `plan-year.png` | Plans list (active, draft), **Delete draft & start over**; six steps (Income & benefits, Bills, Annual & save-ups, Spending budgets, Saving & investing, Review); suggestion basis switch; table of last 12 months, trend, suggestion, your amount ("YOURS" when typed), per-month/per-paycheck. First-time setup reuses this wizard. |
 | Debt & decisions | `planner.png` | Extra per month and period; flags first; option cards (debts with rates from accounts, investments with **editable growth**); payoff timeline with method switch; "estimates, not advice". |
-| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget timing, budget year start month/day, plan reminder), warnings, security, backups, phone access. |
+| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget timing, budget year start month/day, plan reminder), warnings, security, backups, phone access; **Erase all data** (§7; not in the mockup). |
 | Phone: pay period | `phone-pay-period.png` | Current period's ending and available; mark bills paid (44px targets); auto-pay list; bottom tabs. |
 | Phone: add expense | `phone-add-expense.png` | Amount, payee, date, account, category, tags, receipt photo straight to the PC, reimbursement. |
 
@@ -339,7 +342,9 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 
 ### Phase 0 — Scaffold and packaging
 Project layout per §2; Maven multi-module backend (`engine`, `server`) on Java 21; Javalin with `/api/health`; SQLite + Flyway (`V1__init.sql` with `settings`); engine module with a placeholder JUnit test; React + TS + Vite served by the backend; Tauri project with the **backend lifecycle from §3** (start, `READY` line, window, shutdown, parent-PID watch, single instance); jlink/jpackage build bundled into the Tauri installer; CSP; bundled fonts/icons; Tailwind set up with theme tokens as CSS variables (light/dark/system and an accent-color variable) and base layout with the sidebar; one build script that produces the Windows installer; `CLAUDE.md` summarizing §1.
-Also: per-user NSIS installer with WebView2 bootstrapper, shortcuts, uninstall that keeps data by default, pre-migration backup on upgrade, `build-installer.ps1`, and the optional `docker-compose.dev.yml`.
+Also: per-user NSIS installer with WebView2 bootstrapper, shortcuts, uninstall that keeps data by default, pre-migration backup on upgrade, and `build-installer.ps1`.
+Also: the **session gate** (§7) lands here rather than in Phase 6, so every endpoint is born behind it and has its 401 test from day one; and a minimal `GET /api/settings` / `PUT /api/settings/{key}` (theme, accent color) so the shell can apply the theme.
+Also: **Erase all data** (§7) on the Settings screen, so a test install can be reset to a fresh app before real use.
 **Done when** the installer runs on a clean Windows machine with **no Java, Node or admin rights**, the app launches and shows the shell, the health check passes, closing the window leaves no Java process running, installing a newer build keeps the data, and both test suites run.
 
 ### Phase 1 — Accounts, income, pay periods
@@ -397,3 +402,27 @@ Planner per §5.9 with editable growth rates, option cards, payoff order (highes
 - Budget timing: keep "start of period" only, or also offer "spread evenly"?
 - Cards without itemized charges: estimate per pay period or per month by default?
 - Pay stubs: which employers' formats to test against first (use the user's real stubs, kept local).
+
+---
+
+## 12. Build status
+
+Where the build stands, kept up to date as work lands. `proposals.md` is the feature tracker and is maintained by Rachel only; this section is the in-repo record.
+
+### Phase 0 — Scaffold and packaging (`milestone/0-scaffold`)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Create Maven multi-module backend with Javalin /api/health and SQLite + Flyway | Done | Backend tests pass. Also carries the session gate and `GET`/`PUT /api/settings` (theme, accent color). |
+| Wire Tauri backend lifecycle: start, READY handshake, shutdown, parent-PID watch, single instance | Done | Verified on the built app: window opens on the READY port, a second launch focuses the first, closing the window or killing the shell leaves no backend process. |
+| Create React + TypeScript + Vite + Tailwind frontend shell with CSS-variable theme tokens and sidebar | Done | 19 frontend tests. Recharts and date-fns are added with the first screen that needs them. Rachel confirmed on 2026-10-06 that the installed app loads and looks good; phone width (375px) is covered by tests only so far. |
+| Gate all outbound network access with a strict CSP, bundled assets and local-only logging | Done | CSP on every response, local log file only, bundled font and icons, unrecognised `Host` headers refused. |
+| Create per-user NSIS installer bundling a jlink/jpackage Java runtime, built by build-installer.ps1 | Done; uninstall check pending | `build-installer.ps1` produces `Budget_0.1.0_x64-setup.exe` (57 MB). Rachel installed it on 2026-10-06, then installed a newer build over it, and the app works. Not yet checked by hand: that settings survive an upgrade, and that uninstall keeps data unless "Delete the application data" is ticked (the uninstall hook has never been run). Built with JDK 26; switch `JAVA_HOME` to JDK 21 for an LTS runtime. |
+| Erase all data (new; not in `proposals.md`) | Done | Settings → Erase all data, `DELETE /api/data`. 54 backend tests in total, including one that scans the raw database files to prove erased data is gone from disk. Rachel confirmed it works in the installed app on 2026-10-06. |
+
+### Carried forward into later phases
+
+| Feature | Notes |
+|---|---|
+| Gate the app behind a PIN with recovery code, lockout, --reset-pin, auto-lock and hide amounts | The session cookie and 401 gate already exist (Phase 0). This feature adds the PIN, Argon2, lockout, recovery and the lock screen on top. |
+| Expose the Settings screen with dropdown values and the accent color | Theme and accent color endpoints exist; the screen has only a theme dropdown so far. |

@@ -11,8 +11,8 @@ Senior engineer. No hand-holding — ship clean code.
 - No hardcoded config — everything via env vars
 - Security and data privacy are first-class, never deferred
 - Never hardcode localhost - make code ready to deploy
-- **Never edit a migration file in `db/migrations/` outside the branch where it was created, and never after it has been merged to main.** Flyway checksums are immutable. Fix a migration only on its own branch before merge; after merge, always create a new versioned migration (next `V` number) instead.
-- Never change proposals.md without permission. These are the features we are actually tracking and should be called out once implemented
+- **Never edit a migration file in `db/migration/` outside the branch where it was created, and never after it has been merged to main.** Flyway checksums are immutable. Fix a migration only on its own branch before merge; after merge, always create a new versioned migration (next `V` number) instead.
+- Never edit proposals.md. These are the features we are actually tracking. When one is implemented or needs a comment, tell Rachel which item (by its full feature name — never the `Ref`, which is internal to the tracker and not visible to her) and what to note — she updates the feature tracker herself. Record implementation status in `spec.md` §12 (Build status) instead
 
 ## Stack
 * Frontend: React + TypeScript + Tailwind (Vite). All fonts, icons and libraries bundled locally — no CDNs.
@@ -22,7 +22,7 @@ Senior engineer. No hand-holding — ship clean code.
 * Auth: app PIN (Argon2 hash) unlocks a session; opaque session token in an HttpOnly cookie, expires with auto-lock. Failed PIN attempts are rate-limited with increasing delays. Recovery code + local-only `--reset-pin`.
 * API: REST with `{ data, error, status }` envelope. Backend binds to 127.0.0.1 only, unless phone access is turned on in Settings.
 * Desktop: Tauri 2 shell (tiny Rust wrapper that starts/stops the Java backend; no business logic in Rust). Shipped as one per-user Windows installer with a jlink-trimmed Java runtime bundled.
-* Docker: optional, dev only — `docker-compose.dev.yml` runs the backend with hot reload and the Vite dev server. The installer is built on Windows with `build-installer.ps1`.
+* Dev: no Docker. Run the backend with the Maven wrapper (`backend/mvnw.cmd`) and the frontend with npm (`npm run dev` forwards `/api` to the backend) directly on Windows. The installer is built on Windows with `build-installer.ps1`.
 * Privacy: no telemetry, analytics, crash reporting, update checks, or outbound network calls of any kind.
 
 ## Communication Style
@@ -36,7 +36,7 @@ Senior engineer. No hand-holding — ship clean code.
 - **Mobile-first, always.** Every new UI (page, card, modal, table, matrix) must render legibly at 375px-wide before being considered done. Wide tables/matrices need a stacked-card fallback below `md`; modals must avoid fixed widths; buttons and form rows must reflow. Default to Tailwind responsive prefixes (`sm:` / `md:` / `lg:`) and verify by resizing the browser before declaring a feature complete. Mobile is not a follow-up task.
 - Error messages human and kind; never blame user; all empty/loading/error states need copy
 - Tests by default: pytest (Python), JUnit 5 (Java), Vitest (React)
-- Do not run npm or TypeScript commands locally. All frontend commands run inside the Docker container
+- Run npm, TypeScript and Maven commands directly on the host — never start Docker
 - At minimum, cover the happy path and common error cases for every endpoint
 - Include at least one test per endpoint verifying auth is enforced (unauthenticated request returns 401)
 - Tests live in a `tests/` directory mirroring the source structure

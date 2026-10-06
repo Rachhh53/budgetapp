@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens. Every color in the app comes from one of these variables, so switching
+ * light/dark or the accent color is just a matter of changing variables — no class names
+ * change. Colors the user picks for categories, tags, accounts and buckets come from data
+ * and are applied with inline styles, never from here.
+ *
+ * The values are the defaults from the mockups in design/.
+ */
+:root {
+  color-scheme: light;
+
+  --bg: #f1f3f5;
+  --surface: #ffffff;
+  --border: #dfe3e8;
+  --text: #1b1f27;
+  --text-muted: #566070;
+
+  /* The sidebar stays dark in both themes, as in the mockups. */
+  --sidebar: #1a2233;
+  --sidebar-text: #d3d9e3;
+  --sidebar-text-muted: #9aa5b5;
+  --sidebar-active: #2a3447;
+
+  /* Set at runtime from the user's accent setting; --on-accent is the readable text color for it. */
+  --accent: #0f766e;
+  --on-accent: #ffffff;
+
+  --estimate-bg: #e3effc;
+  --estimate-border: #b9d4f5;
+  --estimate-text: #1a56b0;
+
+  --danger: #b42318;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #11151c;
+  --surface: #1a202b;
+  --border: #2d3644;
+  --text: #e8ebf0;
+  --text-muted: #a3adbb;
+
+  --sidebar: #0c1017;
+  --sidebar-active: #212a3a;
+
+  --estimate-bg: #17304f;
+  --estimate-border: #2b4d7a;
+  --estimate-text: #a9cdfa;
+
+  --danger: #ff9b8f;
+}
+
+/* Expose the tokens to Tailwind: bg-surface, text-muted, border-line, bg-accent, … */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-line: var(--border);
+  --color-ink: var(--text);
+  --color-muted: var(--text-muted);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-ink: var(--sidebar-text);
+  --color-sidebar-muted: var(--sidebar-text-muted);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-estimate: var(--estimate-bg);
+  --color-estimate-line: var(--estimate-border);
+  --color-estimate-ink: var(--estimate-text);
+  --color-danger: var(--danger);
+
+  --font-sans: "Inter Variable", system-ui, "Segoe UI", sans-serif;
+  --radius-card: 0.875rem;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+/* A focus ring that is always visible, on any background. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

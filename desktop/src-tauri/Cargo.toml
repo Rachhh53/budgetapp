@@ -1,0 +1,21 @@
+[package]
+name = "budget-desktop"
+version = "0.1.0"
+description = "Budget desktop shell: opens the window and starts/stops the Java backend. No business logic."
+edition = "2021"
+publish = false
+
+# Exact versions are recorded in Cargo.lock (commit it). No updater plugin, by design:
+# the app never makes outbound network calls.
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-single-instance = "2.5"
+getrandom = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
