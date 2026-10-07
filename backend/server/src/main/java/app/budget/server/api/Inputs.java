@@ -4,7 +4,9 @@ import io.javalin.http.Context;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 /**
@@ -95,6 +97,21 @@ public final class Inputs {
             throw ApiException.badRequest(label + " is larger than Budget can keep track of.");
         }
         return cents;
+    }
+
+    /**
+     * An optional list of ids chosen from a list the user built (tags, say): no blanks, no
+     * repeats, and no more than {@code max}. Whether each one exists is for the caller to check.
+     */
+    public static List<Long> ids(List<Long> values, int max, String message) {
+        if (values == null) {
+            return List.of();
+        }
+        List<Long> distinct = values.stream().distinct().toList();
+        if (distinct.size() > max || distinct.stream().anyMatch(Objects::isNull)) {
+            throw ApiException.badRequest(message);
+        }
+        return distinct;
     }
 
     /** One of an enum's values, sent in lower case (e.g. {@code semi_monthly}). */

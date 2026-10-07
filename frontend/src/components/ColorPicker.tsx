@@ -22,6 +22,12 @@ export const PRESET_COLORS: readonly { hex: string; name: string }[] = [
   { hex: "#475569", name: "Slate" },
 ];
 
+/** The first preset not in use yet, so new accounts, categories and tags start out easy to tell apart. */
+export function firstUnusedColor(used: readonly string[]): string {
+  const free = PRESET_COLORS.find((preset) => !used.includes(preset.hex));
+  return (free ?? PRESET_COLORS[0])?.hex ?? "#0f766e";
+}
+
 const RECENT_SHOWN = 6;
 
 interface ColorPickerProps {

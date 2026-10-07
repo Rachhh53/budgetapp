@@ -63,6 +63,10 @@ public final class AccountsRoutes {
             throw ApiException.conflict(
                     "This account is still used by an income source. Point that somewhere else first, or archive the account instead.");
         }
+        if (accounts.isUsedByItemsOrEntries(id)) {
+            throw ApiException.conflict(
+                    "This account is still used by a recurring item or a one-off entry. Point those somewhere else first, or archive the account instead.");
+        }
         if (!accounts.delete(id)) {
             throw ApiException.notFound();
         }

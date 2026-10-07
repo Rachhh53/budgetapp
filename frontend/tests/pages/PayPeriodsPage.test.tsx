@@ -5,6 +5,7 @@ import { fakeBackend, renderApp } from "../helpers";
 
 const PERIODS: PayPeriods = {
   primarySourceId: 1,
+  primaryAccountId: 1,
   periods: [
     {
       start: "2026-10-15",
@@ -12,10 +13,13 @@ const PERIODS: PayPeriods = {
       scheduledPayday: "2026-10-15",
       current: true,
       incomeCents: 280460,
+      projectedEndingCents: null,
+      lowestCents: null,
       paychecks: [
         {
           incomeSourceId: 1,
           sourceName: "Northwind Health",
+          depositAccountId: 1,
           scheduledDate: "2026-10-15",
           payDate: "2026-10-15",
           netCents: 248620,
@@ -25,6 +29,7 @@ const PERIODS: PayPeriods = {
         {
           incomeSourceId: 2,
           sourceName: "Riverside Bakery",
+          depositAccountId: 1,
           scheduledDate: "2026-10-23",
           payDate: "2026-10-23",
           netCents: 31840,
@@ -39,10 +44,13 @@ const PERIODS: PayPeriods = {
       scheduledPayday: "2026-11-01",
       current: false,
       incomeCents: 248620,
+      projectedEndingCents: null,
+      lowestCents: null,
       paychecks: [
         {
           incomeSourceId: 1,
           sourceName: "Northwind Health",
+          depositAccountId: 1,
           scheduledDate: "2026-11-01",
           payDate: "2026-10-30",
           netCents: 248620,

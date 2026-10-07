@@ -1,0 +1,134 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CATEGORIES_KEY, TAGS_KEY } from "./categories";
+import { api } from "./client";
+import { PAY_KEY, type WeekendRule } from "./income";
+
+/** The kinds of recurring item that can be added today. Bucket moves arrive with buckets. */
+export const ITEM_KINDS = ["bill", "transfer", "budget", "card_payment"] as const;
+export type ItemKind = (typeof ITEM_KINDS)[number];
+
+export type AmountMode = "per_occurrence" | "annual";
+export type Placement = "due_period" | "one_early";
+
+/** The schedules a recurring item can follow. */
+export const ITEM_FREQUENCIES = [
+  "every_pay_period",
+  "weekly",
+  "biweekly",
+  "semi_monthly",
+  "monthly",
+  "every_n_months",
+  "yearly",
+  "one_time",
+] as const;
+export type ItemFrequency = (typeof ITEM_FREQUENCIES)[number];
+
+export interface ItemSchedule {
+  frequency: ItemFrequency;
+  /** Months apart, for `every_n_months`. */
+  interval: number | null;
+  /** Day of the month, 1–31; 31 means the last day. */
+  day1: number | null;
+  day2: number | null;
+  /** 1–12, for `yearly`. */
+  month: number | null;
+  startDate: string;
+  endDate: string | null;
+  weekendRule: WeekendRule;
+}
+
+/** What "this and all future" can change about an item. */
+export interface ItemTerms {
+  /** As entered: a yearly total when `amountMode` is `annual`. */
+  amountCents: number;
+  amountMode: AmountMode;
+  estimate: boolean;
+  categoryId: number | null;
+  payFromAccountId: number;
+  /** Where a transfer or card payment goes; `null` otherwise. */
+  payToAccountId: number | null;
+  autopay: boolean;
+  placement: Placement;
+  schedule: ItemSchedule;
+  /** For `every_pay_period`: how many days into the period it is dated. 0 is payday. */
+  daysAfterPayday: number;
+}
+
+/** The next occurrence still to pay. */
+export interface NextOccurrence {
+  scheduledDate: string;
+  dueDate: string;
+  /** First day of the pay period that pays for it; `null` when no period is known. */
+  periodStart: string | null;
+  /** True when it is paid from a period before the one it falls due in. */
+  early: boolean;
+}
+
+/** One version of an item, for its price history. */
+export interface PricePoint {
+  effectiveFrom: string;
+  perOccurrenceCents: number;
+  perYearCents: number;
+}
+
+/** A recurring item as it stands today, plus what it works out to. */
+export interface Item extends ItemTerms {
+  id: number;
+  name: string;
+  kind: ItemKind;
+  note: string | null;
+  archived: boolean;
+  tagIds: number[];
+  perOccurrenceCents: number;
+  perYearCents: number;
+  /** `null` when nothing is due in the coming year. */
+  next: NextOccurrence | null;
+  /** Every version, oldest first. */
+  history: PricePoint[];
+}
+
+export interface ItemInput extends ItemTerms {
+  name: string;
+  kind: ItemKind;
+  note: string | null;
+  archived: boolean;
+  tagIds: number[];
+  /** When changing an item: the change applies from this date on. */
+  effectiveFrom?: string;
+}
+
+export const ITEMS_KEY = ["items"] as const;
+
+export function useItems() {
+  return useQuery({ queryKey: ITEMS_KEY, queryFn: () => api.get<Item[]>("/api/items") });
+}
+
+/** An item changes what pay periods add up to and how much each category and tag is used. */
+function useRefreshItems() {
+  const queryClient = useQueryClient();
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
+      queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+      queryClient.invalidateQueries({ queryKey: CATEGORIES_KEY }),
+      queryClient.invalidateQueries({ queryKey: TAGS_KEY }),
+    ]);
+}
+
+/** Creates an item, or changes the one with `id` from `effectiveFrom` on. */
+export function useSaveItem(id?: number) {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: (input: ItemInput) =>
+      id === undefined ? api.post<Item>("/api/items", input) : api.put<Item>(`/api/items/${id}`, input),
+    onSuccess: refresh,
+  });
+}
+
+export function useDeleteItem(id: number) {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: () => api.delete<{ deleted: boolean }>(`/api/items/${id}`),
+    onSuccess: refresh,
+  });
+}

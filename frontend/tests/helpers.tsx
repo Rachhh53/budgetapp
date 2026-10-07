@@ -14,7 +14,10 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/accounts": () => ({ status: 200, data: [] }),
   "GET /api/income-sources": () => ({ status: 200, data: [] }),
   "GET /api/paychecks": () => ({ status: 200, data: [] }),
-  "GET /api/pay-periods": () => ({ status: 200, data: { primarySourceId: null, periods: [] } }),
+  "GET /api/pay-periods": () => ({ status: 200, data: { primarySourceId: null, primaryAccountId: null, periods: [] } }),
+  "GET /api/items": () => ({ status: 200, data: [] }),
+  "GET /api/categories": () => ({ status: 200, data: [] }),
+  "GET /api/tags": () => ({ status: 200, data: [] }),
   "GET /api/holidays": () => ({ status: 200, data: [] }),
 };
 

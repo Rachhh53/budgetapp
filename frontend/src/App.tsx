@@ -5,17 +5,21 @@ import { AppShell } from "./components/AppShell";
 import { NAV_ITEMS } from "./nav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { CategoriesPage } from "./pages/CategoriesPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodsPage } from "./pages/PayPeriodsPage";
+import { RecurringItemsPage } from "./pages/RecurringItemsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useApplyTheme } from "./theme/useApplyTheme";
 
 /** The screens built so far, by path. Every other sidebar entry shows "on its way". */
 const PAGES: Record<string, ReactNode> = {
   "/": <PayPeriodsPage />,
+  "/recurring": <RecurringItemsPage />,
   "/accounts": <AccountsPage />,
   "/income": <IncomePage />,
+  "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
 };
 

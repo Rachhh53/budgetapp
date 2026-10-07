@@ -48,6 +48,8 @@ export type IncomeSourceInput = Omit<IncomeSource, "id">;
 export interface Paycheck {
   incomeSourceId: number;
   sourceName: string;
+  /** The account it lands in. */
+  depositAccountId: number;
   /** The date the schedule names; identifies this paycheck when editing it. */
   scheduledDate: string;
   /** When it actually arrives, after any weekend or holiday move. */
@@ -65,11 +67,17 @@ export interface PayPeriod {
   current: boolean;
   incomeCents: number;
   paychecks: Paycheck[];
+  /** The primary paycheck's account at the end of the period; `null` until a balance is entered for it. */
+  projectedEndingCents: number | null;
+  /** That account's lowest end-of-day balance in the period. */
+  lowestCents: number | null;
 }
 
 export interface PayPeriods {
   /** `null` until an income source exists. */
   primarySourceId: number | null;
+  /** The account the primary paycheck lands in. */
+  primaryAccountId: number | null;
   periods: PayPeriod[];
 }
 

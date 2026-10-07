@@ -14,8 +14,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Income sources, the paychecks they produce and the pay periods the primary one defines:
- * {@code /api/income-sources}, {@code /api/paychecks} and {@code /api/pay-periods}.
+ * Income sources and the paychecks they produce: {@code /api/income-sources} and
+ * {@code /api/paychecks}. The pay periods the primary source defines are served by the ledger.
  */
 public final class IncomeRoutes {
 
@@ -39,7 +39,6 @@ public final class IncomeRoutes {
         routes.delete("/api/income-sources/{id}", this::delete);
         routes.put("/api/income-sources/{id}/paychecks/{scheduledDate}", this::editPaycheck);
         routes.get("/api/paychecks", this::paychecks);
-        routes.get("/api/pay-periods", this::payPeriods);
     }
 
     /** Request body for creating or changing an income source. Amounts are whole cents. */
@@ -126,14 +125,6 @@ public final class IncomeRoutes {
         LocalDate to = Inputs.dateParam(ctx, "to", calendar.horizonEnd());
         Inputs.requireSensibleRange(from, to);
         ApiResponse.ok(ctx, calendar.paychecks(from, to));
-    }
-
-    /** Pay periods overlapping {@code from}–{@code to}; by default the current one through the horizon. */
-    private void payPeriods(Context ctx) {
-        LocalDate from = Inputs.dateParam(ctx, "from", calendar.today());
-        LocalDate to = Inputs.dateParam(ctx, "to", calendar.horizonEnd());
-        Inputs.requireSensibleRange(from, to);
-        ApiResponse.ok(ctx, calendar.periods(from, to));
     }
 
     private SourceView view(long id) {

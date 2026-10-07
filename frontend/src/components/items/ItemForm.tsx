@@ -1,0 +1,522 @@
+import { X } from "lucide-react";
+import { type FormEvent, useId, useState } from "react";
+import type { Account } from "../../api/accounts";
+import { type Category, type Tag, useSaveCategory, useSaveTag } from "../../api/categories";
+import {
+  type AmountMode,
+  type Item,
+  ITEM_FREQUENCIES,
+  ITEM_KINDS,
+  type ItemFrequency,
+  type ItemInput,
+  type ItemKind,
+  type Placement,
+  useDeleteItem,
+  useSaveItem,
+} from "../../api/items";
+import { readableTextOn } from "../../lib/color";
+import { formatDate, todayIso } from "../../lib/dates";
+import { centsToInput, formatCents, parseDollars } from "../../lib/money";
+import { firstUnusedColor } from "../ColorPicker";
+import { ConfirmDelete } from "../ConfirmDelete";
+import { DaySelect } from "../DaySelect";
+import { Modal } from "../Modal";
+import { AMOUNT_HELP, MoneyField } from "../MoneyField";
+import { Picker } from "../Picker";
+import { Segmented } from "../Segmented";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { ITEM_FREQUENCY_LABELS, KIND_LABELS, MONTH_NAMES } from "./labels";
+
+const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind] }));
+
+const AMOUNT_MODE_OPTIONS: readonly { value: AmountMode; label: string }[] = [
+  { value: "per_occurrence", label: "Each time" },
+  { value: "annual", label: "Yearly total" },
+];
+
+const PLACEMENT_OPTIONS: readonly { value: Placement; label: string }[] = [
+  { value: "due_period", label: "The period it's due in" },
+  { value: "one_early", label: "One period early" },
+];
+
+/** How far into a pay period a budget can be dated from the list; payday itself is 0. */
+const DAYS_AFTER_PAYDAY = Array.from({ length: 15 }, (_, days) => days);
+
+/** Months apart on offer for "every few months". */
+const MONTHS_APART = [2, 3, 4, 6];
+
+interface ItemFormProps {
+  /** The item being changed; leave out to add a new one. */
+  item?: Item;
+  accounts: readonly Account[];
+  categories: readonly Category[];
+  tags: readonly Tag[];
+  onClose: () => void;
+}
+
+/**
+ * Add or change a recurring item (the edit drawer in design/recurring.png). Everything chosen
+ * from a list is a dropdown or a type-to-filter picker; a category or tag that does not
+ * exist yet can be added from its picker without leaving the form.
+ *
+ * A change to an existing item applies from a date on ("this and all future"): earlier
+ * occurrences keep what they had.
+ */
+export function ItemForm({ item, accounts, categories, tags, onClose }: ItemFormProps) {
+  const id = useId();
+  const save = useSaveItem(item?.id);
+  const addCategory = useSaveCategory();
+  const addTag = useSaveTag();
+  const schedule = item?.schedule;
+
+  const [kind, setKind] = useState<ItemKind>(item?.kind ?? "bill");
+  const [name, setName] = useState(item?.name ?? "");
+  const [categoryId, setCategoryId] = useState<string | null>(item?.categoryId != null ? String(item.categoryId) : null);
+  const [payFrom, setPayFrom] = useState<string | null>(item ? String(item.payFromAccountId) : null);
+  const [payTo, setPayTo] = useState<string | null>(item?.payToAccountId != null ? String(item.payToAccountId) : null);
+  const [amountMode, setAmountMode] = useState<AmountMode>(item?.amountMode ?? "per_occurrence");
+  const [amount, setAmount] = useState(item ? centsToInput(item.amountCents) : "");
+  const [estimate, setEstimate] = useState(item?.estimate ?? false);
+  const [frequency, setFrequency] = useState<ItemFrequency>(schedule?.frequency ?? "monthly");
+  const [day1, setDay1] = useState(schedule?.day1 ?? 1);
+  const [day2, setDay2] = useState(schedule?.day2 ?? 15);
+  const [month, setMonth] = useState(schedule?.month ?? 1);
+  const [monthsApart, setMonthsApart] = useState(schedule?.interval && schedule.interval > 1 ? schedule.interval : 3);
+  const [startDate, setStartDate] = useState(schedule?.startDate ?? todayIso());
+  const [daysAfterPayday, setDaysAfterPayday] = useState(item?.daysAfterPayday ?? 0);
+  const [autopay, setAutopay] = useState(item?.autopay ?? false);
+  const [placement, setPlacement] = useState<Placement>(item?.placement ?? "due_period");
+  const [tagIds, setTagIds] = useState<number[]>(item?.tagIds ?? []);
+  const [note, setNote] = useState(item?.note ?? "");
+  const [archived, setArchived] = useState(item?.archived ?? false);
+  const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
+  const [problem, setProblem] = useState<string>();
+
+  const movesMoney = kind === "transfer" || kind === "card_payment";
+  const everyPaycheck = frequency === "every_pay_period";
+  // These repeat from a date the user gives; the rest name their own day of the month or year.
+  const countsFromADate = frequency === "weekly" || frequency === "biweekly" || frequency === "one_time";
+
+  // Archived accounts are left out, unless this item already points at one.
+  const offered = accounts.filter((account) => !account.archived || [payFrom, payTo].includes(String(account.id)));
+  const accountOptions = offered.map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
+  const cardOptions = offered
+    .filter((account) => account.type === "credit_card")
+    .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
+  const categoryOptions = categories.map((category) => ({
+    id: String(category.id),
+    label: categoryLabel(category, categories),
+    color: category.color,
+  }));
+  const chosenTags = tagIds.flatMap((tagId) => tags.find((tag) => tag.id === tagId) ?? []);
+  const tagOptions = tags
+    .filter((tag) => !tagIds.includes(tag.id))
+    .map((tag) => ({ id: String(tag.id), label: tag.name, color: tag.color }));
+
+  const createCategory = (text: string) =>
+    addCategory.mutate(
+      { name: text, color: firstUnusedColor(categories.map((category) => category.color)), parentId: null },
+      { onSuccess: (created) => setCategoryId(String(created.id)) },
+    );
+
+  const createTag = (text: string) =>
+    addTag.mutate(
+      { name: text, color: firstUnusedColor(tags.map((tag) => tag.color)) },
+      { onSuccess: (created) => setTagIds((ids) => [...ids, created.id]) },
+    );
+
+  /** Turns the form into a request, or explains what still needs attention. */
+  const toInput = (): ItemInput | string => {
+    if (payFrom === null) {
+      return kind === "transfer" ? "Please choose the account this money comes from." : "Please choose the account this is paid from.";
+    }
+    if (movesMoney && payTo === null) {
+      return kind === "card_payment" ? "Please choose the card this payment goes to." : "Please choose the account this money goes to.";
+    }
+    if (movesMoney && payTo === payFrom) {
+      return "Please choose two different accounts.";
+    }
+    const amountCents = parseDollars(amount);
+    if (amountCents === null || amountCents < 0) {
+      return AMOUNT_HELP;
+    }
+    const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months";
+    return {
+      name,
+      kind,
+      note: note.trim() === "" ? null : note,
+      archived,
+      tagIds,
+      amountCents,
+      amountMode,
+      estimate,
+      categoryId: categoryId === null ? null : Number(categoryId),
+      payFromAccountId: Number(payFrom),
+      payToAccountId: movesMoney && payTo !== null ? Number(payTo) : null,
+      // A budget is money set aside to spend, not something that is paid automatically.
+      autopay: kind === "budget" ? false : autopay,
+      placement: everyPaycheck ? "due_period" : placement,
+      schedule: {
+        frequency,
+        interval: frequency === "every_n_months" ? monthsApart : null,
+        day1: byDayOfMonth || frequency === "yearly" ? day1 : null,
+        day2: frequency === "semi_monthly" ? day2 : null,
+        month: frequency === "yearly" ? month : null,
+        // Schedules that name their own day need no anchor; start them in January so this
+        // year's occurrences exist. "Every paycheck" starts with the paycheck in hand.
+        startDate: countsFromADate
+          ? startDate
+          : (schedule?.startDate ?? (everyPaycheck ? todayIso() : `${todayIso().slice(0, 4)}-01-01`)),
+        endDate: schedule?.endDate ?? null,
+        weekendRule: schedule?.weekendRule ?? "none",
+      },
+      daysAfterPayday: everyPaycheck ? daysAfterPayday : 0,
+      ...(item ? { effectiveFrom } : {}),
+    };
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const input = toInput();
+    if (typeof input === "string") {
+      setProblem(input);
+      return;
+    }
+    setProblem(undefined);
+    save.mutate(input, { onSuccess: onClose });
+  };
+
+  const failure = problem ?? save.error?.message ?? addCategory.error?.message ?? addTag.error?.message;
+
+  return (
+    <Modal title={item ? `Edit ${item.name}` : "Add a recurring item"} onClose={onClose} drawer>
+      <form onSubmit={submit} className="space-y-4">
+        <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={setKind} />
+
+        <div>
+          <label htmlFor={`${id}-name`} className={LABEL}>
+            Name
+          </label>
+          <input
+            id={`${id}-name`}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={80}
+            required
+            autoComplete="off"
+            placeholder={kind === "budget" ? "e.g. Groceries" : "e.g. Electric"}
+            className={INPUT}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Picker
+            label={kind === "transfer" ? "From" : "Paid from"}
+            noun="account"
+            placeholder="Choose or type an account"
+            options={accountOptions}
+            value={payFrom}
+            onChange={setPayFrom}
+          />
+          {kind === "transfer" && (
+            <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
+          )}
+          {kind === "card_payment" && (
+            <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
+          )}
+          <Picker
+            label="Category (optional)"
+            noun="category"
+            placeholder="Type to search or add new"
+            options={categoryOptions}
+            value={categoryId}
+            onChange={setCategoryId}
+            onCreate={createCategory}
+            clearable
+          />
+        </div>
+
+        <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+        <div>
+          <MoneyField
+            label={amountMode === "annual" ? "Per year" : "Amount each time"}
+            value={amount}
+            onChange={setAmount}
+            hint={amountMode === "annual" ? "Shared out evenly over the schedule below." : undefined}
+            required
+          />
+          <label className="mt-1 flex min-h-11 items-center gap-3">
+            <input
+              type="checkbox"
+              checked={estimate}
+              onChange={(event) => setEstimate(event.target.checked)}
+              className="size-5 accent-(--accent)"
+            />
+            <span>It's an estimate</span>
+          </label>
+        </div>
+
+        <fieldset className="space-y-4 rounded-lg border border-line p-4">
+          <legend className="px-1 font-semibold">Schedule</legend>
+          <div>
+            <label htmlFor={`${id}-frequency`} className={LABEL}>
+              How often
+            </label>
+            <select
+              id={`${id}-frequency`}
+              value={frequency}
+              onChange={(event) => setFrequency(event.target.value as ItemFrequency)}
+              className={INPUT}
+            >
+              {ITEM_FREQUENCIES.map((option) => (
+                <option key={option} value={option}>
+                  {ITEM_FREQUENCY_LABELS[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {everyPaycheck && (
+            <div>
+              <label htmlFor={`${id}-days`} className={LABEL}>
+                Dated
+              </label>
+              <select
+                id={`${id}-days`}
+                value={daysAfterPayday}
+                onChange={(event) => setDaysAfterPayday(Number(event.target.value))}
+                className={INPUT}
+              >
+                {[...new Set([...DAYS_AFTER_PAYDAY, daysAfterPayday])].map((days) => (
+                  <option key={days} value={days}>
+                    {days === 0 ? "On payday" : `${days} ${days === 1 ? "day" : "days"} after payday`}
+                  </option>
+                ))}
+              </select>
+              <p className={HINT}>The day it comes out of the balance in each pay period.</p>
+            </div>
+          )}
+
+          {countsFromADate && (
+            <div>
+              <label htmlFor={`${id}-start`} className={LABEL}>
+                {frequency === "one_time" ? "Date" : "A date it falls on"}
+              </label>
+              <input
+                id={`${id}-start`}
+                type="date"
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+                required
+                className={INPUT}
+              />
+              {frequency !== "one_time" && <p className={HINT}>Any real due date works. It repeats from there.</p>}
+            </div>
+          )}
+
+          {(frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months" || frequency === "yearly") && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {frequency === "yearly" && (
+                <div>
+                  <label htmlFor={`${id}-month`} className={LABEL}>
+                    Month
+                  </label>
+                  <select id={`${id}-month`} value={month} onChange={(event) => setMonth(Number(event.target.value))} className={INPUT}>
+                    {MONTH_NAMES.map((monthName, index) => (
+                      <option key={monthName} value={index + 1}>
+                        {monthName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {frequency === "every_n_months" && (
+                <div>
+                  <label htmlFor={`${id}-interval`} className={LABEL}>
+                    Months apart
+                  </label>
+                  <select
+                    id={`${id}-interval`}
+                    value={monthsApart}
+                    onChange={(event) => setMonthsApart(Number(event.target.value))}
+                    className={INPUT}
+                  >
+                    {[...new Set([...MONTHS_APART, monthsApart])].sort((a, b) => a - b).map((months) => (
+                      <option key={months} value={months}>
+                        Every {months} months
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <DaySelect
+                id={`${id}-day1`}
+                label={frequency === "semi_monthly" ? "First day of the month" : "Day of the month"}
+                value={day1}
+                onChange={setDay1}
+              />
+              {frequency === "semi_monthly" && <DaySelect id={`${id}-day2`} label="Second day of the month" value={day2} onChange={setDay2} />}
+            </div>
+          )}
+
+          {kind !== "budget" && (
+            <label className="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={autopay}
+                onChange={(event) => setAutopay(event.target.checked)}
+                className="size-5 accent-(--accent)"
+              />
+              <span>Autopay</span>
+            </label>
+          )}
+        </fieldset>
+
+        {!everyPaycheck && (
+          <div>
+            <Segmented legend="Which paycheck pays it" options={PLACEMENT_OPTIONS} value={placement} onChange={setPlacement} />
+            <p className={HINT}>
+              Something due on payday that you pay by hand always comes out of the paycheck before, so the money is there in time.
+            </p>
+          </div>
+        )}
+
+        <div>
+          <Picker
+            label="Tags (optional)"
+            noun="tag"
+            placeholder="Type to search or add new"
+            options={tagOptions}
+            value={null}
+            onChange={(tagId) => tagId !== null && setTagIds((ids) => [...ids, Number(tagId)])}
+            onCreate={createTag}
+          />
+          {chosenTags.length > 0 && (
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {chosenTags.map((tag) => (
+                <li
+                  key={tag.id}
+                  className="flex items-center gap-1 rounded-full py-1 pr-1 pl-3 text-sm font-semibold"
+                  style={{ backgroundColor: tag.color, color: readableTextOn(tag.color) }}
+                >
+                  {tag.name}
+                  <button
+                    type="button"
+                    aria-label={`Remove tag ${tag.name}`}
+                    onClick={() => setTagIds((ids) => ids.filter((tagId) => tagId !== tag.id))}
+                    className="flex size-8 items-center justify-center rounded-full"
+                  >
+                    <X aria-hidden className="size-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor={`${id}-note`} className={LABEL}>
+            Note (optional)
+          </label>
+          <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
+        </div>
+
+        {item && (
+          <>
+            <div>
+              <label htmlFor={`${id}-from`} className={LABEL}>
+                Changes apply from
+              </label>
+              <input
+                id={`${id}-from`}
+                type="date"
+                value={effectiveFrom}
+                onChange={(event) => setEffectiveFrom(event.target.value)}
+                required
+                className={INPUT}
+              />
+              <p className={HINT}>This and all future. Anything dated before this keeps what it had.</p>
+            </div>
+
+            <div>
+              <label className="flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={archived}
+                  onChange={(event) => setArchived(event.target.checked)}
+                  className="size-5 accent-(--accent)"
+                />
+                <span className="font-medium">Archived</span>
+              </label>
+              <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
+            </div>
+          </>
+        )}
+
+        {failure && (
+          <p role="alert" className="text-danger">
+            {failure}
+          </p>
+        )}
+
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+            Cancel
+          </button>
+          <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
+            {save.isPending ? "Saving…" : item ? "Save changes" : "Add item"}
+          </button>
+        </div>
+      </form>
+
+      {item && (
+        <>
+          <PriceHistory item={item} />
+          <div className="mt-6 border-t border-line pt-4">
+            <DeleteItem item={item} onDeleted={onClose} />
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/** "Housing › Rent" for a sub-category, so two with the same name can be told apart. */
+function categoryLabel(category: Category, all: readonly Category[]): string {
+  const parent = all.find((other) => other.id === category.parentId);
+  return parent ? `${parent.name} › ${category.name}` : category.name;
+}
+
+/** What the item has cost per year, version by version. */
+function PriceHistory({ item }: { item: Item }) {
+  return (
+    <section aria-label="Price history" className="mt-6 border-t border-line pt-4">
+      <h3 className="font-semibold">Price history</h3>
+      <ul className="mt-2 divide-y divide-line">
+        {item.history.map((point) => (
+          <li key={point.effectiveFrom} className="flex items-center justify-between gap-3 py-2">
+            <span className="text-muted">From {formatDate(point.effectiveFrom)}</span>
+            <span className="tabular-nums">
+              {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function DeleteItem({ item, onDeleted }: { item: Item; onDeleted: () => void }) {
+  const remove = useDeleteItem(item.id);
+  return (
+    <ConfirmDelete
+      action="Delete item…"
+      question={`Delete ${item.name}?`}
+      detail="The item, its price history and everything you marked paid or typed over will be gone for good. To keep the history, archive it instead. This can't be undone."
+      confirmLabel="Yes, delete it"
+      pending={remove.isPending}
+      error={remove.error?.message}
+      onConfirm={() => remove.mutate(undefined, { onSuccess: onDeleted })}
+    />
+  );
+}

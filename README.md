@@ -95,20 +95,32 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | GET | `/api/settings` | all settings with effective values |
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
 | GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel? }` |
-| GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances; change; delete (refused while income uses it) |
+| GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances; change; delete (refused while income, an item or an entry uses it) |
 | POST | `/api/accounts/{id}/balances` | enter a balance `{ date, amountCents, note? }`; the same day again replaces it |
 | DELETE | `/api/accounts/{id}/balances/{entryId}` | remove one entry |
 | GET, POST | `/api/income-sources` | list; add `{ name, depositAccountId, netCents, grossCents?, netIsEstimate?, primary?, schedule, deductions? }` |
 | PUT, DELETE | `/api/income-sources/{id}` | change; delete (the primary one only when it is the last) |
 | PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
 | GET | `/api/paychecks` | paychecks, today to the horizon; optional `from`, `to` |
-| GET | `/api/pay-periods` | pay periods from the primary source; optional `from`, `to` |
+| GET | `/api/pay-periods` | pay periods from the primary source, each with its projected ending balance; optional `from`, `to` |
+| GET | `/api/pay-periods/{start}` | everything in the period that opens on `start`: paychecks, recurring items, one-offs, and each account's starting, in, out, ending and lowest balance |
+| GET, POST | `/api/categories` | list with item counts and yearly totals; add `{ name, color, parentId? }` |
+| PUT, DELETE | `/api/categories/{id}` | change; delete (refused while in use or while it has sub-categories) |
+| GET, POST | `/api/tags` | list; add `{ name, color }` |
+| PUT, DELETE | `/api/tags/{id}` | change; delete (refused while on an item) |
+| GET, POST | `/api/items` | recurring items; add `{ name, kind, amountCents, payFromAccountId, schedule, payToAccountId?, amountMode?, estimate?, categoryId?, autopay?, placement?, daysAfterPayday?, tagIds?, note? }` |
+| GET, PUT, DELETE | `/api/items/{id}` | one item; change from `effectiveFrom` on (default today; earlier dates keep what they had); delete |
+| PUT | `/api/items/{id}/occurrences/{scheduledDate}` | "just this one": any of `{ amountCents, dueDate, periodStart, paid, paidDate, confirmationCode, note, skipped }` |
+| GET, POST | `/api/entries` | one-off money in, money out and transfers; optional `from`, `to`; add `{ kind, date, amountCents, description, accountId, toAccountId?, estimate?, payee?, categoryId?, tagIds?, note? }` |
+| PUT, DELETE | `/api/entries/{id}` | change; delete |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
 
-Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Settings keys: `theme`,
+Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Item kinds are `bill`, `transfer`,
+`budget` and `card_payment`; item schedules are `every_pay_period`, `weekly`, `biweekly`, `semi_monthly`, `monthly`,
+`every_n_months`, `yearly` and `one_time`. A balance you enter stands for the start of that day (see `spec.md` §5.3). Settings keys: `theme`,
 `accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36).
 
 ## CI and dependency checks
