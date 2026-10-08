@@ -96,7 +96,6 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const [tagIds, setTagIds] = useState<number[]>(item?.tagIds ?? []);
   const [note, setNote] = useState(item?.note ?? "");
   const [archived, setArchived] = useState(item?.archived ?? false);
-  const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
   const [bucketId, setBucketId] = useState<string | null>(item?.bucketId != null ? String(item.bucketId) : null);
   const [saveUpBucketId, setSaveUpBucketId] = useState<string | null>(
     item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
@@ -202,7 +201,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
       daysAfterPayday: everyPaycheck ? daysAfterPayday : 0,
       bucketId: moveInto !== undefined ? moveInto.id : chosenTransferBucket !== null ? Number(chosenTransferBucket) : null,
       saveUpBucketId: chosenSaveUpBucket !== null ? Number(chosenSaveUpBucket) : null,
-      ...(item ? { effectiveFrom } : {}),
+      // A change is dated the day it is made; the backend reaches further back only for an earlier start.
+      ...(item ? { effectiveFrom: todayIso() } : {}),
     };
   };
 
@@ -493,24 +493,13 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
 
         {item && (
           <>
+            {/* Not a field: a change is dated the day it is made. When the item begins is its own date, above. */}
             <div>
-              <label htmlFor={`${id}-from`} className={LABEL}>
-                Apply these changes from
-              </label>
-              <input
-                id={`${id}-from`}
-                type="date"
-                value={effectiveFrom}
-                onChange={(event) => setEffectiveFrom(event.target.value)}
-                required
-                className={INPUT}
-              />
+              <p className={LABEL}>Changes apply from</p>
+              <p className="tabular-nums">Today, {formatDate(todayIso())}</p>
               <p className={HINT}>
-                This and all future. Anything dated before this keeps what it had. This date belongs to the change you are making now,
-                so it starts at today every time you open the item; it is not when the item began.
-                {" To change when the item itself begins, use “"}
-                {countsFromADate ? (frequency === "one_time" ? "Date" : "A date it falls on") : "Starts"}
-                {"” above."}
+                This and all future: anything dated before today keeps what it had. An earlier start date is the exception, and reaches
+                back to that date.
               </p>
             </div>
 

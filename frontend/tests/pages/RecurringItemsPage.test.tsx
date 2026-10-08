@@ -534,8 +534,9 @@ describe("recurring items screen", () => {
     expect(amount).toHaveValue("1550.00");
     await userEvent.clear(amount);
     await userEvent.type(amount, "1600");
-    // By default the change starts today; earlier pay periods keep the old rent.
-    expect(within(dialog).getByLabelText("Apply these changes from")).toHaveValue(todayIso());
+    // The change is dated today and that is stated, not asked: earlier pay periods keep the old rent.
+    expect(within(dialog).getByText("Changes apply from")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/apply.* from/i)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

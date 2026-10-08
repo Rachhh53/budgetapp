@@ -265,6 +265,15 @@ public final class Ledger {
     }
 
     /**
+     * What an account has left outside its buckets at the end of {@code day}: the most that can
+     * still be set aside. Empty until a balance has been entered for it, when nothing is known.
+     */
+    public Optional<Long> availableOn(Account account, LocalDate day) {
+        List<AccountPeriod> figures = accountPeriods(workings(List.of(new PayPeriod(day, day, day))), account);
+        return figures.isEmpty() ? Optional.empty() : Optional.of(figures.getFirst().availableCents());
+    }
+
+    /**
      * For each recurring item being saved up for: what the next paycheck sets aside for it.
      * An item is left out once its next bill is fully saved for.
      */

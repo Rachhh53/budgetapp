@@ -19,7 +19,9 @@ export function AppShell() {
       <div className="flex h-dvh">
         <Sidebar />
         {/* pb-14 keeps content clear of the phone tab bar; min-w-0 lets wide content shrink instead of overflowing. */}
-        <main className="min-w-0 flex-1 overflow-y-auto p-4 pb-18 md:p-8 md:pb-8 md:short:p-5">
+        {/* relative: visually hidden text is absolutely positioned, and without this it is placed against
+            the window, which then grows a second scroll bar beside this one. */}
+        <main className="relative min-w-0 flex-1 overflow-y-auto p-4 pb-18 md:p-8 md:pb-8 md:short:p-5">
           <Outlet />
         </main>
         <PhoneNav />

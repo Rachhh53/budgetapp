@@ -207,12 +207,14 @@ public final class ItemsRoutes {
             throw ApiException.badRequest("Please choose the date this change starts from.");
         }
         Item existing = items.find(id).orElseThrow(ApiException::notFound);
-        // Moving the start earlier is a change to the past by its nature: it has to reach back
-        // to the new start, or everything before today would keep the old, later start.
+        // Moving the start is a change to the past by its nature. Earlier: it has to reach back
+        // to the new start, or everything before today would keep the old, later one. Later:
+        // it has to reach back to the old start, or what was scheduled between the two would stay.
         LocalDate start = terms.schedule().startDate();
         LocalDate startWas = existing.versionOn(effectiveFrom).terms().schedule().startDate();
-        if (start.isBefore(startWas) && start.isBefore(effectiveFrom)) {
-            effectiveFrom = start;
+        if (!start.equals(startWas)) {
+            LocalDate earlier = start.isBefore(startWas) ? start : startWas;
+            effectiveFrom = earlier.isBefore(effectiveFrom) ? earlier : effectiveFrom;
         }
         items.update(id, identity, terms, effectiveFrom);
         letItsBucketCountFromItsStart(terms);

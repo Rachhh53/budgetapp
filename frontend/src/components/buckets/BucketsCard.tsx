@@ -53,6 +53,12 @@ export function BucketsCard({ account }: { account: Account }) {
               <Total label="Left available, from the balance you entered" cents={account.latestBalance.amountCents - setAside} strong />
             )}
           </dl>
+          {/* It can still happen after the fact: the balance drops, or a schedule keeps filling a bucket. */}
+          {account.latestBalance && setAside > account.latestBalance.amountCents && (
+            <p role="status" className="mt-2 font-semibold text-danger">
+              These buckets hold more than the account does. Take some out of a bucket, or update the balance if it has gone up.
+            </p>
+          )}
         </>
       )}
       {archived.length > 0 && (

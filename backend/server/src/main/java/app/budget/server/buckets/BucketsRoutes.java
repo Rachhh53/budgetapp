@@ -101,6 +101,7 @@ public final class BucketsRoutes {
         }
         long starting = input.startingCents() == null ? 0 : Inputs.amount(input.startingCents(), "The starting amount");
         requireFreeName(account.id(), fields.name(), null);
+        requireRoomFor(account, starting, LocalDate.now(clock));
         long id = buckets.create(account.id(), fields);
         if (starting > 0) {
             buckets.addChange(id, LocalDate.now(clock), starting, STARTING_NOTE);
@@ -143,9 +144,13 @@ public final class BucketsRoutes {
             throw ApiException.badRequest("Please enter how much to put in or take out.");
         }
         String note = Inputs.optionalText(input.note(), "the note", NOTE_MAX);
-        if (buckets.find(id).isEmpty()) {
-            throw ApiException.notFound();
-        }
+        Bucket bucket = buckets.find(id).orElseThrow(ApiException::notFound);
+        // Checked as things stand now, or on the day itself for a move dated ahead.
+        LocalDate today = LocalDate.now(clock);
+        requireRoomFor(
+                accounts.find(bucket.accountId()).orElseThrow(ApiException::notFound),
+                amount,
+                input.date().isAfter(today) ? input.date() : today);
         buckets.addChange(id, input.date(), amount, note);
         ApiResponse.send(ctx, 201, detail(id));
     }
@@ -170,6 +175,22 @@ public final class BucketsRoutes {
                         bucket.id(), bucket.accountId(), bucket.name(), bucket.color(), bucket.goalCents(), bucket.note(),
                         bucket.archived(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L)))
                 .toList();
+    }
+
+    /**
+     * Buckets set aside money the account holds, so together they cannot hold more than it
+     * does. Only what is put in by hand is refused here; a schedule that would overrun later
+     * shows up as a negative "available" instead, since balances and schedules both change.
+     * An account with no balance entered yet has nothing to check against.
+     */
+    private void requireRoomFor(Account account, long addingCents, LocalDate day) {
+        if (addingCents <= 0) {
+            return;
+        }
+        ledger.availableOn(account, day).filter(available -> addingCents > available).ifPresent(available -> {
+            throw ApiException.conflict(
+                    "That is more than this account has outside its buckets. Please enter a smaller amount, or update the account's balance first.");
+        });
     }
 
     private void requireFreeName(long accountId, String name, Long exceptId) {

@@ -212,6 +212,22 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
+        void aStartMovedLaterTakesBackWhatWasScheduledBeforeIt() throws Exception {
+            long travel = bucket(checking, "Travel", 0);
+            String fund = """
+                    {"name":"Travel fund","kind":"bucket_move","amountCents":2500,"bucketId":%d,
+                     "schedule":{"frequency":"every_pay_period","startDate":"%s"}}""";
+            long item = created("/api/items", fund.formatted(travel, "2026-10-08"));
+
+            Reply reply = server.put("/api/items/" + item, fund.formatted(travel, "2026-11-01"), cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(bucketIn(period("2026-10-01"), travel).get("endingCents").asLong()).isZero();
+            assertThat(bucketIn(period("2026-10-15"), travel).get("endingCents").asLong()).isZero();
+            assertThat(bucketIn(period("2026-11-01"), travel).get("endingCents").asLong()).isEqualTo(2500);
+        }
+
+        @Test
         void aTransferNeverMovesTheDayItsBucketCountsFrom() throws Exception {
             assertThat(server.get("/api/buckets/" + emergency, cookie).data().get("bucket").get("openedOn").asText())
                     .isEqualTo("2026-10-08");
@@ -255,6 +271,48 @@ class BucketsLedgerApiTest extends ApiTestBase {
 
             assertThat(moves(period, "transfer")).containsExactly("2026-10-02 20000");
             assertThat(account(period, savings).get("bucketsCents").asLong()).isEqualTo(20000);
+        }
+    }
+
+    @Nested
+    class BucketsCannotHoldMoreThanTheAccount {
+        private static final String NO_ROOM =
+                "That is more than this account has outside its buckets. Please enter a smaller amount, or update the account's balance first.";
+
+        private Reply add(long accountId, String name, long startingCents) throws Exception {
+            return server.post("/api/buckets",
+                    "{\"accountId\":%d,\"name\":\"%s\",\"color\":\"#b45309\",\"startingCents\":%d}".formatted(accountId, name, startingCents),
+                    cookie);
+        }
+
+        @Test
+        void aNewBucketCannotStartWithMoreThanTheAccountHolds() throws Exception {
+            Reply reply = add(savings, "Emergency fund", 500001);
+
+            assertThat(reply.status()).isEqualTo(409);
+            assertThat(reply.error()).isEqualTo(NO_ROOM);
+            assertThat(server.get("/api/buckets", cookie).data()).isEmpty();
+        }
+
+        @Test
+        void bucketsTogetherCanHoldAllOfItButNoMore() throws Exception {
+            long emergency = bucket(savings, "Emergency fund", 300000);
+            assertThat(add(savings, "House", 200001).status()).isEqualTo(409);
+            assertThat(add(savings, "House", 200000).status()).isEqualTo(201);
+
+            Reply more = server.post("/api/buckets/" + emergency + "/changes", "{\"date\":\"2026-10-01\",\"amountCents\":1}", cookie);
+
+            assertThat(more.status()).isEqualTo(409);
+            assertThat(more.error()).isEqualTo(NO_ROOM);
+        }
+
+        @Test
+        void takingMoneyOutIsAlwaysAllowed() throws Exception {
+            long emergency = bucket(savings, "Emergency fund", 500000);
+
+            Reply reply = server.post("/api/buckets/" + emergency + "/changes", "{\"date\":\"2026-10-01\",\"amountCents\":-10000}", cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
         }
     }
 

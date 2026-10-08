@@ -223,6 +223,17 @@ describe("account detail screen", () => {
       expect(within(buckets).getByText("Old trip · Archived")).toBeInTheDocument();
     });
 
+    it("says so when the buckets hold more than the account does", async () => {
+      fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [{ ...GIFTS, balanceCents: 99999999 }] }),
+      });
+      renderApp("/accounts/1");
+
+      const buckets = await screen.findByRole("region", { name: "Buckets" });
+      expect(await within(buckets).findByRole("status")).toHaveTextContent("These buckets hold more than the account does.");
+    });
+
     it("explains what a bucket is when there are none, and adds one", async () => {
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
