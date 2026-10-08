@@ -40,6 +40,16 @@ npm run typecheck
 The backend reads its settings from environment variables only (see `.env.example`); load `.env`
 into your shell or IDE run configuration.
 
+## Keyboard shortcuts
+
+| Keys | What they do |
+|---|---|
+| Ctrl+N | open the **+ Add item** menu (straight to the form on a screen without the button) |
+| Ctrl+E / Ctrl+I | add money out / money in |
+| Ctrl+Z | undo the last change (left alone while typing in a field) |
+| ← / → | previous / next pay period, on the home screen |
+| Enter / Esc / Tab | while typing over an amount: save / cancel / save and move on |
+
 ## Build the installer
 
 Additionally needs the Rust toolchain and the Visual Studio C++ Build Tools.
