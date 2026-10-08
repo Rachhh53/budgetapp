@@ -1,8 +1,7 @@
 import { type FormEvent, useId, useState } from "react";
 import { ColorPicker } from "../ColorPicker";
-import { ConfirmDelete } from "../ConfirmDelete";
 import { Modal } from "../Modal";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /** What the form hands back: a name, a color and (for a category) the category it sits under. */
 export interface LabelValues {
@@ -111,15 +110,16 @@ export function LabelForm({ noun, initial, usedColors, parents, saving, onSave, 
 
       {deleting && onDelete && (
         <div className="mt-6 border-t border-line pt-4">
-          <ConfirmDelete
-            action={`Delete ${noun}…`}
-            question={`Delete ${initial.name}?`}
-            detail={`Only a ${noun} that nothing uses can be deleted, so no item loses its ${noun}. This can't be undone.`}
-            confirmLabel="Yes, delete it"
-            pending={deleting.isPending}
-            error={deleting.error?.message}
-            onConfirm={onDelete}
-          />
+          {/* No "are you sure?": nothing else is lost with it, and Undo brings it back (spec §6). */}
+          <button type="button" onClick={onDelete} disabled={deleting.isPending} className={BUTTON_DANGER_OUTLINE}>
+            {deleting.isPending ? "Deleting…" : `Delete ${noun}`}
+          </button>
+          <p className={HINT}>Only a {noun} that nothing uses can be deleted, so no item loses its {noun}.</p>
+          {deleting.error && (
+            <p role="alert" className="mt-2 text-danger">
+              {deleting.error.message}
+            </p>
+          )}
         </div>
       )}
     </Modal>

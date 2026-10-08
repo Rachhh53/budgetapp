@@ -77,7 +77,7 @@ export function RecurringItemsPage() {
             <p className="font-medium">Add an account first.</p>
             <p className="mt-1 text-muted">
               Every bill, budget and transfer is paid from an account.{" "}
-              <Link to="/accounts" className="font-semibold text-accent underline">
+              <Link to="/accounts" className="font-semibold text-accent-ink underline">
                 Add the account you pay from
               </Link>
               , then come back here.
@@ -225,7 +225,7 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
         <Amount cents={item.perOccurrenceCents} estimate={item.estimate} />
       </Cell>
       <Cell label="Per year" className="text-sm tabular-nums md:text-right md:text-base">
-        {formatCents(item.perYearCents)}
+        <span data-amount>{formatCents(item.perYearCents)}</span>
       </Cell>
       <Cell label="Paid from" className="text-sm md:truncate md:text-base">
         {paidFrom}

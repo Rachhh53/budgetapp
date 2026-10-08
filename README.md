@@ -40,6 +40,16 @@ npm run typecheck
 The backend reads its settings from environment variables only (see `.env.example`); load `.env`
 into your shell or IDE run configuration.
 
+## Keyboard shortcuts
+
+| Keys | What they do |
+|---|---|
+| Ctrl+N | open the **+ Add item** menu (straight to the form on a screen without the button) |
+| Ctrl+E / Ctrl+I | add money out / money in |
+| Ctrl+Z | undo the last change (left alone while typing in a field) |
+| ← / → | previous / next pay period, on the home screen |
+| Enter / Esc / Tab | while typing over an amount: save / cancel / save and move on |
+
 ## Build the installer
 
 Additionally needs the Rust toolchain and the Visual Studio C++ Build Tools.
@@ -115,8 +125,13 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT, DELETE | `/api/entries/{id}` | change; delete |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
+| GET | `/api/undo` | `{ available }`: whether there is a change to undo |
+| POST | `/api/undo` | undo the most recent change; `{ undone, available }` |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
+
+Every request that changes something is recorded so it can be undone, and its answer carries the header
+`X-Budget-Changed: true` (the UI shows its Undo toast when it sees it). Such requests are handled one at a time.
 
 Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Item kinds are `bill`, `transfer`,
 `budget` and `card_payment`; item schedules are `every_pay_period`, `weekly`, `biweekly`, `semi_monthly`, `monthly`,

@@ -11,6 +11,8 @@ import app.budget.server.auth.SessionStore;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.CategoriesRoutes;
 import app.budget.server.categories.TagsRepository;
+import app.budget.server.changes.ChangeLog;
+import app.budget.server.changes.ChangeRoutes;
 import app.budget.server.data.DataRoutes;
 import app.budget.server.db.Database;
 import app.budget.server.entries.EntriesRepository;
@@ -112,6 +114,8 @@ public final class BudgetServer {
 
             // Registers the session gate first, so it runs ahead of every route added below.
             new SessionRoutes(sessions).register(routes);
+            // Straight after the gate: everything a signed-in request changes from here on can be undone.
+            new ChangeRoutes(new ChangeLog(database.jdbi(), clock)).register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
             new SettingsRoutes(settings).register(routes);
             new AccountsRoutes(accounts, clock).register(routes);

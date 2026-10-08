@@ -160,7 +160,7 @@ function DeleteAccount({ account, onDeleted }: { account: Account; onDeleted: ()
     <ConfirmDelete
       action="Delete account…"
       question={`Delete ${account.name}?`}
-      detail="The account and every balance you entered for it will be gone for good. This can't be undone."
+      detail="The account and every balance you entered for it go with it. You can undo this straight afterwards."
       confirmLabel="Yes, delete it"
       pending={remove.isPending}
       error={remove.error?.message}

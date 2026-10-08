@@ -42,7 +42,7 @@ export function IncomePage() {
             <p className="font-medium">Add an account first.</p>
             <p className="mt-1 text-muted">
               A paycheck needs somewhere to land.{" "}
-              <Link to="/accounts" className="font-semibold text-accent underline">
+              <Link to="/accounts" className="font-semibold text-accent-ink underline">
                 Add the account your pay is deposited to
               </Link>
               , then come back here.

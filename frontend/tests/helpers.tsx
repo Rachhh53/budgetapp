@@ -4,7 +4,8 @@ import { MemoryRouter } from "react-router";
 import { vi } from "vitest";
 import { App } from "../src/App";
 
-type Handler = (body: unknown) => { status: number; data?: unknown; error?: string };
+/** `changed` marks the answer the way the backend marks a change that can be undone. */
+type Handler = (body: unknown) => { status: number; data?: unknown; error?: string; changed?: boolean };
 
 export const DEFAULT_SETTINGS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
 
@@ -28,10 +29,16 @@ const FRESH_INSTALL: Record<string, Handler> = {
 export function fakeBackend(overrides: Record<string, Handler> = {}) {
   const routes = { ...FRESH_INSTALL, ...overrides };
   const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
-    const handler = routes[`${init?.method ?? "GET"} ${path}`];
+    const method = init?.method ?? "GET";
+    // A route can be given with its exact query, or without one to answer whatever is asked.
+    const handler = routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`];
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    const { status, data = null, error = null } = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
-    return new Response(JSON.stringify({ data, error, status }), { status });
+    const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
+    const { status, data = null, error = null } = answer;
+    return new Response(JSON.stringify({ data, error, status }), {
+      status,
+      headers: answer.changed ? { "X-Budget-Changed": "true" } : undefined,
+    });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;

@@ -1,0 +1,687 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import type { Account } from "../../src/api/accounts";
+import type { Category } from "../../src/api/categories";
+import type { Entry } from "../../src/api/entries";
+import type { PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
+import type { Item } from "../../src/api/items";
+import type { Occurrence, PeriodDetail } from "../../src/api/periods";
+import { todayIso } from "../../src/lib/dates";
+import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
+
+const CHECKING: Account = {
+  id: 1,
+  name: "Everyday Checking",
+  institution: null,
+  type: "checking",
+  subtypeLabel: null,
+  color: "#0f766e",
+  archived: false,
+  latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null },
+};
+const SAVINGS: Account = { ...CHECKING, id: 2, name: "Rainy Day Savings", type: "savings" };
+const VISA: Account = { ...CHECKING, id: 3, name: "Visa", type: "credit_card" };
+
+const PETS: Category = { id: 1, name: "Pets", color: "#a16207", parentId: null, itemCount: 0, perYearCents: 0 };
+
+const PAYCHECK: Paycheck = {
+  incomeSourceId: 1,
+  sourceName: "Northwind Health",
+  depositAccountId: 1,
+  scheduledDate: "2026-10-01",
+  payDate: "2026-10-01",
+  netCents: 248620,
+  estimate: false,
+  projectedCents: null,
+};
+
+const ELECTRIC: Occurrence = {
+  itemId: 2,
+  name: "Electric",
+  kind: "bill",
+  scheduledDate: "2026-10-16",
+  dueDate: "2026-10-16",
+  periodStart: "2026-10-01",
+  early: true,
+  payBy: "2026-10-14",
+  amountCents: 14000,
+  estimate: true,
+  projectedCents: null,
+  autopay: false,
+  placement: "one_early",
+  categoryId: null,
+  payFromAccountId: 1,
+  payToAccountId: null,
+  paid: false,
+  paidDate: null,
+  confirmationCode: null,
+  note: null,
+  skipped: false,
+};
+const VISA_PAYMENT: Occurrence = {
+  ...ELECTRIC,
+  itemId: 5,
+  name: "Visa payment",
+  kind: "card_payment",
+  scheduledDate: "2026-10-13",
+  dueDate: "2026-10-13",
+  early: false,
+  payBy: "2026-10-13",
+  amountCents: 61248,
+  estimate: false,
+  placement: "due_period",
+  payToAccountId: 3,
+  paid: true,
+  paidDate: "2026-10-07",
+  confirmationCode: "VX93-2210",
+};
+const CAR_LOAN: Occurrence = {
+  ...ELECTRIC,
+  itemId: 6,
+  name: "Car loan",
+  scheduledDate: "2026-10-05",
+  dueDate: "2026-10-05",
+  early: false,
+  payBy: "2026-10-05",
+  amountCents: 41200,
+  estimate: false,
+  autopay: true,
+  placement: "due_period",
+};
+const GROCERIES: Occurrence = {
+  ...ELECTRIC,
+  itemId: 3,
+  name: "Groceries",
+  kind: "budget",
+  scheduledDate: "2026-10-01",
+  dueDate: "2026-10-01",
+  early: false,
+  payBy: "2026-10-01",
+  amountCents: 30000,
+  estimate: false,
+  placement: "due_period",
+};
+
+const VET: Entry = {
+  id: 9,
+  kind: "money_out",
+  date: "2026-10-03",
+  amountCents: 64000,
+  estimate: false,
+  description: "Vet emergency",
+  payee: "Maple Street Vets",
+  categoryId: 1,
+  accountId: 1,
+  toAccountId: null,
+  note: null,
+  tagIds: [],
+};
+const BONUS: Entry = { ...VET, id: 10, kind: "money_in", date: "2026-10-09", amountCents: 150000, estimate: true, description: "Q3 bonus", payee: null, categoryId: null };
+
+const ELECTRIC_ITEM: Item = {
+  id: 2,
+  name: "Electric",
+  kind: "bill",
+  note: null,
+  archived: false,
+  tagIds: [],
+  amountCents: 14000,
+  amountMode: "per_occurrence",
+  estimate: true,
+  categoryId: null,
+  payFromAccountId: 1,
+  payToAccountId: null,
+  autopay: false,
+  placement: "one_early",
+  schedule: { frequency: "monthly", interval: null, day1: 16, day2: null, month: null, startDate: "2026-01-01", endDate: null, weekendRule: "none" },
+  daysAfterPayday: 0,
+  perOccurrenceCents: 14000,
+  perYearCents: 168000,
+  next: { scheduledDate: "2026-10-16", dueDate: "2026-10-16", periodStart: "2026-10-01", early: true },
+  history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000 }],
+};
+
+const OCTOBER: PeriodDetail = {
+  start: "2026-10-01",
+  end: "2026-10-14",
+  scheduledPayday: "2026-10-01",
+  current: true,
+  primaryAccountId: 1,
+  paychecks: [PAYCHECK],
+  occurrences: [ELECTRIC, VISA_PAYMENT, CAR_LOAN, GROCERIES],
+  carriedOver: [],
+  entries: [VET, BONUS],
+  accounts: [
+    { accountId: 1, startingCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08" },
+    { accountId: 3, startingCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13" },
+  ],
+};
+
+function summary(start: string, end: string, endingCents: number | null, current = false): PayPeriod {
+  return { start, end, scheduledPayday: start, current, incomeCents: 248620, paychecks: [], projectedEndingCents: endingCents, lowestCents: endingCents };
+}
+
+const PERIODS: PayPeriods = {
+  primarySourceId: 1,
+  primaryAccountId: 1,
+  periods: [
+    summary("2026-09-15", "2026-09-30", null),
+    summary("2026-10-01", "2026-10-14", 309610, true),
+    summary("2026-10-15", "2026-10-31", 412500),
+  ],
+};
+
+const NOVEMBER_START: PeriodDetail = { ...OCTOBER, start: "2026-10-15", end: "2026-10-31", current: false, occurrences: [], entries: [], paychecks: [] };
+
+function withPeriod(detail: PeriodDetail = OCTOBER, overrides: Parameters<typeof fakeBackend>[0] = {}) {
+  return fakeBackend({
+    "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, VISA] }),
+    "GET /api/categories": () => ({ status: 200, data: [PETS] }),
+    "GET /api/items": () => ({ status: 200, data: [ELECTRIC_ITEM] }),
+    "GET /api/pay-periods": () => ({ status: 200, data: PERIODS }),
+    "GET /api/pay-periods/2026-10-01": () => ({ status: 200, data: detail }),
+    "GET /api/pay-periods/2026-10-15": () => ({ status: 200, data: NOVEMBER_START }),
+    ...overrides,
+  });
+}
+
+/** The titled panel of the screen, once the period has loaded. */
+async function panel(name: string): Promise<HTMLElement> {
+  return screen.findByRole("region", { name });
+}
+
+describe("pay period screen", () => {
+  it("points to Income when there is no paycheck to build periods from", async () => {
+    fakeBackend();
+    renderApp();
+
+    expect(await screen.findByText("No pay periods yet.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add your income" })).toHaveAttribute("href", "/income");
+  });
+
+  it("explains an income source whose paydays have not started", async () => {
+    fakeBackend({ "GET /api/pay-periods": () => ({ status: 200, data: { primarySourceId: 1, primaryAccountId: 1, periods: [] } }) });
+    renderApp();
+
+    expect(await screen.findByText("Your pay periods haven't started yet.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Check your pay schedule" })).toHaveAttribute("href", "/income");
+  });
+
+  it("shows the backend's message when the period cannot be loaded", async () => {
+    withPeriod(OCTOBER, {
+      "GET /api/pay-periods/2026-10-01": () => ({ status: 500, error: "Something went wrong on our side. Your data is safe — please try again." }),
+    });
+    renderApp();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your data is safe");
+  });
+
+  it("opens on the current period with its five figures", async () => {
+    withPeriod();
+    renderApp();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" })).toBeInTheDocument();
+    expect(screen.getByText("Current")).toBeInTheDocument();
+    const figures = screen.getByText("Projected ending").closest("dl")!;
+    expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("$1,214.38");
+    expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("Everyday Checking · Oct 1 · set by you");
+    expect(within(figures).getByText("Coming in").closest("div")).toHaveTextContent("+$3,986.20");
+    expect(within(figures).getByText("Going out").closest("div")).toHaveTextContent("−$2,104.48");
+    expect(within(figures).getByText("Projected ending").closest("div")).toHaveTextContent("$3,096.10");
+    expect(within(figures).getByText("Projected ending").closest("div")).toHaveTextContent("1,214.38 + 3,986.20 − 2,104.48");
+    expect(within(figures).getByText("Lowest point").closest("div")).toHaveTextContent("$313.90");
+  });
+
+  it("sorts what is in the period into its panels", async () => {
+    withPeriod();
+    renderApp();
+
+    const income = await panel("Income");
+    expect(within(income).getByText("Northwind Health paycheck")).toBeInTheDocument();
+    expect(within(income).getByRole("button", { name: "Edit Q3 bonus" })).toBeInTheDocument();
+
+    const auto = await panel("Auto-pay & transfers");
+    expect(within(auto).getByText("Car loan")).toBeInTheDocument();
+    expect(within(auto).getByText("AUTO")).toBeInTheDocument();
+
+    const budgets = await panel("Spending budgets");
+    expect(within(budgets).getByText("Groceries")).toBeInTheDocument();
+    expect(within(budgets).getByText("Total").closest("p")).toHaveTextContent("$300.00");
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(within(manual).getByText("1 of 2 paid")).toBeInTheDocument();
+    expect(within(manual).getByText("Due Oct 16 · pay by Oct 14 · Everyday Checking")).toBeInTheDocument();
+    expect(within(manual).getByText("One-off · Oct 3 · Everyday Checking · Pets")).toBeInTheDocument();
+    // Paid is said in words and the code is plain text with a pencil to change it.
+    expect(within(manual).getByText("✓ Paid Oct 7")).toBeInTheDocument();
+    expect(within(manual).getByText("VX93-2210")).toBeInTheDocument();
+    expect(within(manual).getByRole("button", { name: "Edit confirmation code for Visa payment" })).toBeInTheDocument();
+  });
+
+  it("says what to do when the paycheck's account has no balance yet", async () => {
+    withPeriod({ ...OCTOBER, accounts: [] });
+    renderApp();
+
+    expect(await screen.findByText("No balance to start from yet.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "account's page" })).toHaveAttribute("href", "/accounts/1");
+    expect(within(await panel("Accounts")).getByRole("link", { name: "Accounts" })).toHaveAttribute("href", "/accounts");
+  });
+
+  it("names an unpaid bill carried over from an earlier period", async () => {
+    const rent: Occurrence = { ...ELECTRIC, itemId: 7, name: "Rent", scheduledDate: "2026-10-01", dueDate: "2026-10-01", periodStart: "2026-09-15", payBy: "2026-09-30", estimate: false };
+    withPeriod({ ...OCTOBER, carriedOver: [rent] });
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(within(manual).getByText("Still unpaid from an earlier period")).toBeInTheDocument();
+    expect(within(manual).getByText("1 of 3 paid")).toBeInTheDocument();
+  });
+
+  it("moves to the next period from the arrows, the strip and the arrow keys", async () => {
+    withPeriod();
+    renderApp();
+
+    const strip = await screen.findByRole("navigation", { name: "Ending balance by period" });
+    expect(within(strip).getByRole("link", { name: /^Oct 1\s*\$/ })).toHaveAttribute("aria-current", "page");
+    expect(within(strip).getByRole("link", { name: /Oct 15/ })).toHaveTextContent("$4,125.00");
+    expect(screen.getByRole("link", { name: "Previous pay period, Sep 15 to Sep 30" })).toHaveAttribute("href", "/periods/2026-09-15");
+
+    await userEvent.click(screen.getByRole("link", { name: "Next pay period, Oct 15 to Oct 31" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Oct 15 – Oct 31, 2026" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" })).toBeInTheDocument();
+  });
+
+  it("shows each account with a balance on its own tab, in a card's own words", async () => {
+    withPeriod();
+    renderApp();
+
+    const accounts = await panel("Accounts");
+    expect(within(accounts).getByRole("tab", { name: "Everyday Checking" })).toHaveAttribute("aria-selected", "true");
+    expect(within(accounts).getByText("Ending balance").closest("div")).toHaveTextContent("$3,096.10");
+    // Savings has no balance entered, so it has no tab.
+    expect(within(accounts).queryByRole("tab", { name: "Rainy Day Savings" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
+
+    expect(within(accounts).getByText("Owed at period end").closest("div")).toHaveTextContent("$0.00");
+    expect(within(accounts).getByText("Paid off").closest("div")).toHaveTextContent("−$612.48");
+  });
+
+  it("marks a bill paid with today's date, and unticks it again", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, paid: true }, changed: true }),
+      "PUT /api/items/5/occurrences/2026-10-13": () => ({ status: 200, data: { ...VISA_PAYMENT, paid: false }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Electric paid" }));
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([{ paid: true, paidDate: todayIso() }]),
+    );
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Visa payment paid" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/5/occurrences/2026-10-13")).toEqual([{ paid: false }]));
+  });
+
+  it("adds a confirmation code where the bill stands", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: ELECTRIC, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add confirmation code for Electric" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Confirmation code for Electric" }), "EL-4471{Enter}");
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([{ confirmationCode: "EL-4471" }]),
+    );
+  });
+
+  it("types over one amount for just this one by default", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: ELECTRIC, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Electric: $140.00, estimate. Edit amount" }));
+    const field = screen.getByRole("textbox", { name: "Electric amount" });
+    expect(field).toHaveValue("140.00");
+    expect(screen.getByRole("radio", { name: "Just this one" })).toBeChecked();
+    await userEvent.clear(field);
+    await userEvent.type(field, "152.30{Enter}");
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([{ amountCents: 15230 }]));
+    expect(calls(fetchMock)).not.toContain("PUT /api/items/2");
+  });
+
+  it("changes this and all future occurrences when asked to", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2": () => ({ status: 200, data: ELECTRIC_ITEM, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Electric: $140.00, estimate. Edit amount" }));
+    const field = screen.getByRole("textbox", { name: "Electric amount" });
+    await userEvent.clear(field);
+    await userEvent.type(field, "155");
+    await userEvent.click(screen.getByRole("radio", { name: "This and all future" }));
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")[0]).toMatchObject({
+      name: "Electric",
+      amountCents: 15500,
+      estimate: false,
+      effectiveFrom: "2026-10-16",
+    });
+    expect(calls(fetchMock)).not.toContain("PUT /api/items/2/occurrences/2026-10-16");
+  });
+
+  it("leaves the amount alone on Escape, and asks again kindly for something that is not an amount", async () => {
+    const fetchMock = withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Car loan: $412.00. Edit amount" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "Car loan amount" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Car loan amount" }), "lots{Enter}");
+    expect(screen.getByRole("alert")).toHaveTextContent("Please enter an amount like 1,250.00.");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("textbox", { name: "Car loan amount" })).not.toBeInTheDocument();
+    // The keyboard keeps its place: focus is back on the amount.
+    expect(screen.getByRole("button", { name: "Car loan: $412.00. Edit amount" })).toHaveFocus();
+    expect(calls(fetchMock).filter((call) => call.startsWith("PUT"))).toEqual([]);
+  });
+
+  it("says what was projected before an amount was typed over", async () => {
+    withPeriod({ ...OCTOBER, occurrences: [{ ...ELECTRIC, amountCents: 15230, estimate: false, projectedCents: 14000 }] });
+    renderApp();
+
+    expect(await screen.findByRole("button", { name: "Electric: $152.30, projected $140.00. Edit amount" })).toBeInTheDocument();
+    expect(screen.getByText("Projected $140.00")).toBeInTheDocument();
+  });
+
+  it("types over a one-off, which stops it being an estimate, and a paycheck", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/entries/10": () => ({ status: 200, data: BONUS, changed: true }),
+      "PUT /api/income-sources/1/paychecks/2026-10-01": () => ({ status: 200, data: { done: true }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Q3 bonus: $1,500.00, estimate. Edit amount" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "Q3 bonus amount" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Q3 bonus amount" }), "1,620.50{Enter}");
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/10")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/10")[0]).toMatchObject({ kind: "money_in", amountCents: 162050, estimate: false, description: "Q3 bonus" });
+    // A one-off happens once, so there is no "all future" to ask about.
+    expect(screen.queryByRole("radio", { name: "This and all future" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Northwind Health paycheck: $2,486.20. Edit amount" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "Northwind Health paycheck amount" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Northwind Health paycheck amount" }), "2500{Enter}");
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1/paychecks/2026-10-01")).toEqual([{ netCents: 250000 }]),
+    );
+  });
+
+  it("opens a recurring item from its name for a this-and-all-future change", async () => {
+    withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+
+    expect(screen.getByRole("dialog", { name: "Edit Electric" })).toBeInTheDocument();
+  });
+
+  it("blurs every amount while Hide amounts is on", async () => {
+    withPeriod();
+    renderApp();
+
+    const toggle = await screen.findByRole("button", { name: "Hide amounts" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement).toHaveAttribute("data-hide-amounts");
+
+    await userEvent.click(toggle);
+    expect(document.documentElement).not.toHaveAttribute("data-hide-amounts");
+  });
+});
+
+describe("+ Add item", () => {
+  it("offers the four kinds from its menu, with the keyboard", async () => {
+    withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+
+    const menu = screen.getByRole("menu", { name: "Add item" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Money out"),
+      expect.stringContaining("Money in"),
+      expect.stringContaining("Transfer"),
+      expect.stringContaining("Recurring item"),
+      expect.stringContaining("Upload a pay stub or receipt…"),
+    ]);
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add item" })).toHaveFocus();
+  });
+
+  it("adds money out to the period on screen and previews the new ending", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "POST /api/entries": () => ({ status: 201, data: { ...VET, id: 11 }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Money out/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
+    expect(within(dialog).getByRole("radio", { name: "Money out" })).toBeChecked();
+    // The account the paycheck lands in is offered first.
+    expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Birthday gift for Mom");
+    const date = within(dialog).getByLabelText("Date");
+    await userEvent.clear(date);
+    await userEvent.type(date, "2026-10-09");
+
+    expect(within(dialog).getByText(/Projected ending for Everyday Checking this period becomes/)).toHaveTextContent("$3,011.10");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")).toEqual([
+      {
+        kind: "money_out",
+        date: "2026-10-09",
+        amountCents: 8500,
+        estimate: false,
+        description: "Birthday gift for Mom",
+        payee: null,
+        categoryId: null,
+        accountId: 1,
+        toAccountId: null,
+        note: null,
+        tagIds: [],
+      },
+    ]);
+  });
+
+  it("switches kind inside the one form: money in is an estimate, a transfer needs two accounts", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "POST /api/entries": () => ({ status: 201, data: BONUS, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.keyboard("{Control>}i{/Control}");
+    const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
+    expect(within(dialog).getByRole("radio", { name: "Money in" })).toBeChecked();
+    expect(within(dialog).getByRole("combobox", { name: "Into" })).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Transfer" }));
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "200");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Top up savings");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the account this money goes to.");
+
+    await userEvent.type(within(dialog).getByRole("combobox", { name: "To" }), "Rainy{Enter}");
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Estimate, not final yet" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({
+      kind: "transfer",
+      amountCents: 20000,
+      estimate: true,
+      accountId: 1,
+      toAccountId: 2,
+    });
+  });
+
+  it("shows the recurring item form under Recurring", async () => {
+    withPeriod();
+    renderApp();
+
+    await screen.findByRole("button", { name: "Add item" });
+    await userEvent.keyboard("{Control>}n{/Control}");
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Recurring item/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
+    expect(within(dialog).getByRole("radio", { name: "Recurring" })).toBeChecked();
+    expect(within(dialog).getByRole("group", { name: "Schedule" })).toBeInTheDocument();
+  });
+
+  it("opens Ctrl+N straight on the form on a screen without the button", async () => {
+    withPeriod();
+    renderApp("/categories");
+
+    await screen.findByRole("heading", { level: 1, name: "Categories & tags" });
+    await userEvent.keyboard("{Control>}n{/Control}");
+
+    expect(await screen.findByRole("dialog", { name: "Add an item" })).toBeInTheDocument();
+  });
+
+  it("changes and deletes a one-off from its name, without asking twice", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/entries/9": () => ({ status: 200, data: VET, changed: true }),
+      "DELETE /api/entries/9": () => ({ status: 200, data: { deleted: true }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Vet emergency" }));
+    let dialog = screen.getByRole("dialog", { name: "Edit Vet emergency" });
+    // A one-off stays a one-off.
+    expect(within(dialog).queryByRole("radio", { name: "Recurring" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("textbox", { name: "Paid to (optional)" })).toHaveValue("Maple Street Vets");
+    const amount = within(dialog).getByRole("textbox", { name: "Amount" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "655.25");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9")[0]).toMatchObject({ amountCents: 65525, payee: "Maple Street Vets", categoryId: 1 });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Vet emergency" }));
+    dialog = screen.getByRole("dialog", { name: "Edit Vet emergency" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete this one-off" }));
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/entries/9"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+describe("undo", () => {
+  it("offers Undo after a change and takes it back", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, paid: true }, changed: true }),
+      "POST /api/undo": () => ({ status: 200, data: { undone: true, available: false } }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Electric paid" }));
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    const before = calls(fetchMock).filter((call) => call === "GET /api/pay-periods/2026-10-01").length;
+
+    await userEvent.click(screen.getByRole("button", { name: /Undo/ }));
+
+    expect(await screen.findByText("Undone.")).toBeInTheDocument();
+    expect(calls(fetchMock)).toContain("POST /api/undo");
+    // Everything on screen is fetched again, since an undo can touch anything.
+    await waitFor(() =>
+      expect(calls(fetchMock).filter((call) => call === "GET /api/pay-periods/2026-10-01").length).toBeGreaterThan(before),
+    );
+  });
+
+  it("does not offer Undo for a request that changed nothing", async () => {
+    withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: ELECTRIC }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Electric paid" }));
+
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Electric paid" })).toBeEnabled());
+    expect(screen.queryByText("Saved.")).not.toBeInTheDocument();
+  });
+
+  it("undoes with Ctrl+Z, and says so when there is nothing left", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "POST /api/undo": () => ({ status: 200, data: { undone: false, available: false } }),
+    });
+    renderApp();
+
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    expect(await screen.findByText("There's nothing left to undo.")).toBeInTheDocument();
+    expect(calls(fetchMock)).toContain("POST /api/undo");
+  });
+
+  it("undoes with Ctrl+Z straight after ticking a bill, while the tick box still has the focus", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, paid: true }, changed: true }),
+      "POST /api/undo": () => ({ status: 200, data: { undone: true, available: false } }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Electric paid" }));
+    await screen.findByText("Saved.");
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    expect(await screen.findByText("Undone.")).toBeInTheDocument();
+    expect(calls(fetchMock)).toContain("POST /api/undo");
+  });
+
+  it("leaves Ctrl+Z alone while typing in a field", async () => {
+    const fetchMock = withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Car loan: $412.00. Edit amount" }));
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    expect(calls(fetchMock)).not.toContain("POST /api/undo");
+  });
+
+  it("shows the backend's message when an undo fails", async () => {
+    withPeriod(OCTOBER, {
+      "POST /api/undo": () => ({ status: 500, error: "Something went wrong on our side. Your data is safe — please try again." }),
+    });
+    renderApp();
+
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    expect(await screen.findByText(/Your data is safe/)).toBeInTheDocument();
+  });
+});

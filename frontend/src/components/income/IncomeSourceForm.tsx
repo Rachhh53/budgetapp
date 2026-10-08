@@ -397,7 +397,7 @@ function DeleteSource({ source, onDeleted }: { source: IncomeSource; onDeleted: 
     <ConfirmDelete
       action="Delete income source…"
       question={`Delete ${source.name}?`}
-      detail="Its schedule, deductions and any paycheck amounts you typed in will be gone for good. This can't be undone."
+      detail="Its schedule, deductions and any paycheck amounts you typed in go with it. You can undo this straight afterwards."
       confirmLabel="Yes, delete it"
       pending={remove.isPending}
       error={remove.error?.message}

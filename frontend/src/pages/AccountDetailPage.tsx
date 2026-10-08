@@ -36,7 +36,7 @@ export function AccountDetailPage() {
           <p role="alert" className="font-medium">
             {detail.error.message}
           </p>
-          <Link to="/accounts" className="mt-2 inline-block font-semibold text-accent underline">
+          <Link to="/accounts" className="mt-2 inline-block font-semibold text-accent-ink underline">
             Back to all accounts
           </Link>
         </Card>
@@ -52,7 +52,7 @@ export function AccountDetailPage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/accounts" className="text-accent underline">
+            <Link to="/accounts" className="text-accent-ink underline">
               Accounts
             </Link>{" "}
             / {TYPE_LABELS[account.type]}
@@ -81,7 +81,7 @@ export function AccountDetailPage() {
           <p className="text-muted">Balance</p>
           {latest ? (
             <>
-              <p className="text-3xl font-bold tabular-nums">{formatCents(latest.amountCents)}</p>
+              <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(latest.amountCents)}</p>
               <p className="text-muted">entered by you {formatDate(latest.date)}</p>
             </>
           ) : (
@@ -137,7 +137,7 @@ function BalanceList({ accountId, balances }: { accountId: number; balances: Bal
                 <Amount cents={entry.amountCents} className="font-semibold" />
               </span>
               <span className="text-muted md:sr-only">Change since the entry before</span>
-              <span className="pr-2 text-right tabular-nums">
+              <span data-amount className="pr-2 text-right tabular-nums">
                 {change === null ? "—" : `${change > 0 ? "+" : ""}${formatCents(change)}`}
               </span>
               <span className="col-span-2 min-w-0 text-muted md:col-span-1">{entry.note}</span>

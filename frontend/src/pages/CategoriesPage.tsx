@@ -184,7 +184,7 @@ function Row({
     >
       <span className="flex min-w-0 basis-full items-center gap-3 sm:flex-1 sm:basis-0">{children}</span>
       <span className="shrink-0 text-sm text-muted">{countLabel(itemCount)}</span>
-      <span className="ml-auto shrink-0 text-right font-semibold tabular-nums sm:ml-0 sm:w-28">
+      <span data-amount className="ml-auto shrink-0 text-right font-semibold tabular-nums sm:ml-0 sm:w-28">
         {formatCents(perYearCents)}
         <span className="text-xs font-normal text-muted sm:block"> a year</span>
       </span>

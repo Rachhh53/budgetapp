@@ -1,5 +1,6 @@
 package app.budget.server.db;
 
+import app.budget.server.changes.ChangeLog;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -73,7 +74,10 @@ public final class Database {
             backupBeforeMigration(dataSource, dataDir.resolve(BACKUP_DIR), clock);
         }
         flyway.migrate();
-        return new Database(dataDir, dataSource, flyway);
+        Database database = new Database(dataDir, dataSource, flyway);
+        // After every migration, so Undo covers the tables and columns as they are now.
+        ChangeLog.installTracking(database.jdbi);
+        return database;
     }
 
     public Jdbi jdbi() {
@@ -101,6 +105,7 @@ public final class Database {
             throw new UncheckedIOException("Could not erase the database", e);
         }
         flyway.migrate();
+        ChangeLog.installTracking(jdbi);
         for (String folder : DATA_FOLDERS) {
             deleteFolder(dataDir.resolve(folder));
         }

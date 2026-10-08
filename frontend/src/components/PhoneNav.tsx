@@ -38,7 +38,7 @@ export function PhoneNav() {
                   to={path}
                   className={({ isActive }) =>
                     `flex min-h-11 items-center gap-3 rounded-lg px-3 text-base ${
-                      isActive ? "bg-bg font-semibold text-accent" : "text-ink"
+                      isActive ? "bg-bg font-semibold text-accent-ink" : "text-ink"
                     }`
                   }
                 >
@@ -62,7 +62,7 @@ export function PhoneNav() {
             to={path}
             end={path === "/"}
             className={({ isActive }) =>
-              `${TAB} ${isActive && !moreOpen ? "font-semibold text-accent" : "text-muted"}`
+              `${TAB} ${isActive && !moreOpen ? "font-semibold text-accent-ink" : "text-muted"}`
             }
           >
             <Icon aria-hidden className="size-5" />
@@ -74,7 +74,7 @@ export function PhoneNav() {
           aria-expanded={moreOpen}
           aria-controls="more-screens"
           onClick={() => setMoreOpen((open) => !open)}
-          className={`${TAB} ${moreOpen || onMoreScreen ? "font-semibold text-accent" : "text-muted"}`}
+          className={`${TAB} ${moreOpen || onMoreScreen ? "font-semibold text-accent-ink" : "text-muted"}`}
         >
           {moreOpen ? <X aria-hidden className="size-5" /> : <Ellipsis aria-hidden className="size-5" />}
           {moreOpen ? "Close" : "More"}

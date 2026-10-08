@@ -33,3 +33,38 @@ export function contrastRatio(a: string, b: string): number {
 export function readableTextOn(background: string): string {
   return contrastRatio(background, LIGHT_TEXT) >= contrastRatio(background, DARK_TEXT) ? LIGHT_TEXT : DARK_TEXT;
 }
+
+/** The contrast WCAG AA asks of ordinary text. */
+const AA_TEXT = 4.5;
+const MIX_STEPS = 20;
+
+function mix(from: string, to: string, share: number): string {
+  const channel = (offset: number): string => {
+    const a = parseInt(from.slice(offset, offset + 2), 16);
+    const b = parseInt(to.slice(offset, offset + 2), 16);
+    return Math.round(a + (b - a) * share).toString(16).padStart(2, "0");
+  };
+  return `#${channel(1)}${channel(3)}${channel(5)}`;
+}
+
+/**
+ * The accent color as it can be used for text (links, small actions) on `backgrounds`.
+ * The accent itself is returned when it already reads well; otherwise it is moved toward
+ * white or black, just far enough to reach 4.5:1 on every one of them. The accent as a
+ * fill (buttons, the Current badge) is never altered — only text drawn in it.
+ */
+export function accentForText(accent: string, backgrounds: readonly string[]): string {
+  const reads = (color: string) => backgrounds.every((background) => contrastRatio(color, background) >= AA_TEXT);
+  if (backgrounds.length === 0 || reads(accent)) {
+    return accent;
+  }
+  // Toward whichever of white and black stands out more from the backgrounds.
+  const toward = readableTextOn(backgrounds[0]!);
+  for (let step = 1; step <= MIX_STEPS; step++) {
+    const candidate = mix(accent, toward, step / MIX_STEPS);
+    if (reads(candidate)) {
+      return candidate;
+    }
+  }
+  return toward;
+}
