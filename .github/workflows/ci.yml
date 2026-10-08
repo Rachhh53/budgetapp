@@ -125,6 +125,31 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # A fresh runner would compile the Tauri command-line tool from source every time (about a
+      # third of this job). Two things are kept between runs, and neither can hide a failure:
+      # the tool itself, which is one fixed version, and Cargo's package downloads, which
+      # Cargo.lock checksums. desktop/src-tauri/target is deliberately NOT cached, so the app
+      # that ships is always compiled from clean.
+      - name: Read the Tauri CLI version from the build script
+        id: tauri
+        shell: pwsh
+        run: |
+          $line = Select-String -Path build-installer.ps1 -Pattern "^\`$TauriCli\s*=\s*'([^']+)'"
+          if (-not $line) { throw 'Could not find $TauriCli in build-installer.ps1.' }
+          "version=$($line.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+      # No restore-keys on either cache: a new version or a changed Cargo.lock starts from nothing.
+      - name: Cache the Tauri CLI
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-${{ runner.os }}-${{ steps.tauri.outputs.version }}
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ steps.tauri.outputs.version }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
       # The Rust toolchain and the Visual Studio C++ Build Tools are already on the runner.
       - name: Build the installer
         shell: pwsh

@@ -121,7 +121,9 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to a branch:
   14 days old. Both also run weekly.
 - On `main` only the **installer** is built (kept as a workflow artifact for 30 days). The checks above
   are not repeated there, since the branch already passed them; `build-installer.ps1` runs the
-  tests itself before packaging, so the merged code is still tested once.
+  tests itself before packaging, so the merged code is still tested once. To save time, the Tauri
+  command-line tool and Cargo's package downloads are kept between runs; the app's own compiled
+  output is not, so what ships is always compiled from clean.
 
 To run the dependency age check yourself (it needs the network; the app itself never does):
 
