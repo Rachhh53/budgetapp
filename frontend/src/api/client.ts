@@ -25,6 +25,23 @@ const UNREACHABLE = new ApiError(0, "We couldn't reach Budget on your PC. Please
 const UNEXPECTED = "Something went wrong on our side. Your data is safe — please try again.";
 const SESSION_PATH = "/api/session";
 
+/** The backend sets this on the answer to any request that changed something (and can be undone). */
+const CHANGED_HEADER = "X-Budget-Changed";
+
+const changeListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` after every request that changed data, whichever screen made it. This is
+ * how the Undo toast appears after every change without each form having to ask for it.
+ * Returns the function that stops listening.
+ */
+export function onDataChanged(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   let response: Response;
   try {
@@ -46,6 +63,9 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
   }
   if (!response.ok || envelope.data === null) {
     throw new ApiError(response.status, envelope.error ?? UNEXPECTED);
+  }
+  if (response.headers.get(CHANGED_HEADER) !== null) {
+    changeListeners.forEach((listener) => listener());
   }
   return envelope.data;
 }

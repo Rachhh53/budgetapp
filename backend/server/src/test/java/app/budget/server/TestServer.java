@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
@@ -54,7 +55,12 @@ public final class TestServer implements AutoCloseable {
     }
 
     /** One HTTP exchange, with the JSON envelope already parsed. */
-    public record Reply(int status, JsonNode body, Optional<String> setCookie) {
+    public record Reply(int status, JsonNode body, Optional<String> setCookie, HttpHeaders headers) {
+        /** True when the server recorded a change that can be undone. */
+        public boolean changed() {
+            return headers.firstValue("X-Budget-Changed").isPresent();
+        }
+
         public JsonNode data() {
             return body.get("data");
         }
@@ -109,7 +115,8 @@ public final class TestServer implements AutoCloseable {
         return new Reply(
                 response.statusCode(),
                 JSON.readTree(response.body()),
-                response.headers().firstValue("Set-Cookie"));
+                response.headers().firstValue("Set-Cookie"),
+                response.headers());
     }
 
     public Reply get(String path, String cookie) throws IOException, InterruptedException {

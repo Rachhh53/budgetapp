@@ -75,10 +75,22 @@
   --radius-card: 0.875rem;
 }
 
+/*
+ * Compact density for short windows (1366×768, 1280×800), so the pay period screen still
+ * fits without scrolling the page (spec §6). Used as `short:` in class names.
+ */
+@custom-variant short (@media (max-height: 820px));
+
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
+}
+
+/* "Hide amounts": every number is blurred until it is switched off again (spec §6). */
+:root[data-hide-amounts] [data-amount] {
+  filter: blur(0.45em);
+  user-select: none;
 }
 
 /* A focus ring that is always visible, on any background. */

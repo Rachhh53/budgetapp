@@ -131,7 +131,7 @@ describe("categories & tags screen", () => {
     expect(bodiesSentTo(fetchMock, "PUT /api/categories/3")[1]).toEqual({ name: "Groceries", color: "#15803d", parentId: null });
   });
 
-  it("asks before deleting a category and explains when it is still in use", async () => {
+  it("deletes a category without asking twice and explains when it is still in use", async () => {
     const fetchMock = withData({
       "DELETE /api/categories/2": () => ({
         status: 409,
@@ -142,11 +142,8 @@ describe("categories & tags screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /^Edit Rent/ }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete category…" }));
-    expect(within(dialog).getByRole("button", { name: "Keep it" })).toHaveFocus();
-    expect(calls(fetchMock)).not.toContain("DELETE /api/categories/2");
-
-    await userEvent.click(within(dialog).getByRole("button", { name: "Yes, delete it" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete category" }));
+    expect(calls(fetchMock)).toContain("DELETE /api/categories/2");
 
     expect(await within(dialog).findByText(/still used by an item/)).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Edit Rent" })).toBeInTheDocument();
@@ -180,8 +177,7 @@ describe("categories & tags screen", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^Edit Vacation 2027/ }));
     dialog = screen.getByRole("dialog", { name: "Edit Vacation 2027" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete tag…" }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "Yes, delete it" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete tag" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(calls(fetchMock)).toContain("DELETE /api/tags/2");
   });

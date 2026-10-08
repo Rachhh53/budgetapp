@@ -115,8 +115,13 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT, DELETE | `/api/entries/{id}` | change; delete |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
+| GET | `/api/undo` | `{ available }`: whether there is a change to undo |
+| POST | `/api/undo` | undo the most recent change; `{ undone, available }` |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
+
+Every request that changes something is recorded so it can be undone, and its answer carries the header
+`X-Budget-Changed: true` (the UI shows its Undo toast when it sees it). Such requests are handled one at a time.
 
 Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Item kinds are `bill`, `transfer`,
 `budget` and `card_payment`; item schedules are `every_pay_period`, `weekly`, `biweekly`, `semi_monthly`, `monthly`,

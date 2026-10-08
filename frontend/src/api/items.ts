@@ -125,6 +125,39 @@ export function useSaveItem(id?: number) {
   });
 }
 
+/**
+ * Changes an item's amount from one occurrence on ("this and all future"), leaving
+ * everything else about it as it is. Earlier occurrences keep what they had.
+ */
+export function useChangeItemAmount() {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: ({ item, amountCents, effectiveFrom }: { item: Item; amountCents: number; effectiveFrom: string }) => {
+      const input: ItemInput = {
+        name: item.name,
+        kind: item.kind,
+        note: item.note,
+        archived: item.archived,
+        tagIds: item.tagIds,
+        amountCents,
+        amountMode: item.amountMode,
+        // A typed amount is the amount: it stops being an estimate (spec §1).
+        estimate: false,
+        categoryId: item.categoryId,
+        payFromAccountId: item.payFromAccountId,
+        payToAccountId: item.payToAccountId,
+        autopay: item.autopay,
+        placement: item.placement,
+        schedule: item.schedule,
+        daysAfterPayday: item.daysAfterPayday,
+        effectiveFrom,
+      };
+      return api.put<Item>(`/api/items/${item.id}`, input);
+    },
+    onSuccess: refresh,
+  });
+}
+
 export function useDeleteItem(id: number) {
   const refresh = useRefreshItems();
   return useMutation({

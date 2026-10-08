@@ -18,8 +18,8 @@ interface ConfirmDeleteProps {
 }
 
 /**
- * Asks before deleting a whole account or income source — one of the few places the app
- * says "are you sure?" (spec §6). Keeping is the default: it gets the focus, so pressing
+ * Asks before deleting a whole item, account or income source — one of the few places the
+ * app says "are you sure?" (spec §6); everything smaller is simply done, with Undo on hand. Keeping is the default: it gets the focus, so pressing
  * Enter by reflex deletes nothing.
  */
 export function ConfirmDelete({ action, question, detail, confirmLabel, pending, error, onConfirm }: ConfirmDeleteProps) {

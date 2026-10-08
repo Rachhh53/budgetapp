@@ -8,6 +8,7 @@ import { formatCents } from "../lib/money";
 export function Amount({ cents, estimate = false, className = "" }: { cents: number; estimate?: boolean; className?: string }) {
   return (
     <span
+      data-amount
       className={`inline-block rounded-md border px-2 py-0.5 text-right tabular-nums ${
         estimate ? "border-estimate-line bg-estimate text-estimate-ink" : "border-transparent"
       } ${className}`}

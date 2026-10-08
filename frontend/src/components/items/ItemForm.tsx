@@ -1,7 +1,6 @@
-import { X } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
-import { type Category, type Tag, useSaveCategory, useSaveTag } from "../../api/categories";
+import type { Category, Tag } from "../../api/categories";
 import {
   type AmountMode,
   type Item,
@@ -14,10 +13,9 @@ import {
   useDeleteItem,
   useSaveItem,
 } from "../../api/items";
-import { readableTextOn } from "../../lib/color";
 import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
-import { firstUnusedColor } from "../ColorPicker";
+import { CategoryField, TagsField } from "../categories/LabelFields";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
@@ -62,16 +60,23 @@ interface ItemFormProps {
  * A change to an existing item applies from a date on ("this and all future"): earlier
  * occurrences keep what they had.
  */
-export function ItemForm({ item, accounts, categories, tags, onClose }: ItemFormProps) {
+export function ItemForm(props: ItemFormProps) {
+  return (
+    <Modal title={props.item ? `Edit ${props.item.name}` : "Add a recurring item"} onClose={props.onClose} drawer>
+      <ItemFormBody {...props} />
+    </Modal>
+  );
+}
+
+/** The form itself, without a dialog around it, so the + Add item form can show it too. */
+export function ItemFormBody({ item, accounts, categories, tags, onClose }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
-  const addCategory = useSaveCategory();
-  const addTag = useSaveTag();
   const schedule = item?.schedule;
 
   const [kind, setKind] = useState<ItemKind>(item?.kind ?? "bill");
   const [name, setName] = useState(item?.name ?? "");
-  const [categoryId, setCategoryId] = useState<string | null>(item?.categoryId != null ? String(item.categoryId) : null);
+  const [categoryId, setCategoryId] = useState<number | null>(item?.categoryId ?? null);
   const [payFrom, setPayFrom] = useState<string | null>(item ? String(item.payFromAccountId) : null);
   const [payTo, setPayTo] = useState<string | null>(item?.payToAccountId != null ? String(item.payToAccountId) : null);
   const [amountMode, setAmountMode] = useState<AmountMode>(item?.amountMode ?? "per_occurrence");
@@ -103,27 +108,6 @@ export function ItemForm({ item, accounts, categories, tags, onClose }: ItemForm
   const cardOptions = offered
     .filter((account) => account.type === "credit_card")
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
-  const categoryOptions = categories.map((category) => ({
-    id: String(category.id),
-    label: categoryLabel(category, categories),
-    color: category.color,
-  }));
-  const chosenTags = tagIds.flatMap((tagId) => tags.find((tag) => tag.id === tagId) ?? []);
-  const tagOptions = tags
-    .filter((tag) => !tagIds.includes(tag.id))
-    .map((tag) => ({ id: String(tag.id), label: tag.name, color: tag.color }));
-
-  const createCategory = (text: string) =>
-    addCategory.mutate(
-      { name: text, color: firstUnusedColor(categories.map((category) => category.color)), parentId: null },
-      { onSuccess: (created) => setCategoryId(String(created.id)) },
-    );
-
-  const createTag = (text: string) =>
-    addTag.mutate(
-      { name: text, color: firstUnusedColor(tags.map((tag) => tag.color)) },
-      { onSuccess: (created) => setTagIds((ids) => [...ids, created.id]) },
-    );
 
   /** Turns the form into a request, or explains what still needs attention. */
   const toInput = (): ItemInput | string => {
@@ -150,7 +134,7 @@ export function ItemForm({ item, accounts, categories, tags, onClose }: ItemForm
       amountCents,
       amountMode,
       estimate,
-      categoryId: categoryId === null ? null : Number(categoryId),
+      categoryId,
       payFromAccountId: Number(payFrom),
       payToAccountId: movesMoney && payTo !== null ? Number(payTo) : null,
       // A budget is money set aside to spend, not something that is paid automatically.
@@ -186,10 +170,10 @@ export function ItemForm({ item, accounts, categories, tags, onClose }: ItemForm
     save.mutate(input, { onSuccess: onClose });
   };
 
-  const failure = problem ?? save.error?.message ?? addCategory.error?.message ?? addTag.error?.message;
+  const failure = problem ?? save.error?.message;
 
   return (
-    <Modal title={item ? `Edit ${item.name}` : "Add a recurring item"} onClose={onClose} drawer>
+    <>
       <form onSubmit={submit} className="space-y-4">
         <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={setKind} />
 
@@ -224,16 +208,7 @@ export function ItemForm({ item, accounts, categories, tags, onClose }: ItemForm
           {kind === "card_payment" && (
             <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
           )}
-          <Picker
-            label="Category (optional)"
-            noun="category"
-            placeholder="Type to search or add new"
-            options={categoryOptions}
-            value={categoryId}
-            onChange={setCategoryId}
-            onCreate={createCategory}
-            clearable
-          />
+          <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
         </div>
 
         <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
@@ -381,38 +356,7 @@ export function ItemForm({ item, accounts, categories, tags, onClose }: ItemForm
           </div>
         )}
 
-        <div>
-          <Picker
-            label="Tags (optional)"
-            noun="tag"
-            placeholder="Type to search or add new"
-            options={tagOptions}
-            value={null}
-            onChange={(tagId) => tagId !== null && setTagIds((ids) => [...ids, Number(tagId)])}
-            onCreate={createTag}
-          />
-          {chosenTags.length > 0 && (
-            <ul className="mt-2 flex flex-wrap gap-2">
-              {chosenTags.map((tag) => (
-                <li
-                  key={tag.id}
-                  className="flex items-center gap-1 rounded-full py-1 pr-1 pl-3 text-sm font-semibold"
-                  style={{ backgroundColor: tag.color, color: readableTextOn(tag.color) }}
-                >
-                  {tag.name}
-                  <button
-                    type="button"
-                    aria-label={`Remove tag ${tag.name}`}
-                    onClick={() => setTagIds((ids) => ids.filter((tagId) => tagId !== tag.id))}
-                    className="flex size-8 items-center justify-center rounded-full"
-                  >
-                    <X aria-hidden className="size-4" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
 
         <div>
           <label htmlFor={`${id}-note`} className={LABEL}>
@@ -477,14 +421,8 @@ export function ItemForm({ item, accounts, categories, tags, onClose }: ItemForm
           </div>
         </>
       )}
-    </Modal>
+    </>
   );
-}
-
-/** "Housing › Rent" for a sub-category, so two with the same name can be told apart. */
-function categoryLabel(category: Category, all: readonly Category[]): string {
-  const parent = all.find((other) => other.id === category.parentId);
-  return parent ? `${parent.name} › ${category.name}` : category.name;
 }
 
 /** What the item has cost per year, version by version. */
@@ -496,7 +434,7 @@ function PriceHistory({ item }: { item: Item }) {
         {item.history.map((point) => (
           <li key={point.effectiveFrom} className="flex items-center justify-between gap-3 py-2">
             <span className="text-muted">From {formatDate(point.effectiveFrom)}</span>
-            <span className="tabular-nums">
+            <span data-amount className="tabular-nums">
               {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
             </span>
           </li>
@@ -512,7 +450,7 @@ function DeleteItem({ item, onDeleted }: { item: Item; onDeleted: () => void }) 
     <ConfirmDelete
       action="Delete item…"
       question={`Delete ${item.name}?`}
-      detail="The item, its price history and everything you marked paid or typed over will be gone for good. To keep the history, archive it instead. This can't be undone."
+      detail="The item goes, along with its price history and everything you marked paid or typed over. To keep the history, archive it instead. You can undo this straight afterwards."
       confirmLabel="Yes, delete it"
       pending={remove.isPending}
       error={remove.error?.message}

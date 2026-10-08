@@ -225,7 +225,7 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
         <Amount cents={item.perOccurrenceCents} estimate={item.estimate} />
       </Cell>
       <Cell label="Per year" className="text-sm tabular-nums md:text-right md:text-base">
-        {formatCents(item.perYearCents)}
+        <span data-amount>{formatCents(item.perYearCents)}</span>
       </Cell>
       <Cell label="Paid from" className="text-sm md:truncate md:text-base">
         {paidFrom}
