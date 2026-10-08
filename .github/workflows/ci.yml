@@ -5,6 +5,10 @@ name: CI
 on:
   # Every branch. A pull request shows the checks of its latest commit, so there is no
   # separate pull_request trigger running everything twice.
+  #
+  # Work reaches main only through a pull request whose branch has already passed the tests
+  # and the dependency checks, so a push to main does not repeat them: it runs the installer
+  # job alone, and build-installer.ps1 runs the full test suites itself before it packages.
   push:
   # New vulnerabilities are published without anyone touching the code: re-scan weekly.
   schedule:
@@ -24,7 +28,7 @@ concurrency:
 jobs:
   backend:
     name: Backend tests
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     # The app only ships on Windows, so its tests (file locks, data folder, lifecycle) run there.
     runs-on: windows-latest
     steps:
@@ -42,7 +46,7 @@ jobs:
 
   frontend:
     name: Frontend tests
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -63,6 +67,8 @@ jobs:
 
   dependencies:
     name: Dependency checks
+    # Branch pushes, the weekly run and manual runs; not repeated on main (see `on` above).
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,13 +103,13 @@ jobs:
       - name: Check that no dependency is newer than 14 days
         if: ${{ !cancelled() }}
         shell: pwsh
-        run: ./check-dependency-age.ps1 -BaseRef ${{ github.ref == 'refs/heads/main' && 'HEAD^' || 'origin/main' }}
+        run: ./check-dependency-age.ps1 -BaseRef origin/main
 
   installer:
     name: Windows installer
-    # Only for main, and only once everything above has passed on the same commit.
+    # Only for main. The script runs the frontend and backend tests before it packages, so
+    # main is still tested once, on the merged code.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [backend, frontend, dependencies]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
