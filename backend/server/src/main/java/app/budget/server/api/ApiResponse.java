@@ -17,6 +17,8 @@ public record ApiResponse<T>(T data, String error, int status) {
     }
 
     public static void fail(Context ctx, int status, String message) {
+        // A refusal can come before the body was read; finish reading so the answer arrives.
+        Requests.discardUnreadBody(ctx);
         send(ctx, status, null, message);
     }
 
