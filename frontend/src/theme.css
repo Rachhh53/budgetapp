@@ -26,6 +26,8 @@
   /* Set at runtime from the user's accent setting; --on-accent is the readable text color for it. */
   --accent: #0f766e;
   --on-accent: #ffffff;
+  /* The accent as text (links, small actions): adjusted at runtime to read on this theme's backgrounds. */
+  --accent-text: #0f766e;
 
   --estimate-bg: #e3effc;
   --estimate-border: #b9d4f5;
@@ -45,6 +47,9 @@
 
   --sidebar: #0c1017;
   --sidebar-active: #212a3a;
+
+  /* The default accent, lightened to 4.5:1 on the dark surfaces. Replaced at runtime for the chosen accent. */
+  --accent-text: #4b9892;
 
   --estimate-bg: #17304f;
   --estimate-border: #2b4d7a;
@@ -66,6 +71,7 @@
   --color-sidebar-active: var(--sidebar-active);
   --color-accent: var(--accent);
   --color-on-accent: var(--on-accent);
+  --color-accent-ink: var(--accent-text);
   --color-estimate: var(--estimate-bg);
   --color-estimate-line: var(--estimate-border);
   --color-estimate-ink: var(--estimate-text);
@@ -95,6 +101,6 @@ body {
 
 /* A focus ring that is always visible, on any background. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }

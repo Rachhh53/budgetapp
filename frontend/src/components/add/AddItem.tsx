@@ -273,7 +273,7 @@ export function AddItemButton() {
               onClick={() => add(kind)}
               className="flex min-h-11 w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-bg focus-visible:bg-bg"
             >
-              <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-bg text-accent">
+              <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-bg text-accent-ink">
                 <Icon className="size-5" />
               </span>
               <span className="min-w-0 flex-1">

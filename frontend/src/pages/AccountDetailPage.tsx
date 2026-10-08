@@ -36,7 +36,7 @@ export function AccountDetailPage() {
           <p role="alert" className="font-medium">
             {detail.error.message}
           </p>
-          <Link to="/accounts" className="mt-2 inline-block font-semibold text-accent underline">
+          <Link to="/accounts" className="mt-2 inline-block font-semibold text-accent-ink underline">
             Back to all accounts
           </Link>
         </Card>
@@ -52,7 +52,7 @@ export function AccountDetailPage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/accounts" className="text-accent underline">
+            <Link to="/accounts" className="text-accent-ink underline">
               Accounts
             </Link>{" "}
             / {TYPE_LABELS[account.type]}

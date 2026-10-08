@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { contrastRatio } from "../src/lib/color";
 import { calls, fakeBackend, renderApp } from "./helpers";
 
 const DEFAULTS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
@@ -80,6 +81,18 @@ describe("theme", () => {
     expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#f4c95d");
     // A light accent gets dark text on top so it stays readable.
     expect(document.documentElement.style.getPropertyValue("--on-accent")).toBe("#000000");
+  });
+
+  it("keeps accent-colored text readable on the dark theme with the default accent", async () => {
+    fakeBackend({ "GET /api/settings": () => ({ status: 200, data: { ...DEFAULTS, theme: "dark" } }) });
+    renderApp();
+
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    const text = document.documentElement.style.getPropertyValue("--accent-text");
+    // The fill keeps the chosen color; only text drawn in it is lightened.
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#0f766e");
+    expect(contrastRatio(text, "#1a202b")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(text, "#11151c")).toBeGreaterThanOrEqual(4.5);
   });
 
   it("follows Windows until told otherwise", async () => {

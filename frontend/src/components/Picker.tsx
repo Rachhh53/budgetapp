@@ -182,7 +182,7 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
             aria-selected={active === matches.length}
             onClick={() => choose(matches.length)}
             onMouseEnter={() => setActive(matches.length)}
-            className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-3 font-semibold text-accent ${
+            className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-3 font-semibold text-accent-ink ${
               matches.length > 0 ? "mt-1 border-t border-line" : ""
             } ${active === matches.length ? "bg-bg" : ""}`}
           >

@@ -65,7 +65,7 @@ export function ConfirmationCode({ name, code, onSave }: { name: string; code: s
 
   if (code === null || code === "") {
     return (
-      <button ref={opener} type="button" onClick={start} aria-label={`Add confirmation code for ${name}`} className="flex min-h-11 items-center gap-1 rounded-md text-sm font-semibold text-accent lg:min-h-7">
+      <button ref={opener} type="button" onClick={start} aria-label={`Add confirmation code for ${name}`} className="flex min-h-11 items-center gap-1 rounded-md text-sm font-semibold text-accent-ink lg:min-h-7">
         <Plus aria-hidden className="size-4" />
         Add confirmation
       </button>

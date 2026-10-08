@@ -77,7 +77,7 @@ export function RecurringItemsPage() {
             <p className="font-medium">Add an account first.</p>
             <p className="mt-1 text-muted">
               Every bill, budget and transfer is paid from an account.{" "}
-              <Link to="/accounts" className="font-semibold text-accent underline">
+              <Link to="/accounts" className="font-semibold text-accent-ink underline">
                 Add the account you pay from
               </Link>
               , then come back here.

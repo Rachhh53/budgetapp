@@ -64,7 +64,7 @@ export function HideAmountsButton() {
       type="button"
       aria-pressed={amountsHidden}
       onClick={() => setHidden(!amountsHidden)}
-      className={`${BUTTON_SECONDARY} flex items-center justify-center gap-2 ${amountsHidden ? "border-accent text-accent" : ""}`}
+      className={`${BUTTON_SECONDARY} flex items-center justify-center gap-2 ${amountsHidden ? "border-accent text-accent-ink" : ""}`}
     >
       <Icon aria-hidden className="size-5" />
       Hide amounts

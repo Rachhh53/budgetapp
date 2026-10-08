@@ -11,7 +11,7 @@ export const BUTTON_DANGER = `${BUTTON} bg-danger text-surface`;
 export const BUTTON_DANGER_OUTLINE = `${BUTTON} border border-danger text-danger`;
 
 /** A quiet text-style button for small actions inside a row. */
-export const BUTTON_LINK = "min-h-11 rounded-lg px-2 font-semibold text-accent disabled:opacity-60";
+export const BUTTON_LINK = "min-h-11 rounded-lg px-2 font-semibold text-accent-ink disabled:opacity-60";
 
 export const INPUT = "min-h-11 w-full rounded-lg border border-line bg-surface px-3";
 export const LABEL = "mb-1 block font-medium";

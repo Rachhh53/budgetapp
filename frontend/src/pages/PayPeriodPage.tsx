@@ -149,7 +149,7 @@ export function PayPeriodPage() {
             {primaryAccount ? (
               <>
                 Enter what {primaryAccount.name} holds on the{" "}
-                <Link to={`/accounts/${primaryAccount.id}`} className="font-semibold text-accent underline">
+                <Link to={`/accounts/${primaryAccount.id}`} className="font-semibold text-accent-ink underline">
                   account's page
                 </Link>{" "}
                 and this period will show where it ends.
@@ -256,7 +256,7 @@ function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
             <p className="font-medium">Your pay periods haven't started yet.</p>
             <p className="mt-1 text-muted">
               The first one begins on your first payday, and each needs the payday after it to know where it ends.{" "}
-              <Link to="/income" className="font-semibold text-accent underline">
+              <Link to="/income" className="font-semibold text-accent-ink underline">
                 Check your pay schedule
               </Link>{" "}
               if that doesn't sound right.
@@ -267,7 +267,7 @@ function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
             <p className="font-medium">No pay periods yet.</p>
             <p className="mt-1 text-muted">
               Pay periods come from your main paycheck.{" "}
-              <Link to="/income" className="font-semibold text-accent underline">
+              <Link to="/income" className="font-semibold text-accent-ink underline">
                 Add your income
               </Link>{" "}
               and they'll appear here, one per payday.
@@ -787,7 +787,7 @@ function AccountsPanel({
       <Panel title="Accounts" aside="at period end">
         <Empty>
           Enter a balance on the{" "}
-          <Link to="/accounts" className="font-semibold text-accent underline">
+          <Link to="/accounts" className="font-semibold text-accent-ink underline">
             Accounts
           </Link>{" "}
           screen and each account's ending balance will show here.
