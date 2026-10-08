@@ -137,14 +137,14 @@ budget/
 Names are suggestions; keep the concepts. Money = integer cents, rates = basis points.
 
 ### 4.1 App and security
-- **settings** — key/value: theme (`light` | `dark` | `system`), density, accent color, projection horizon (default 12 months), budget timing (start of period), budget year start (month + day, default Jan 1), plan-next-year reminder date (default Oct 1), auto-lock minutes, promo warning days (default 60), unpaid-bill highlight days (default 3), start with amounts hidden, backup folder and count, phone access settings, primary income source.
+- **settings** — key/value: theme (`light` | `dark` | `system`), density, accent color, projection horizon (default 12 months), budget year start (month + day, default Jan 1), plan-next-year reminder date (default Oct 1), auto-lock minutes, promo warning days (default 60), unpaid-bill highlight days (default 3), start with amounts hidden, backup folder and count, phone access settings, primary income source.
 - **auth** — `pin_hash`, `recovery_code_hash`, failed attempts, lockout-until.
 - **change_log** — before/after of every edit, powering Undo.
 
 ### 4.2 Accounts, buckets, assets
 - **accounts** — `id, name, institution, type, subtype_label, color, low_balance_threshold (nullable), sort_order, archived`.
   - `type`: `checking` | `savings` | `credit_card` | `investment` | `loan`. `subtype_label` is free text chosen by the user (e.g. "401(k)", "Brokerage", "HSA", "Mortgage").
-- **balance_entries** — `account_id, date, amount, note`. A user-entered **actual** balance. Projections roll forward from the latest entry on or before a date. (Not reconciliation — just "the real number is X".)
+- **balance_entries** — `account_id, date, amount, note`. A user-entered **actual** balance. Projections roll forward from the latest entry on or before a date. (Not reconciliation — just "the real number is X".) The balance stands for the **start** of its day: whatever is dated that day or later is still to come (§5.3).
 - **rate_history** — `account_id, kind (apy | growth | apr | loan_rate), rate_bp, effective_date`. A change applies from its date forward.
 - **buckets** — `id, account_id, name, color, goal_amount (nullable), note, sort_order, archived`. **Checking and savings only.** Buckets don't change the account balance; they reduce **available**.
 - **bucket_changes** — `bucket_id, date, amount (+/−), source (manual | transfer | bucket_move | interest | income_split)`.
@@ -179,7 +179,8 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
   - `bucket_move` moves money from available into a bucket inside the same account (e.g. $50 every paycheck to Holiday gifts).
   - `amount_mode = annual`: the user enters a yearly total. With `save_up_bucket_id` set, the app creates a matching per-paycheck bucket move so the money is there by the due date.
   - `placement`: `due_period` | `one_early` (§5.2).
-- **item_versions** — "this and all future" edits start a new version effective from a date.
+  - `days_after_payday` (0–60, default 0): for an `every_pay_period` schedule, how many days into each period the item is dated. This is how **each budget carries its own date**.
+- **item_versions** — "this and all future" edits start a new version effective from a date. As built, `items` holds only what never changes (name, kind, note, archived) and every other column above lives on the version, each with its own `schedule_rule_id`; the earliest version also covers every date before it.
 - **occurrence_overrides** — `item_id, original_due_date, amount, due_date, period_override, paid, paid_date, confirmation_code, note, skipped, projected_amount`. "Just this one" edits live here. Occurrences are computed on the fly; only changes are stored.
 
 ### 4.7 One-off entries (money in and out)
@@ -226,7 +227,10 @@ For an occurrence due on **D**, with **P** = the period containing D:
 ### 5.3 Balance projection (per account)
 - Start from the latest `balance_entry` on or before the period start.
 - Apply in date order: paychecks (net), one-off money in/out, bills, transfers, card payments, interest, growth, charges.
-- Budget lines come out at the **start** of the period (setting).
+- **Each budget line has its own date** (decided 2026-10-06; there is no global budget-timing setting): the period's first day by default, changeable for one occurrence (`occurrence_overrides.due_date`) or for this and all future (`days_after_payday`).
+- An occurrence always counts on a day **inside the period that pays for it** (its due date, brought inside that period: "due Oct 16, pay by Oct 14"), so a period's figures add up to what it lists.
+- **Entered balances and unpaid items.** A balance entered for a day is what the account held at the start of that day. Anything dated earlier is taken as already in it — except an item the user pays by hand that is **not marked paid** and either is not due yet or belongs to the pay period the balance was entered in. Those still come out, on the day of the balance, and the period names them as carried over. Autopay items, paychecks and one-offs are assumed to happen on their date. Older unticked items are taken as paid, so nobody has to tick off months of history.
+- For a credit card or loan the balance is what is owed: charges raise it, payments lower it.
 - Per period and account: starting balance, total in, total out, projected ending, **lowest point**, **available after buckets**.
 - Low-balance flag only if the user set a threshold for that account.
 
@@ -330,7 +334,7 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 | Annual costs | `annual.png` | Calendar years / rolling 12 months switch; totals and change; per-item table; selected item's monthly history and whether its budget is too low; "Plan next year →". |
 | Plan next year | `plan-year.png` | Plans list (active, draft), **Delete draft & start over**; six steps (Income & benefits, Bills, Annual & save-ups, Spending budgets, Saving & investing, Review); suggestion basis switch; table of last 12 months, trend, suggestion, your amount ("YOURS" when typed), per-month/per-paycheck. First-time setup reuses this wizard. |
 | Debt & decisions | `planner.png` | Extra per month and period; flags first; option cards (debts with rates from accounts, investments with **editable growth**); payoff timeline with method switch; "estimates, not advice". |
-| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget timing, budget year start month/day, plan reminder), warnings, security, backups, phone access; **Erase all data** (§7; not in the mockup). |
+| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget year start month/day, plan reminder; the mockup's budget timing option was dropped, §11), warnings, security, backups, phone access; **Erase all data** (§7; not in the mockup). |
 | Phone: pay period | `phone-pay-period.png` | Current period's ending and available; mark bills paid (44px targets); auto-pay list; bottom tabs. |
 | Phone: add expense | `phone-add-expense.png` | Amount, payee, date, account, category, tags, receipt photo straight to the PC, reimbursement. |
 
@@ -406,7 +410,7 @@ Planner per §5.9 with editable growth rates, option cards, payoff order (highes
 
 ## 11. Open questions to confirm during the build
 - ~~Holidays: user-entered only, or also prefill common US bank holidays (stored locally)?~~ **Decided 2026-10-06:** prefill US bank holidays (calculated locally, Federal Reserve rules: a Sunday holiday is observed on Monday, a Saturday one is not moved); each can be switched off, changed or removed, and the user can add their own.
-- Budget timing: keep "start of period" only, or also offer "spread evenly"?
+- ~~Budget timing: keep "start of period" only, or also offer "spread evenly"?~~ **Decided 2026-10-06:** neither as a setting. Each budget has its own date (§5.3): the period's first day by default, changeable per budget for one occurrence or for this and all future.
 - Cards without itemized charges: estimate per pay period or per month by default?
 - Pay stubs: which employers' formats to test against first (use the user's real stubs, kept local).
 
@@ -439,6 +443,20 @@ Where the build stands, kept up to date as work lands. `proposals.md` is the fea
 | CI pipeline with dependency checks (new; not in `proposals.md`) | Written; first run pending | See §7. It runs on GitHub for the first time when this branch is pushed. |
 
 Also in this branch: Javalin 6 → 7 (Jetty 11 → 12), Jackson 2.21.7, Logback 1.5.38 and AssertJ 3.27.7, because the new vulnerability scan found known issues in the old versions and Jetty 11 no longer gets fixes. 135 backend tests (34 engine, 101 API) and 91 frontend tests. Phone width checked at 375px with real screenshots. Every npm and Cargo package that was under 14 days old was rolled back (Tauri is pinned at 2.11.6 for that reason); the one named exception and the dated `unic-*` ignores are described in §7, and both run out in mid-October 2026, when Tauri 2.12 can be taken. The installer was rebuilt on 2026-10-06: the first build could not start, because Jetty 12 needs the `jdk.zipfs` module and the trimmed runtime lacked it; the module is now included and the build script starts the packaged backend once to catch this kind of fault. Not yet done: Undo for these screens, which arrives with the change log in Phase 2 — until then deleting an account or income source asks first.
+
+### Phase 2a — Recurring items, categories, one-offs and the projection engine (`milestone/2a-recurring-items`)
+
+Phase 2 is split into two pull requests. 2a is the data, engine, API and the two setup screens; 2b is the pay period home screen, the + Add item menu and form, inline editing and Undo.
+
+| Feature | Status | Notes |
+|---|---|---|
+| Add basic categories and tags | Done | `/api/categories`, `/api/tags`; Categories & tags screen with sub-categories (two levels), item counts and yearly totals from recurring items, color picker on every row. A category or tag in use cannot be deleted. New ones can also be added from their picker inside the item form. |
+| Add recurring items with item versions and occurrence overrides | Done except bucket moves and save-ups | `/api/items` and `/api/items/{id}/occurrences/{scheduledDate}`; Recurring items screen with filters, search and the edit drawer (a sheet on a phone). Bill, transfer, budget and card payment; pay from any account; per-occurrence or annual amounts; estimate flag; price history. `bucket_move`, `bucket_id` and `save_up_bucket_id` arrive with buckets in Phase 3. Hand-picked dates are not offered for items. |
+| Create the period assignment rule in the engine | Done | `engine/items/PeriodAssigner`: all five §5.2 cases pass. "Every paycheck" items belong to the period they were made for. |
+| Create per-account balance projection in the engine | Done except buckets and low-balance flag | `engine/projection/BalanceProjector` and the server's `Ledger`: starting, in, out, ending and lowest point per period and account, from the latest entered balance (§5.3). "Available after buckets" and the low-balance flag are Phase 3; interest, growth and card payment modes are Phases 3–5. |
+| Add one-off entries for money in, money out and transfers | API done; screen in 2b | `/api/entries`, counted in the projection. They are entered through the + Add item form, which is 2b. `entry_bucket_splits` is Phase 3; the reimbursement columns exist but are unused until Phase 8. |
+
+Also in this branch: `GET /api/pay-periods` now carries each period's projected ending and lowest point for the primary paycheck's account, shown on the Pay periods list; `GET /api/pay-periods/{start}` returns everything in one period, ready for the 2b screen. An account used by an item or entry cannot be deleted. 241 backend tests (68 engine, 173 API) and 117 frontend tests. Both new screens and the open item form were checked in a real browser at 375px (no sideways scrolling) and at 1440px. Not yet done: Undo — deleting an item, category or tag asks first until the change log arrives in 2b.
 
 ### Carried forward into later phases
 

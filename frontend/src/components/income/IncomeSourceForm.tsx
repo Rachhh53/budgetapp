@@ -4,7 +4,6 @@ import type { Account } from "../../api/accounts";
 import {
   type IncomeSource,
   type IncomeSourceInput,
-  LAST_DAY,
   PAY_FREQUENCIES,
   type PayFrequency,
   useDeleteIncomeSource,
@@ -12,20 +11,15 @@ import {
   WEEKEND_RULES,
   type WeekendRule,
 } from "../../api/income";
-import { ordinal, todayIso } from "../../lib/dates";
+import { todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { ConfirmDelete } from "../ConfirmDelete";
+import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker, TextPicker } from "../Picker";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { FREQUENCY_LABELS, WEEKEND_LABELS } from "./schedule";
-
-/** Days of the month offered for a payday. "Last day" covers the 31st: shorter months fall back to it. */
-const DAY_CHOICES: readonly { value: number; label: string }[] = [
-  ...Array.from({ length: 30 }, (_, index) => ({ value: index + 1, label: ordinal(index + 1) })),
-  { value: LAST_DAY, label: "Last day" },
-];
 
 const DEDUCTION_SUGGESTIONS = ["401(k)", "Roth 401(k)", "403(b)", "HSA", "FSA", "Pension"] as const;
 
@@ -394,23 +388,6 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         </div>
       )}
     </Modal>
-  );
-}
-
-function DaySelect({ id, label, value, onChange }: { id: string; label: string; value: number; onChange: (day: number) => void }) {
-  return (
-    <div>
-      <label htmlFor={id} className={LABEL}>
-        {label}
-      </label>
-      <select id={id} value={value} onChange={(event) => onChange(Number(event.target.value))} className={INPUT}>
-        {DAY_CHOICES.map((day) => (
-          <option key={day.value} value={day.value}>
-            {day.label}
-          </option>
-        ))}
-      </select>
-    </div>
   );
 }
 

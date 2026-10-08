@@ -61,6 +61,7 @@ const PAYCHECKS: Paycheck[] = [
   {
     incomeSourceId: 1,
     sourceName: "Northwind Health",
+    depositAccountId: 1,
     scheduledDate: "2026-11-01",
     payDate: "2026-10-30",
     netCents: 248620,
@@ -70,6 +71,7 @@ const PAYCHECKS: Paycheck[] = [
   {
     incomeSourceId: 2,
     sourceName: "Riverside Bakery",
+    depositAccountId: 1,
     scheduledDate: "2026-11-06",
     payDate: "2026-11-06",
     netCents: 31840,
@@ -79,6 +81,7 @@ const PAYCHECKS: Paycheck[] = [
   {
     incomeSourceId: 1,
     sourceName: "Northwind Health",
+    depositAccountId: 1,
     scheduledDate: "2026-11-26",
     payDate: "2026-11-25",
     netCents: 248620,

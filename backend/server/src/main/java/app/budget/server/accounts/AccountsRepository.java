@@ -7,7 +7,9 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.jdbi.v3.core.Jdbi;
 
 /** Reads and writes {@code accounts} and {@code balance_entries}. */
@@ -108,6 +110,18 @@ public final class AccountsRepository {
                 .one());
     }
 
+    /** True when a recurring item or a one-off entry pays from, or into, this account. */
+    public boolean isUsedByItemsOrEntries(long id) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        SELECT EXISTS (SELECT 1 FROM item_versions WHERE pay_from_account_id = :id OR pay_to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM entries WHERE account_id = :id OR to_account_id = :id)
+                        """)
+                .bind("id", id)
+                .mapTo(Boolean.class)
+                .one());
+    }
+
     /** Deletes the account and, with it, the balances entered for it. */
     public boolean delete(long id) {
         return jdbi.withHandle(handle -> handle
@@ -127,6 +141,16 @@ public final class AccountsRepository {
                 .map((rs, ctx) -> new BalanceEntry(
                         rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note")))
                 .list());
+    }
+
+    /** Every balance entered, by account, oldest first: what projections start from. */
+    public Map<Long, List<BalanceEntry>> allBalances() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT id, account_id, date, amount, note FROM balance_entries ORDER BY date")
+                .map((rs, ctx) -> Map.entry(rs.getLong("account_id"), new BalanceEntry(
+                        rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note"))))
+                .stream()
+                .collect(Collectors.groupingBy(Map.Entry::getKey, Collectors.mapping(Map.Entry::getValue, Collectors.toList()))));
     }
 
     /** Records the balance for a day. Entering the same day again replaces what was there. */

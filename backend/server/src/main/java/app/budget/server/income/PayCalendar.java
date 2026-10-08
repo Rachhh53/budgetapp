@@ -6,6 +6,7 @@ import app.budget.engine.schedule.Occurrence;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.PayPeriodGenerator;
 import app.budget.engine.schedule.ScheduleGenerator;
+import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.income.IncomeRepository.PaycheckOverride;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.schedule.HolidaysRepository;
@@ -42,6 +43,7 @@ public final class PayCalendar {
     /**
      * One paycheck.
      *
+     * @param depositAccountId the account it lands in
      * @param scheduledDate  the date the schedule names; identifies this paycheck for edits
      * @param payDate        when it actually arrives, after any weekend or holiday move
      * @param estimate       true while the amount is the source's estimate and has not been typed over
@@ -50,6 +52,7 @@ public final class PayCalendar {
     public record Paycheck(
             long incomeSourceId,
             String sourceName,
+            long depositAccountId,
             LocalDate scheduledDate,
             LocalDate payDate,
             long netCents,
@@ -108,6 +111,23 @@ public final class PayCalendar {
         return new Periods(primary.get().id(), result);
     }
 
+    /** The primary source's schedule, which defines the pay periods; empty until a source exists. */
+    public Optional<ScheduleRule> payRule() {
+        return income.all().stream().filter(Source::primary).findFirst().map(Source::schedule);
+    }
+
+    /** The account the primary paycheck lands in: the one the pay period view is about. */
+    public Optional<Long> primaryAccountId() {
+        return income.all().stream().filter(Source::primary).findFirst().map(Source::depositAccountId);
+    }
+
+    /** The bare pay periods overlapping {@code from}–{@code through}, without their paychecks. */
+    public List<PayPeriod> payPeriods(LocalDate from, LocalDate through) {
+        return payRule()
+                .map(rule -> new PayPeriodGenerator(scheduleFor(from, through)).periods(rule, from, through))
+                .orElse(List.of());
+    }
+
     /** True when {@code scheduledDate} is one of the dates the source's schedule names. */
     public boolean isScheduled(Source source, LocalDate scheduledDate) {
         // A move never spans more than a few days, so a month either side is ample.
@@ -130,10 +150,10 @@ public final class PayCalendar {
             for (Occurrence occurrence : schedule.occurrences(source.schedule(), from, to)) {
                 PaycheckOverride override = edited.get(occurrence.scheduled());
                 paychecks.add(override == null
-                        ? new Paycheck(source.id(), source.name(), occurrence.scheduled(), occurrence.date(),
+                        ? new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
                                 source.netCents(), source.netIsEstimate(), null)
                         // An amount the user typed is the amount: it is no longer an estimate.
-                        : new Paycheck(source.id(), source.name(), occurrence.scheduled(), occurrence.date(),
+                        : new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
                                 override.netCents(), false, override.projectedCents()));
             }
         }
@@ -143,7 +163,7 @@ public final class PayCalendar {
     }
 
     /** A schedule generator that knows the closed days around the range, a year either side. */
-    private ScheduleGenerator scheduleFor(LocalDate from, LocalDate to) {
+    public ScheduleGenerator scheduleFor(LocalDate from, LocalDate to) {
         List<LocalDate> closed = holidays.closedDates(
                 LocalDate.of(from.getYear() - 1, 1, 1), LocalDate.of(to.getYear() + 1, 12, 31));
         return new ScheduleGenerator(new BusinessCalendar(closed));

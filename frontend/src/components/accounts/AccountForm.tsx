@@ -6,7 +6,7 @@ import {
   useDeleteAccount,
   useSaveAccount,
 } from "../../api/accounts";
-import { ColorPicker, PRESET_COLORS } from "../ColorPicker";
+import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { Modal } from "../Modal";
 import { TextPicker } from "../Picker";
@@ -167,12 +167,6 @@ function DeleteAccount({ account, onDeleted }: { account: Account; onDeleted: ()
       onConfirm={() => remove.mutate(undefined, { onSuccess: onDeleted })}
     />
   );
-}
-
-/** The first preset no account uses yet, so new accounts start out easy to tell apart. */
-function firstUnusedColor(used: readonly string[]): string {
-  const free = PRESET_COLORS.find((preset) => !used.includes(preset.hex));
-  return (free ?? PRESET_COLORS[0])?.hex ?? "#0f766e";
 }
 
 function unique(values: readonly (string | null)[]): string[] {

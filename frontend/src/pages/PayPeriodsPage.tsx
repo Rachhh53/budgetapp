@@ -8,8 +8,9 @@ import { formatDate, formatDay, formatWeekdayDay } from "../lib/dates";
 
 /**
  * Pay periods, generated from the primary income source: the current one first, then every
- * one out to the projection horizon, each with the paychecks landing in it. The full
- * one-screen period view (design/pay-period.png) replaces this list in Phase 2.
+ * one out to the projection horizon, each with the paychecks landing in it and, once a
+ * balance has been entered, where the paycheck's account is projected to end. The full
+ * one-screen period view (design/pay-period.png) replaces this list in Phase 2b.
  */
 export function PayPeriodsPage() {
   const payPeriods = usePayPeriods();
@@ -110,6 +111,12 @@ function PeriodCard({ period }: { period: PayPeriod }) {
         <span>Coming in</span>
         <Amount cents={period.incomeCents} />
       </p>
+      {period.projectedEndingCents !== null && (
+        <p className="flex items-center justify-between gap-3 font-semibold">
+          <span>Projected ending</span>
+          <Amount cents={period.projectedEndingCents} />
+        </p>
+      )}
     </section>
   );
 }
