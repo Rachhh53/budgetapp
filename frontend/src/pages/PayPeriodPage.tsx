@@ -419,7 +419,8 @@ function Panel({ title, aside, grow = false, children }: { title: string; aside?
         </h2>
         {aside && <p className="text-sm text-muted">{aside}</p>}
       </div>
-      <div className={grow ? "lg:min-h-0 lg:flex-1 lg:overflow-y-auto" : ""}>{children}</div>
+      {/* The side padding (taken back by the margin) leaves room for a focus ring, which scrolling would otherwise clip. */}
+      <div className={grow ? "lg:-mx-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:px-2" : ""}>{children}</div>
     </section>
   );
 }

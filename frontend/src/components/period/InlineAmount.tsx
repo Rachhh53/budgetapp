@@ -175,7 +175,9 @@ export function InlineAmount({ name, cents, estimate = false, projectedCents = n
         <span
           aria-hidden
           data-amount
-          className={`pointer-events-none absolute right-0 bottom-full z-10 mb-1 w-max rounded-md bg-ink px-2 py-1 text-xs text-surface group-focus-within:block group-hover:block ${
+          // Beside the amount, not above it: the panel scrolls inside itself and would cut off
+          // anything that reaches past its top edge.
+          className={`pointer-events-none absolute top-1/2 right-full z-10 mr-2 w-max -translate-y-1/2 rounded-md bg-ink px-2 py-1 text-xs text-surface group-focus-within:block group-hover:block ${
             peeking ? "block" : "hidden"
           }`}
         >
