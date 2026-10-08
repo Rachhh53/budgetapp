@@ -146,9 +146,9 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
   - `type`: `checking` | `savings` | `credit_card` | `investment` | `loan`. `subtype_label` is free text chosen by the user (e.g. "401(k)", "Brokerage", "HSA", "Mortgage").
 - **balance_entries** — `account_id, date, amount, note`. A user-entered **actual** balance. Projections roll forward from the latest entry on or before a date. (Not reconciliation — just "the real number is X".) The balance stands for the **start** of its day: whatever is dated that day or later is still to come (§5.3).
 - **rate_history** — `account_id, kind (apy | growth | apr | loan_rate), rate_bp, effective_date`. A change applies from its date forward.
-- **buckets** — `id, account_id, name, color, goal_amount (nullable), note, sort_order, archived`. **Checking and savings only.** Buckets don't change the account balance; they reduce **available**.
-- **bucket_changes** — `bucket_id, date, amount (+/−), source (manual | transfer | bucket_move | interest | income_split)`.
-- **interest_settings** — `account_id, credit_day (number or 'last'), destination (unassigned | bucket | proportional), destination_bucket_id`.
+- **buckets** — `id, account_id, name, color, goal_amount (nullable), note, sort_order, archived, opened_on`. **Checking and savings only.** Buckets don't change the account balance; they reduce **available**. Schedules, save-ups and interest reach a bucket only from `opened_on` (the day it was added): a new bucket is never back-filled from older dates. An archived bucket holds nothing.
+- **bucket_changes** — `bucket_id, date, amount (+/−), source (manual | transfer | bucket_move | interest | income_split), note`. As built, only what the user moves by hand is stored (`manual`); recurring bucket moves, transfers into a bucket, splits, save-ups and interest shares are worked out on every request, like occurrences, so they always follow the current schedules.
+- **interest_settings** — `account_id, credit_day (1–31; 31 means the last day), destination (unassigned | bucket | proportional), destination_bucket_id`. No row means the defaults: last day, unassigned.
 - **assets** — `id, name, kind (home | vehicle | other), color, appreciation_bp (nullable), linked_loan_account_id`.
 - **asset_values** — `asset_id, date, value`.
 
@@ -177,7 +177,8 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
   - `kind`: `bill` | `transfer` | `budget` | `bucket_move` | `card_payment`.
   - `pay_from_account_id` can be **any** account, including a credit card (the charge then lands on the card).
   - `bucket_move` moves money from available into a bucket inside the same account (e.g. $50 every paycheck to Holiday gifts).
-  - `amount_mode = annual`: the user enters a yearly total. With `save_up_bucket_id` set, the app creates a matching per-paycheck bucket move so the money is there by the due date.
+  - `amount_mode = annual`: the user enters a yearly total. With `save_up_bucket_id` set, the app creates a matching per-paycheck bucket move so the money is there by the due date. As built: any bill or budget can be saved up for, not only yearly totals; each occurrence is shared evenly over the paydays since the one before it (or since saving began), odd cents on the earliest, and leaves the bucket on the day the bill counts. A skipped occurrence is not saved for.
+  - `bucket_id` and `save_up_bucket_id` live on the item's versions, like its other terms, so a change applies from a date on. A transfer can name a bucket in the account it pays into.
   - `placement`: `due_period` | `one_early` (§5.2).
   - `days_after_payday` (0–60, default 0): for an `every_pay_period` schedule, how many days into each period the item is dated. This is how **each budget carries its own date**.
 - **item_versions** — "this and all future" edits start a new version effective from a date. As built, `items` holds only what never changes (name, kind, note, archived) and every other column above lives on the version, each with its own `schedule_rule_id`; the earliest version also covers every date before it.
@@ -232,11 +233,12 @@ For an occurrence due on **D**, with **P** = the period containing D:
 - **Entered balances and unpaid items.** A balance entered for a day is what the account held at the start of that day. Anything dated earlier is taken as already in it — except an item the user pays by hand that is **not marked paid** and either is not due yet or belongs to the pay period the balance was entered in. Those still come out, on the day of the balance, and the period names them as carried over. Autopay items, paychecks and one-offs are assumed to happen on their date. Older unticked items are taken as paid, so nobody has to tick off months of history.
 - For a credit card or loan the balance is what is owed: charges raise it, payments lower it.
 - Per period and account: starting balance, total in, total out, projected ending, **lowest point**, **available after buckets**.
-- Low-balance flag only if the user set a threshold for that account.
+- Low-balance flag only if the user set a threshold for that account. A period is flagged when its lowest point (its starting balance included) is under the threshold.
 
 ### 5.4 Savings interest
 - On the account's credit day: estimated interest = balance × ((1 + APY)^(1/12) − 1), credited to the chosen destination, shown as an estimate.
 - A user-entered balance replaces the projection from that date.
+- As built: the balance is the one at the start of the credit day; the rate is the one in force that day; an account earns interest once it has an APY in its rate history, from its first entered balance on. Interest counts as money in. `proportional` gives each bucket its share of the account (bucket ÷ the larger of the balance and all buckets, HALF_EVEN); the rest stays unassigned. The estimate cannot be typed over — entering the real balance is how it is corrected.
 
 ### 5.5 Investments
 - Contributions: paycheck deductions, employer match, transfers.
@@ -468,6 +470,18 @@ Also in this branch: `GET /api/pay-periods` now carries each period's projected 
 | Add one-off entries for money in, money out and transfers | Done except bucket splits and reimbursements | Finished here by the + Add item form. `entry_bucket_splits` is Phase 3; reimbursement is Phase 8. |
 
 Also in this branch: **Hide amounts** (blurs every number on every screen; remembered on this device), built early because the home screen's header needs it. A compact density for short windows (1366×768, 1280×800). 193 server tests and 68 engine tests, 148 frontend tests. Checked in a real browser at 1440×900, 1366×768, 1280×800 and 375px wide: no sideways scrolling; on wide screens the page itself does not scroll, and a column scrolls inside itself when a period holds more than fits. Accent-colored text (links, small actions, the focus ring) was low-contrast on the dark theme with the default accent on every screen; it now uses `--accent-text`, the chosen accent moved just far enough toward white or black to reach 4.5:1 on that theme's backgrounds (`accentForText`). The accent as a fill is unchanged.
+
+### Phase 3 — Buckets, savings, save-ups (`milestone/3-buckets-savings`)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Add buckets, recurring bucket moves and bucket splits on money in | Done | `/api/buckets` (add, change, archive, delete, move money by hand); `bucket_move` items; a transfer can land in a bucket; "Set some aside in a bucket" on money in and transfers in the + Add item form. The home screen's panel is now **Accounts & buckets**: in buckets, available after buckets, and each bucket with its change this period and goal bar. The fifth figure is **Available after buckets**. A bucket used by a recurring item cannot be archived or deleted. |
+| Add annual-amount items with per-paycheck save-ups | Done | "Save up for it in a bucket" on bills and budgets in the item form; the per-paycheck amount shows on the item (`saveUpPerPaycheckCents`). See §4.6 for how each bill is shared out. |
+| Schedule estimated savings interest with credit day, destination and rate history | Done | `PUT /api/accounts/{id}/interest`, `/api/accounts/{id}/rates`; Interest card on the account screen; interest listed under Income as an estimate. See §5.4. |
+| Validate low-balance thresholds and flag low periods | Done | Threshold on checking and savings (account form). Flagged on the strip ("· Low"), the fifth figure and the account panel — in words, never color alone. |
+| Display the account detail screen | Done except change this year and growth | Balance, projected, available after buckets and rate; "Where it's heading" chart (Recharts, described in words beneath); buckets with goals; interest and rate history; balances you entered. **Not yet:** "change this year" and the growth = change − deposits column, which arrive with investments in Phase 4. |
+
+Also in this branch: migration `V5` (buckets, bucket changes, entry splits, interest settings, rate history, and the two bucket columns on item versions — they were not there before, whatever 2a said). Recharts 3.10.1 added (over 14 days old, no known vulnerabilities); it makes the script bundle 809 kB, loaded from disk. Undo covers every new table without new code. An account that holds buckets cannot be changed to a type that cannot. 353 backend tests (97 engine, 256 API) and 169 frontend tests. Checked in a real browser at 1440×900, 1366×768, 1280×800 and at an emulated 375px: no sideways scrolling on any new screen or form, and the home screen still does not scroll as a page on wide windows.
 
 ### Carried forward into later phases
 

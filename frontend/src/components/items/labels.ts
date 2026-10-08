@@ -7,6 +7,7 @@ export const KIND_LABELS: Record<ItemKind, string> = {
   transfer: "Transfer",
   budget: "Budget",
   card_payment: "Card payment",
+  bucket_move: "Bucket move",
 };
 
 /** Plural, for the filter chips. */
@@ -15,6 +16,7 @@ export const KIND_PLURALS: Record<ItemKind, string> = {
   transfer: "Transfers",
   budget: "Budgets",
   card_payment: "Card payments",
+  bucket_move: "Bucket moves",
 };
 
 export const ITEM_FREQUENCY_LABELS: Record<ItemFrequency, string> = {
@@ -71,7 +73,10 @@ export function describeItemSchedule(schedule: ItemSchedule): string {
 
 /** "Bill · autopay", "Bill · manual", "Budget": the kind, and how it gets paid where that applies. */
 export function describeKind(item: Pick<Item, "kind" | "autopay">): string {
-  return item.kind === "budget" ? KIND_LABELS.budget : `${KIND_LABELS[item.kind]} · ${item.autopay ? "autopay" : "manual"}`;
+  // A budget is spent, and a bucket move just happens: neither is "paid" by anyone.
+  return item.kind === "budget" || item.kind === "bucket_move"
+    ? KIND_LABELS[item.kind]
+    : `${KIND_LABELS[item.kind]} · ${item.autopay ? "autopay" : "manual"}`;
 }
 
 /** Which paycheck pays for it, in the table's words. */

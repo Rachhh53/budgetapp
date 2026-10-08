@@ -1,7 +1,8 @@
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
+import { useBuckets } from "../../api/buckets";
 import type { Category, Tag } from "../../api/categories";
-import { type Entry, type EntryInput, type EntryKind, useDeleteEntry, useSaveEntry } from "../../api/entries";
+import { type BucketSplit, type Entry, type EntryInput, type EntryKind, useDeleteEntry, useSaveEntry } from "../../api/entries";
 import type { PeriodDetail } from "../../api/periods";
 import { todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
@@ -30,8 +31,9 @@ interface EntryFieldsProps {
  * transfer. While adding to the pay period on screen it shows what that period's ending
  * balance becomes, before anything is saved.
  *
- * "Set some aside in a bucket" arrives with buckets (Phase 3), and "pays back an expense"
- * and uploads with expenses and pay stubs (Phases 8 and 9).
+ * Money coming in (or a transfer arriving) can be partly set aside in the buckets of the
+ * account it lands in. "Pays back an expense" and uploads arrive with expenses and pay
+ * stubs (Phases 8 and 9).
  */
 export function EntryFields({ kind, entry, period, accounts, categories, tags, onClose }: EntryFieldsProps) {
   const id = useId();
@@ -49,7 +51,16 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
   const [categoryId, setCategoryId] = useState<number | null>(entry?.categoryId ?? null);
   const [tagIds, setTagIds] = useState<number[]>(entry?.tagIds ?? []);
   const [note, setNote] = useState(entry?.note ?? "");
+  const [settingAside, setSettingAside] = useState((entry?.bucketSplits.length ?? 0) > 0);
+  // What to set aside in each bucket, as typed, by bucket id.
+  const [aside, setAside] = useState<Record<number, string>>(
+    Object.fromEntries((entry?.bucketSplits ?? []).map((split) => [split.bucketId, centsToInput(split.amountCents)])),
+  );
   const [problem, setProblem] = useState<string>();
+
+  // Only money arriving can be set aside, and only in the buckets of the account it arrives in.
+  const arrivesIn = kind === "money_in" ? accountId : kind === "transfer" ? toAccountId : null;
+  const buckets = (useBuckets().data ?? []).filter((bucket) => !bucket.archived && String(bucket.accountId) === arrivesIn);
 
   // Archived accounts are left out, unless this entry already points at one.
   const accountOptions = accounts
@@ -72,6 +83,23 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
     if (kind === "transfer" && toAccountId === accountId) {
       return "Please choose two different accounts.";
     }
+    const bucketSplits: BucketSplit[] = [];
+    for (const bucket of settingAside ? buckets : []) {
+      const typed = (aside[bucket.id] ?? "").trim();
+      if (typed === "") {
+        continue;
+      }
+      const cents = parseDollars(typed);
+      if (cents === null || cents < 0) {
+        return `Please enter an amount like 250.00 for ${bucket.name}, or leave it empty.`;
+      }
+      if (cents > 0) {
+        bucketSplits.push({ bucketId: bucket.id, amountCents: cents });
+      }
+    }
+    if (bucketSplits.reduce((sum, split) => sum + split.amountCents, 0) > amountCents) {
+      return "That sets aside more than the amount itself. Please lower one of the buckets.";
+    }
     return {
       kind,
       date,
@@ -84,6 +112,7 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
       toAccountId: kind === "transfer" && toAccountId !== null ? Number(toAccountId) : null,
       note: note.trim() === "" ? null : note,
       tagIds,
+      bucketSplits,
     };
   };
 
@@ -178,6 +207,35 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
         </div>
 
         <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+
+        {buckets.length > 0 && (
+          <fieldset className="rounded-lg border border-line px-4 py-2">
+            <legend className="sr-only">Buckets</legend>
+            <label className="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={settingAside}
+                onChange={(event) => setSettingAside(event.target.checked)}
+                className="size-5 accent-(--accent)"
+              />
+              <span className="font-medium">Set some aside in a bucket</span>
+            </label>
+            {settingAside && (
+              <div className="mt-2 grid grid-cols-1 gap-4 pb-2 sm:grid-cols-2">
+                {buckets.map((bucket) => (
+                  <MoneyField
+                    key={bucket.id}
+                    label={bucket.name}
+                    value={aside[bucket.id] ?? ""}
+                    onChange={(text) => setAside((current) => ({ ...current, [bucket.id]: text }))}
+                    hint={`Holds ${formatCents(bucket.balanceCents)} today`}
+                  />
+                ))}
+                <p className="text-sm text-muted sm:col-span-2">Whatever is not set aside stays available in the account.</p>
+              </div>
+            )}
+          </fieldset>
+        )}
 
         <div>
           <label htmlFor={`${id}-note`} className={LABEL}>

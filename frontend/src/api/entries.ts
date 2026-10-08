@@ -1,4 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ACCOUNTS_KEY } from "./accounts";
+import { BUCKETS_KEY } from "./buckets";
 import { CATEGORIES_KEY, TAGS_KEY } from "./categories";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
@@ -21,6 +23,14 @@ export interface EntryInput {
   toAccountId: number | null;
   note: string | null;
   tagIds: number[];
+  /** How much of money coming in goes into which buckets; the rest stays unassigned. */
+  bucketSplits: BucketSplit[];
+}
+
+/** Part of an entry set aside in one bucket. */
+export interface BucketSplit {
+  bucketId: number;
+  amountCents: number;
 }
 
 /** One-off money in, money out or a transfer. */
@@ -28,12 +38,14 @@ export interface Entry extends EntryInput {
   id: number;
 }
 
-/** An entry changes what its pay period adds up to. */
+/** An entry changes what its pay period adds up to, each account's chart, and what its buckets hold. */
 function useRefreshEntries() {
   const queryClient = useQueryClient();
   return () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+      queryClient.invalidateQueries({ queryKey: BUCKETS_KEY }),
       queryClient.invalidateQueries({ queryKey: CATEGORIES_KEY }),
       queryClient.invalidateQueries({ queryKey: TAGS_KEY }),
     ]);

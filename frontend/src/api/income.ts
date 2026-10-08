@@ -71,6 +71,10 @@ export interface PayPeriod {
   projectedEndingCents: number | null;
   /** That account's lowest end-of-day balance in the period. */
   lowestCents: number | null;
+  /** The ending balance less what is in that account's buckets. */
+  availableCents: number | null;
+  /** True when that account dips below the low-balance amount the user set for it. */
+  lowBalance: boolean;
 }
 
 export interface PayPeriods {

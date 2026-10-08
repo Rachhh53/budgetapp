@@ -31,6 +31,10 @@ export interface Occurrence {
   confirmationCode: string | null;
   note: string | null;
   skipped: boolean;
+  /** The bucket a bucket move, or a transfer, puts this money in. */
+  bucketId: number | null;
+  /** The bucket this bill is saved up for in. */
+  saveUpBucketId: number | null;
 }
 
 /**
@@ -50,6 +54,43 @@ export interface AccountPeriod {
   /** The lowest end-of-day balance in the period, and the day it happens. */
   lowestCents: number;
   lowestOn: string;
+  /** What the account's buckets hold at the end of the period. */
+  bucketsCents: number;
+  /** The ending balance less what is in buckets. */
+  availableCents: number;
+  /** True when the user asked for a warning and the balance dips below it. */
+  lowBalance: boolean;
+}
+
+/** One bucket across one pay period; `endingCents − startingCents` is what the period moved. */
+export interface BucketPeriod {
+  bucketId: number;
+  accountId: number;
+  startingCents: number;
+  endingCents: number;
+}
+
+/** Why a bucket's balance moved. */
+export type BucketMoveKind = "manual" | "bucket_move" | "transfer" | "split" | "save_up" | "save_up_paid" | "interest";
+
+/** Money going into (+) or out of (−) a bucket on a day. */
+export interface BucketMove {
+  bucketId: number;
+  date: string;
+  amountCents: number;
+  kind: BucketMoveKind;
+  /** The item's name, the entry's description, or the user's note. */
+  label: string | null;
+  itemId: number | null;
+}
+
+/** A month's estimated interest arriving in an account. */
+export interface InterestLine {
+  accountId: number;
+  date: string;
+  amountCents: number;
+  /** The APY it was worked out at, in basis points. */
+  rateBp: number;
 }
 
 /** Everything in one pay period. */
@@ -66,8 +107,14 @@ export interface PeriodDetail {
   carriedOver: Occurrence[];
   /** One-off entries dated in this period. */
   entries: Entry[];
+  /** Estimated interest counted in this period's figures. */
+  interest: InterestLine[];
   /** Every account a balance is known for. */
   accounts: AccountPeriod[];
+  /** Every open bucket. */
+  buckets: BucketPeriod[];
+  /** What moved those buckets during the period, earliest first. */
+  bucketMoves: BucketMove[];
 }
 
 /** What a "just this one" edit can change. Only what is sent changes. */

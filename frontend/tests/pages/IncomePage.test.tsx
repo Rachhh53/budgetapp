@@ -14,6 +14,7 @@ const CHECKING: Account = {
   subtypeLabel: null,
   color: "#0f766e",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: null,
 };
 const RETIREMENT: Account = { ...CHECKING, id: 2, name: "Retirement", type: "investment", color: "#7e22ce" };

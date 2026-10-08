@@ -2,12 +2,15 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
+import { type Bucket, useBuckets } from "../api/buckets";
 import { type Category, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useItems } from "../api/items";
 import {
   type AccountPeriod,
+  type BucketPeriod,
+  type InterestLine,
   type Occurrence,
   type PeriodDetail,
   useEditOccurrence,
@@ -15,7 +18,7 @@ import {
   usePeriod,
 } from "../api/periods";
 import { AddItemButton, useAddItem } from "../components/add/AddItem";
-import { EstimateKey } from "../components/Amount";
+import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { ItemForm } from "../components/items/ItemForm";
@@ -23,6 +26,7 @@ import { ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { formatRate } from "../lib/rates";
 
 /** How far either side of the period on screen the strip of ending balances reaches. */
 const STRIP_DAYS_BACK = 45;
@@ -41,7 +45,7 @@ const EDITABLE = "input, textarea, select, [contenteditable='true'], [role='dial
  * inside themselves only if a period holds more than fits. On a phone it is one column,
  * with what needs doing by hand first.
  *
- * Buckets ("available after buckets") arrive in Phase 3 and the credit cards panel in Phase 5.
+ * The credit cards panel arrives in Phase 5.
  */
 export function PayPeriodPage() {
   const { start: startParam } = useParams();
@@ -59,6 +63,7 @@ export function PayPeriodPage() {
   const categories = useCategories();
   const tags = useTags();
   const items = useItems();
+  const buckets = useBuckets();
 
   const nearby = around.data?.periods ?? [];
   const at = nearby.findIndex((candidate) => candidate.start === start);
@@ -77,7 +82,8 @@ export function PayPeriodPage() {
 
   const [editingItem, setEditingItem] = useState<Item>();
 
-  const failure = upcoming.error ?? period.error ?? accounts.error ?? categories.error ?? tags.error ?? items.error;
+  const failure =
+    upcoming.error ?? period.error ?? accounts.error ?? categories.error ?? tags.error ?? items.error ?? buckets.error;
   if (failure) {
     return (
       <>
@@ -91,7 +97,7 @@ export function PayPeriodPage() {
   if (upcoming.data && start === undefined) {
     return <NoPeriods hasIncome={upcoming.data.primarySourceId !== null} />;
   }
-  if (!detail || !accounts.data || !categories.data || !tags.data || !items.data) {
+  if (!detail || !accounts.data || !categories.data || !tags.data || !items.data || !buckets.data) {
     return (
       <>
         <h1 className="text-2xl font-bold md:text-3xl">Pay period</h1>
@@ -106,10 +112,14 @@ export function PayPeriodPage() {
   const anyEstimate =
     detail.paychecks.some((paycheck) => paycheck.estimate) ||
     detail.occurrences.some((occurrence) => occurrence.estimate) ||
-    detail.entries.some((entry) => entry.estimate);
+    detail.entries.some((entry) => entry.estimate) ||
+    // Interest is always an estimate until a balance is entered that includes it.
+    detail.interest.length > 0;
   const names = new Map(accounts.data.map((account) => [account.id, account.name]));
+  const bucketNames = new Map(buckets.data.map((bucket) => [bucket.id, bucket.name]));
   const context: RowContext = {
     accountName: (id) => names.get(id) ?? "an account",
+    bucketName: (id) => (id === null ? undefined : bucketNames.get(id)),
     categories: categories.data,
     items: items.data,
     editItem: setEditingItem,
@@ -167,12 +177,18 @@ export function PayPeriodPage() {
           <ManualPanel occurrences={lists.manual} carriedOver={detail.carriedOver} oneOffs={lists.oneOffs} context={context} />
         </div>
         <div className="flex flex-col gap-3 lg:order-1 lg:min-h-0 lg:overflow-y-auto">
-          <IncomePanel paychecks={detail.paychecks} moneyIn={lists.moneyIn} context={context} />
+          <IncomePanel paychecks={detail.paychecks} moneyIn={lists.moneyIn} interest={detail.interest} context={context} />
           <AutoPanel occurrences={lists.auto} context={context} />
           <BudgetsPanel occurrences={lists.budgets} context={context} />
         </div>
         <div className="flex flex-col gap-3 lg:order-3 lg:min-h-0 lg:overflow-y-auto">
-          <AccountsPanel balances={detail.accounts} accounts={accounts.data} primaryAccountId={detail.primaryAccountId} />
+          <AccountsPanel
+            balances={detail.accounts}
+            accounts={accounts.data}
+            buckets={buckets.data}
+            bucketPeriods={detail.buckets}
+            primaryAccountId={detail.primaryAccountId}
+          />
         </div>
       </div>
 
@@ -192,6 +208,8 @@ export function PayPeriodPage() {
 /** What each row needs to describe itself and to open what it belongs to. */
 interface RowContext {
   accountName: (id: number) => string;
+  /** `undefined` for no bucket, or one that has since been archived or removed. */
+  bucketName: (id: number | null) => string | undefined;
   categories: readonly Category[];
   items: readonly Item[];
   editItem: (item: Item) => void;
@@ -318,7 +336,16 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
                 period.start === selected ? "border-2 border-accent" : "border border-line"
               }`}
             >
-              <span className="block text-xs text-muted">{formatDay(period.start)}</span>
+              <span className="block text-xs text-muted">
+                {formatDay(period.start)}
+                {/* In words beside the date, so the flag adds no height and never rests on color alone. */}
+                {period.lowBalance && (
+                  <span className="font-semibold text-danger">
+                    {" "}
+                    · Low<span className="sr-only"> balance</span>
+                  </span>
+                )}
+              </span>
               <span data-amount className="block font-semibold tabular-nums">
                 {period.projectedEndingCents === null ? "—" : formatCents(period.projectedEndingCents)}
               </span>
@@ -364,9 +391,14 @@ function Figures({ balance, account }: { balance: AccountPeriod; account: Accoun
         highlight
       />
       <Figure
-        label="Lowest point"
-        cents={balance.lowestCents}
-        note={`on ${formatDay(balance.lowestOn)}`}
+        label="Available after buckets"
+        cents={balance.availableCents}
+        note={
+          balance.lowBalance
+            ? `Low balance: dips to ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
+            : `${formatCents(balance.bucketsCents)} in buckets · lowest ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
+        }
+        warn={balance.lowBalance}
         className="order-5"
       />
     </dl>
@@ -379,6 +411,7 @@ function Figure({
   sign = "",
   note,
   highlight = false,
+  warn = false,
   className = "",
 }: {
   label: string;
@@ -387,6 +420,8 @@ function Figure({
   note: string;
   /** The number the screen is about: outlined, and largest on a phone. */
   highlight?: boolean;
+  /** The note is a warning (it says so in words too): shown in the warning color. */
+  warn?: boolean;
   className?: string;
 }) {
   return (
@@ -397,7 +432,7 @@ function Figure({
           {sign}
           {formatCents(cents)}
         </span>
-        <span data-amount title={note} className="block text-sm text-muted tabular-nums lg:truncate">
+        <span data-amount title={note} className={`block text-sm tabular-nums lg:truncate ${warn ? "font-semibold text-danger" : "text-muted"}`}>
           {note}
         </span>
       </dd>
@@ -557,10 +592,20 @@ function categoryOf(categoryId: number | null, context: RowContext): Category | 
   return context.categories.find((category) => category.id === categoryId);
 }
 
-function IncomePanel({ paychecks, moneyIn, context }: { paychecks: readonly Paycheck[]; moneyIn: readonly Entry[]; context: RowContext }) {
+function IncomePanel({
+  paychecks,
+  moneyIn,
+  interest,
+  context,
+}: {
+  paychecks: readonly Paycheck[];
+  moneyIn: readonly Entry[];
+  interest: readonly InterestLine[];
+  context: RowContext;
+}) {
   return (
     <Panel title="Income">
-      {paychecks.length === 0 && moneyIn.length === 0 ? (
+      {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 ? (
         <Empty>Nothing is coming in this period.</Empty>
       ) : (
         <ul className="divide-y divide-line">
@@ -580,10 +625,37 @@ function IncomePanel({ paychecks, moneyIn, context }: { paychecks: readonly Payc
               amount={<EntryAmount entry={entry} />}
             />
           ))}
+          {/* Worked out from the balance and the rate, so it is not typed over: entering the real balance replaces it. */}
+          {interest.map((line) => (
+            <Row
+              key={`${line.accountId}-${line.date}`}
+              title="Interest"
+              detail={`${formatDay(line.date)} → ${context.accountName(line.accountId)} · ${formatRate(line.rateBp)} APY`}
+              amount={<Amount cents={line.amountCents} estimate className="w-28 font-semibold" />}
+            />
+          ))}
         </ul>
       )}
     </Panel>
   );
+}
+
+/**
+ * "Checking", "Checking → Savings", "Checking → Savings · Emergency fund bucket": the account
+ * an occurrence is paid from, and where its money ends up when it stays the user's.
+ */
+function whereItGoes(occurrence: Occurrence, context: RowContext): string {
+  const from = context.accountName(occurrence.payFromAccountId);
+  const bucket = context.bucketName(occurrence.bucketId);
+  if (occurrence.kind === "bucket_move") {
+    return `${from} → ${bucket ?? "a bucket"} bucket`;
+  }
+  const savedIn = context.bucketName(occurrence.saveUpBucketId);
+  if (occurrence.payToAccountId === null) {
+    return savedIn === undefined ? from : `${from} · saved up in ${savedIn}`;
+  }
+  const to = context.accountName(occurrence.payToAccountId);
+  return bucket === undefined ? `${from} → ${to}` : `${from} → ${to} · ${bucket} bucket`;
 }
 
 function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[]; context: RowContext }) {
@@ -598,9 +670,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
               lead={<span className="shrink-0 rounded-md bg-bg px-1.5 py-0.5 text-xs font-semibold text-muted">AUTO</span>}
               title={<ItemName occurrence={occurrence} context={context} />}
-              detail={`${formatDay(occurrence.payBy)} · ${context.accountName(occurrence.payFromAccountId)}${
-                occurrence.payToAccountId === null ? "" : ` → ${context.accountName(occurrence.payToAccountId)}`
-              }`}
+              detail={`${formatDay(occurrence.payBy)} · ${whereItGoes(occurrence, context)}`}
               amount={<OccurrenceAmount occurrence={occurrence} context={context} />}
             />
           ))}
@@ -709,9 +779,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
 
   const due = `Due ${formatDay(occurrence.dueDate)}`;
   const payBy = occurrence.payBy === occurrence.dueDate ? "" : ` · pay by ${formatDay(occurrence.payBy)}`;
-  const detail = `${due}${payBy} · ${context.accountName(occurrence.payFromAccountId)}${
-    occurrence.payToAccountId === null ? "" : ` → ${context.accountName(occurrence.payToAccountId)}`
-  }`;
+  const detail = `${due}${payBy} · ${whereItGoes(occurrence, context)}`;
 
   return (
     <Row
@@ -765,14 +833,21 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
   );
 }
 
-/** Where every account stands at the end of the period: one tab per account with a balance. */
+/**
+ * Where every account stands at the end of the period, and what its buckets hold: one tab
+ * per account with a balance.
+ */
 function AccountsPanel({
   balances,
   accounts,
+  buckets,
+  bucketPeriods,
   primaryAccountId,
 }: {
   balances: readonly AccountPeriod[];
   accounts: readonly Account[];
+  buckets: readonly Bucket[];
+  bucketPeriods: readonly BucketPeriod[];
   primaryAccountId: number | null;
 }) {
   const id = useId();
@@ -785,7 +860,7 @@ function AccountsPanel({
 
   if (shown === undefined) {
     return (
-      <Panel title="Accounts" aside="at period end">
+      <Panel title="Accounts & buckets" aside="at period end">
         <Empty>
           Enter a balance on the{" "}
           <Link to="/accounts" className="font-semibold text-accent-ink underline">
@@ -799,8 +874,12 @@ function AccountsPanel({
 
   const owed = OWED.includes(shown.account.type);
   const { balance } = shown;
+  const held = bucketPeriods.flatMap((period) => {
+    const bucket = buckets.find((candidate) => candidate.id === period.bucketId);
+    return bucket && period.accountId === shown.account.id ? [{ bucket, period }] : [];
+  });
   return (
-    <Panel title="Accounts" aside="at period end">
+    <Panel title="Accounts & buckets" aside="at period end">
       <div role="tablist" aria-label="Accounts" className="mb-2 flex gap-1 overflow-x-auto rounded-lg bg-bg p-1">
         {known.map(({ account }) => (
           <button
@@ -827,16 +906,92 @@ function AccountsPanel({
         />
         <AccountLine label={owed ? "Charged" : "Coming in"} cents={balance.inCents} sign="+" />
         <AccountLine label={owed ? "Paid off" : "Going out"} cents={balance.outCents} sign="−" />
-        <AccountLine label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}`} cents={balance.lowestCents} />
+        <AccountLine
+          label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
+          cents={balance.lowestCents}
+          warn={balance.lowBalance}
+        />
+        {held.length > 0 && (
+          <>
+            <AccountLine label="In buckets" cents={balance.bucketsCents} sign="−" />
+            <AccountLine label="Available after buckets" cents={balance.availableCents} />
+          </>
+        )}
       </dl>
+      {held.length > 0 && (
+        <section aria-label={`Buckets in ${shown.account.name}`} className="mt-2 border-t border-line pt-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold">Buckets</h3>
+            <Link to={`/accounts/${shown.account.id}`} className="text-sm font-semibold text-accent-ink underline">
+              Manage
+            </Link>
+          </div>
+          <ul className="divide-y divide-line">
+            {held.map(({ bucket, period }) => (
+              <BucketRow key={bucket.id} bucket={bucket} period={period} />
+            ))}
+          </ul>
+        </section>
+      )}
     </Panel>
   );
 }
 
-function AccountLine({ label, cents, sign = "", strong = false }: { label: string; cents: number; sign?: string; strong?: boolean }) {
+/** One bucket at the end of the period: what it holds, what the period moved, and how far along its goal is. */
+function BucketRow({ bucket, period }: { bucket: Bucket; period: BucketPeriod }) {
+  const moved = period.endingCents - period.startingCents;
+  const goal = bucket.goalCents;
+  // Shown as at most full: a bucket can hold more than its goal.
+  const reached = goal === null ? null : Math.max(0, Math.min(100, Math.round((period.endingCents * 100) / goal)));
+  const detail = [
+    moved === 0 ? null : `${moved > 0 ? "+" : "−"}${formatCents(Math.abs(moved))} this period`,
+    goal === null ? null : `${reached}% of ${formatCents(goal)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <li className="py-1.5 lg:py-1">
+      <div className="flex items-center gap-3">
+        <Dot color={bucket.color} />
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="font-medium wrap-break-word">{bucket.name}</div>
+          {detail !== "" && (
+            <div data-amount className="text-sm leading-tight text-muted tabular-nums">
+              {detail}
+            </div>
+          )}
+        </div>
+        <span data-amount className="shrink-0 font-semibold tabular-nums">
+          {formatCents(period.endingCents)}
+        </span>
+      </div>
+      {reached !== null && (
+        // The percentage is in the text above; the bar only draws it.
+        <div aria-hidden className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg">
+          <div className="h-full rounded-full" style={{ width: `${reached}%`, backgroundColor: bucket.color }} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+function AccountLine({
+  label,
+  cents,
+  sign = "",
+  strong = false,
+  warn = false,
+}: {
+  label: string;
+  cents: number;
+  sign?: string;
+  strong?: boolean;
+  /** The label says what is wrong; this only adds the warning color. */
+  warn?: boolean;
+}) {
   return (
     <div className={`flex items-center justify-between gap-3 py-1.5 ${strong ? "text-lg font-bold" : ""}`}>
-      <dt className={strong ? "" : "text-muted"}>{label}</dt>
+      <dt className={warn ? "font-semibold text-danger" : strong ? "" : "text-muted"}>{label}</dt>
       <dd data-amount className="tabular-nums">
         {sign}
         {formatCents(cents)}

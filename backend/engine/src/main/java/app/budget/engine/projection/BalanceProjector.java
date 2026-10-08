@@ -1,12 +1,16 @@
 package app.budget.engine.projection;
 
+import app.budget.engine.BasisPoints;
 import app.budget.engine.Money;
+import app.budget.engine.interest.InterestTerms;
+import app.budget.engine.interest.SavingsInterest;
 import app.budget.engine.schedule.PayPeriod;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 
 /**
@@ -14,8 +18,8 @@ import java.util.TreeMap;
  * balance the user entered, then apply everything dated from that day on, in date order.
  *
  * <p>The caller decides what moves and on which day (paychecks, bills, budgets, transfers,
- * one-offs; later interest and growth). This class only does the arithmetic, so new kinds
- * of movement need no change here.
+ * one-offs). This class only does the arithmetic, so new kinds of movement need no change
+ * here. Interest is the exception: it depends on the balance itself, so it is worked out here.
  */
 public final class BalanceProjector {
 
@@ -29,14 +33,29 @@ public final class BalanceProjector {
      *         no balance has been entered yet
      */
     public static List<PeriodBalance> project(List<BalanceAnchor> anchors, List<Movement> movements, List<PayPeriod> periods) {
+        return project(anchors, movements, periods, null).balances();
+    }
+
+    /**
+     * As {@link #project(List, List, List)}, for an account that earns interest (spec §5.4).
+     * Each month's interest is estimated from the balance its credit day starts with and
+     * then counts like any other money arriving, so later months earn interest on it too.
+     *
+     * @param interest how the account earns interest; {@code null} when it does not
+     */
+    public static Projection project(
+            List<BalanceAnchor> anchors, List<Movement> movements, List<PayPeriod> periods, InterestTerms interest) {
         if (anchors.isEmpty()) {
-            return List.of();
+            return Projection.NONE;
         }
         TreeMap<LocalDate, Money> entered = new TreeMap<>();
         for (BalanceAnchor anchor : anchors) {
             entered.put(anchor.date(), anchor.balance());
         }
         TreeMap<LocalDate, List<Money>> applied = applied(movements, entered.lastKey());
+        List<InterestCredit> credits = interest == null || periods.isEmpty()
+                ? List.of()
+                : creditInterest(interest, entered, applied, periods.getLast().end());
 
         List<PeriodBalance> result = new ArrayList<>();
         for (PayPeriod period : periods) {
@@ -71,7 +90,32 @@ public final class BalanceProjector {
             }
             result.add(new PeriodBalance(period, starting, startingOn, enteredDuring, in, out, running, lowest, lowestOn));
         }
-        return result;
+        return new Projection(result, credits);
+    }
+
+    /**
+     * Works out each month's interest, earliest first, and adds it to {@code applied} as it
+     * goes, so that every month is estimated on a balance that includes the months before.
+     * A month that falls before a later entered balance is still estimated (a bucket may be
+     * owed its share), but that entered balance, not the estimate, is what the account holds.
+     */
+    private static List<InterestCredit> creditInterest(
+            InterestTerms terms, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied, LocalDate through) {
+        List<InterestCredit> credits = new ArrayList<>();
+        for (LocalDate day : SavingsInterest.creditDates(terms.creditDay(), entered.firstKey(), through)) {
+            Optional<BasisPoints> apy = terms.rateOn(day);
+            if (apy.isEmpty()) {
+                continue;
+            }
+            Money balance = balanceAtStartOf(day, entered, applied);
+            Money amount = SavingsInterest.forMonth(balance, apy.get());
+            if (amount.isZero()) {
+                continue;
+            }
+            applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
+            credits.add(new InterestCredit(day, amount, balance, apy.get()));
+        }
+        return credits;
     }
 
     /**

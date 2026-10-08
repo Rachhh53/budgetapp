@@ -3,12 +3,15 @@ import {
   type Account,
   ACCOUNT_TYPES,
   type AccountType,
+  holdsCash,
   useDeleteAccount,
   useSaveAccount,
 } from "../../api/accounts";
+import { centsToInput, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { Modal } from "../Modal";
+import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { TextPicker } from "../Picker";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { LABEL_SUGGESTIONS, TYPE_LABELS } from "./labels";
@@ -36,6 +39,10 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
   const [institution, setInstitution] = useState(account?.institution ?? "");
   const [color, setColor] = useState(account?.color ?? firstUnusedColor(usedColors));
   const [archived, setArchived] = useState(account?.archived ?? false);
+  const [lowBalance, setLowBalance] = useState(
+    account?.lowBalanceThresholdCents != null ? centsToInput(account.lowBalanceThresholdCents) : "",
+  );
+  const [problem, setProblem] = useState<string>();
 
   const institutions = unique(accounts.map((existing) => existing.institution));
   const labels = unique([
@@ -45,11 +52,28 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    // Only checking and savings can have the warning; an empty field means no warning.
+    const threshold = holdsCash(type) && lowBalance.trim() !== "" ? parseDollars(lowBalance) : null;
+    if (holdsCash(type) && lowBalance.trim() !== "" && (threshold === null || threshold < 0)) {
+      setProblem(AMOUNT_HELP);
+      return;
+    }
+    setProblem(undefined);
     save.mutate(
-      { name, type, subtypeLabel: subtypeLabel || null, institution: institution || null, color, archived },
+      {
+        name,
+        type,
+        subtypeLabel: subtypeLabel || null,
+        institution: institution || null,
+        color,
+        archived,
+        lowBalanceThresholdCents: threshold,
+      },
       { onSuccess: onClose },
     );
   };
+
+  const failure = problem ?? save.error?.message;
 
   return (
     <Modal title={account ? "Edit account" : "Add an account"} onClose={onClose}>
@@ -108,6 +132,15 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
 
         <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
 
+        {holdsCash(type) && (
+          <MoneyField
+            label="Warn me when the balance dips below (optional)"
+            value={lowBalance}
+            onChange={setLowBalance}
+            hint="Pay periods where it is projected to go lower are flagged. Leave empty for no warning."
+          />
+        )}
+
         {account && (
           <div>
             <label className="flex min-h-11 items-center gap-3">
@@ -123,9 +156,9 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
           </div>
         )}
 
-        {save.isError && (
+        {failure && (
           <p role="alert" className="text-danger">
-            {save.error.message}
+            {failure}
           </p>
         )}
 

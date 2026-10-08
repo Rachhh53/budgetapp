@@ -12,6 +12,7 @@ const CHECKING: Account = {
   subtypeLabel: null,
   color: "#0f766e",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: { id: 10, date: "2026-10-02", amountCents: 170510, note: null },
 };
 const SAVINGS: Account = {
@@ -22,6 +23,7 @@ const SAVINGS: Account = {
   subtypeLabel: "High-yield",
   color: "#c2410c",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: { id: 11, date: "2026-09-30", amountCents: 842000, note: null },
 };
 const CARD: Account = {
@@ -32,6 +34,7 @@ const CARD: Account = {
   subtypeLabel: null,
   color: "#4338ca",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: null,
 };
 const OLD: Account = { ...SAVINGS, id: 4, name: "Old Savings", archived: true, latestBalance: null };
@@ -86,7 +89,7 @@ describe("accounts screen", () => {
       "POST /api/accounts": (body) => {
         const created = { ...(body as Omit<Account, "id" | "latestBalance">), id: 9, latestBalance: null };
         accounts = [...accounts, created];
-        return { status: 201, data: { account: created, balances: [] } satisfies AccountDetail };
+        return { status: 201, data: { account: created, balances: [], interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null }, rates: [] } satisfies AccountDetail };
       },
     });
     renderApp("/accounts");
@@ -113,6 +116,7 @@ describe("accounts screen", () => {
         institution: "Coastal Credit Union",
         color: "#7e22ce",
         archived: false,
+        lowBalanceThresholdCents: null,
       },
     ]);
     const investments = await screen.findByRole("region", { name: "Investments" });

@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ACCOUNTS_KEY } from "./accounts";
+import { BUCKETS_KEY } from "./buckets";
 import { CATEGORIES_KEY, TAGS_KEY } from "./categories";
 import { api } from "./client";
 import { PAY_KEY, type WeekendRule } from "./income";
 
-/** The kinds of recurring item that can be added today. Bucket moves arrive with buckets. */
-export const ITEM_KINDS = ["bill", "transfer", "budget", "card_payment"] as const;
+/** The kinds of recurring item. A bucket move sets money aside inside one account. */
+export const ITEM_KINDS = ["bill", "transfer", "budget", "card_payment", "bucket_move"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
 export type AmountMode = "per_occurrence" | "annual";
@@ -52,6 +54,10 @@ export interface ItemTerms {
   schedule: ItemSchedule;
   /** For `every_pay_period`: how many days into the period it is dated. 0 is payday. */
   daysAfterPayday: number;
+  /** The bucket a bucket move, or a transfer, puts its money in; `null` otherwise. */
+  bucketId: number | null;
+  /** The bucket a share of a bill is set aside in every paycheck; `null` when it is not saved up for. */
+  saveUpBucketId: number | null;
 }
 
 /** The next occurrence still to pay. */
@@ -81,6 +87,8 @@ export interface Item extends ItemTerms {
   tagIds: number[];
   perOccurrenceCents: number;
   perYearCents: number;
+  /** What the next paycheck sets aside for it; `null` when it is not saved up for, or is fully saved. */
+  saveUpPerPaycheckCents: number | null;
   /** `null` when nothing is due in the coming year. */
   next: NextOccurrence | null;
   /** Every version, oldest first. */
@@ -103,13 +111,18 @@ export function useItems() {
   return useQuery({ queryKey: ITEMS_KEY, queryFn: () => api.get<Item[]>("/api/items") });
 }
 
-/** An item changes what pay periods add up to and how much each category and tag is used. */
+/**
+ * An item changes what pay periods add up to, each account's chart, what buckets hold, and
+ * how much each category and tag is used.
+ */
 function useRefreshItems() {
   const queryClient = useQueryClient();
   return () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
       queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+      queryClient.invalidateQueries({ queryKey: BUCKETS_KEY }),
       queryClient.invalidateQueries({ queryKey: CATEGORIES_KEY }),
       queryClient.invalidateQueries({ queryKey: TAGS_KEY }),
     ]);
@@ -150,6 +163,8 @@ export function useChangeItemAmount() {
         placement: item.placement,
         schedule: item.schedule,
         daysAfterPayday: item.daysAfterPayday,
+        bucketId: item.bucketId,
+        saveUpBucketId: item.saveUpBucketId,
         effectiveFrom,
       };
       return api.put<Item>(`/api/items/${item.id}`, input);

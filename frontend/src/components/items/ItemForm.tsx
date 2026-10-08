@@ -1,5 +1,6 @@
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
+import { useBuckets } from "../../api/buckets";
 import type { Category, Tag } from "../../api/categories";
 import {
   type AmountMode,
@@ -95,7 +96,42 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const [note, setNote] = useState(item?.note ?? "");
   const [archived, setArchived] = useState(item?.archived ?? false);
   const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
+  const [bucketId, setBucketId] = useState<string | null>(item?.bucketId != null ? String(item.bucketId) : null);
+  const [saveUpBucketId, setSaveUpBucketId] = useState<string | null>(
+    item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
+  );
   const [problem, setProblem] = useState<string>();
+
+  // Archived buckets are left out, unless this item already points at one.
+  const openBuckets = (useBuckets().data ?? []).filter(
+    (bucket) => !bucket.archived || [bucketId, saveUpBucketId].includes(String(bucket.id)),
+  );
+  const bucketOptionsIn = (accountId: string | null) =>
+    openBuckets
+      .filter((bucket) => String(bucket.accountId) === accountId)
+      .map((bucket) => ({ id: String(bucket.id), label: bucket.name, color: bucket.color }));
+  // A bucket move can go into any bucket, so each one says which account it is in.
+  const everyBucketOption = openBuckets.map((bucket) => ({
+    id: String(bucket.id),
+    label: `${bucket.name} · ${accounts.find((account) => account.id === bucket.accountId)?.name ?? "an account"}`,
+    color: bucket.color,
+  }));
+
+  const isBucketMove = kind === "bucket_move";
+  const canSaveUp = kind === "bill" || kind === "budget";
+  const transferBuckets = kind === "transfer" ? bucketOptionsIn(payTo) : [];
+  const saveUpBuckets = canSaveUp ? bucketOptionsIn(payFrom) : [];
+  // A bucket chosen for another account, or another kind of item, no longer applies.
+  const chosenTransferBucket = transferBuckets.some((option) => option.id === bucketId) ? bucketId : null;
+  const chosenSaveUpBucket = saveUpBuckets.some((option) => option.id === saveUpBucketId) ? saveUpBucketId : null;
+
+  const changeKind = (next: ItemKind) => {
+    setKind(next);
+    // Setting money aside is usually done with every paycheck, so start a new bucket move there.
+    if (next === "bucket_move" && !item) {
+      setFrequency("every_pay_period");
+    }
+  };
 
   const movesMoney = kind === "transfer" || kind === "card_payment";
   const everyPaycheck = frequency === "every_pay_period";
@@ -111,7 +147,13 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
 
   /** Turns the form into a request, or explains what still needs attention. */
   const toInput = (): ItemInput | string => {
-    if (payFrom === null) {
+    const moveInto = isBucketMove ? openBuckets.find((bucket) => String(bucket.id) === bucketId) : undefined;
+    if (isBucketMove && moveInto === undefined) {
+      return "Please choose the bucket this money goes into.";
+    }
+    // A bucket move stays inside the bucket's own account.
+    const paidFrom = moveInto !== undefined ? String(moveInto.accountId) : payFrom;
+    if (paidFrom === null) {
       return kind === "transfer" ? "Please choose the account this money comes from." : "Please choose the account this is paid from.";
     }
     if (movesMoney && payTo === null) {
@@ -135,10 +177,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
       amountMode,
       estimate,
       categoryId,
-      payFromAccountId: Number(payFrom),
+      payFromAccountId: Number(paidFrom),
       payToAccountId: movesMoney && payTo !== null ? Number(payTo) : null,
-      // A budget is money set aside to spend, not something that is paid automatically.
-      autopay: kind === "budget" ? false : autopay,
+      // A budget is money set aside to spend, not something that is paid automatically;
+      // a bucket move needs nobody to pay anything.
+      autopay: kind === "budget" ? false : isBucketMove ? true : autopay,
       placement: everyPaycheck ? "due_period" : placement,
       schedule: {
         frequency,
@@ -155,6 +198,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
         weekendRule: schedule?.weekendRule ?? "none",
       },
       daysAfterPayday: everyPaycheck ? daysAfterPayday : 0,
+      bucketId: moveInto !== undefined ? moveInto.id : chosenTransferBucket !== null ? Number(chosenTransferBucket) : null,
+      saveUpBucketId: chosenSaveUpBucket !== null ? Number(chosenSaveUpBucket) : null,
       ...(item ? { effectiveFrom } : {}),
     };
   };
@@ -175,7 +220,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   return (
     <>
       <form onSubmit={submit} className="space-y-4">
-        <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={setKind} />
+        <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={changeKind} />
 
         <div>
           <label htmlFor={`${id}-name`} className={LABEL}>
@@ -188,22 +233,51 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
             maxLength={80}
             required
             autoComplete="off"
-            placeholder={kind === "budget" ? "e.g. Groceries" : "e.g. Electric"}
+            placeholder={kind === "budget" ? "e.g. Groceries" : isBucketMove ? "e.g. Holiday gift fund" : "e.g. Electric"}
             className={INPUT}
           />
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Picker
-            label={kind === "transfer" ? "From" : "Paid from"}
-            noun="account"
-            placeholder="Choose or type an account"
-            options={accountOptions}
-            value={payFrom}
-            onChange={setPayFrom}
-          />
+          {isBucketMove ? (
+            <div>
+              <Picker
+                label="Into bucket"
+                noun="bucket"
+                placeholder="Choose or type a bucket"
+                options={everyBucketOption}
+                value={bucketId}
+                onChange={setBucketId}
+              />
+              <p className={HINT}>
+                {everyBucketOption.length === 0
+                  ? "There are no buckets yet. Add one on a checking or savings account's page first."
+                  : "The money stays in its account. It is set aside, so less shows as available."}
+              </p>
+            </div>
+          ) : (
+            <Picker
+              label={kind === "transfer" ? "From" : "Paid from"}
+              noun="account"
+              placeholder="Choose or type an account"
+              options={accountOptions}
+              value={payFrom}
+              onChange={setPayFrom}
+            />
+          )}
           {kind === "transfer" && (
             <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
+          )}
+          {transferBuckets.length > 0 && (
+            <Picker
+              label="Into bucket (optional)"
+              noun="bucket"
+              placeholder="Leave unassigned"
+              options={transferBuckets}
+              value={chosenTransferBucket}
+              onChange={setBucketId}
+              clearable
+            />
           )}
           {kind === "card_payment" && (
             <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
@@ -334,7 +408,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
             </div>
           )}
 
-          {kind !== "budget" && (
+          {kind !== "budget" && !isBucketMove && (
             <label className="flex min-h-11 items-center gap-3">
               <input
                 type="checkbox"
@@ -347,7 +421,34 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           )}
         </fieldset>
 
-        {!everyPaycheck && (
+        {saveUpBuckets.length > 0 && (
+          <div>
+            <Picker
+              label="Save up for it in a bucket (optional)"
+              noun="bucket"
+              placeholder="Don't save up"
+              options={saveUpBuckets}
+              value={chosenSaveUpBucket}
+              onChange={setSaveUpBucketId}
+              clearable
+            />
+            <p className={HINT}>
+              A share is set aside every paycheck, so the money is there when it's due.
+              {item?.saveUpPerPaycheckCents != null && chosenSaveUpBucket !== null && (
+                <>
+                  {" "}
+                  The next paycheck sets aside{" "}
+                  <span data-amount className="font-semibold text-ink tabular-nums">
+                    {formatCents(item.saveUpPerPaycheckCents)}
+                  </span>
+                  .
+                </>
+              )}
+            </p>
+          </div>
+        )}
+
+        {!everyPaycheck && !isBucketMove && (
           <div>
             <Segmented legend="Which paycheck pays it" options={PLACEMENT_OPTIONS} value={placement} onChange={setPlacement} />
             <p className={HINT}>

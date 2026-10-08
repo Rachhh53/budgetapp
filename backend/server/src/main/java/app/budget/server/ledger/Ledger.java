@@ -1,16 +1,33 @@
 package app.budget.server.ledger;
 
+import app.budget.engine.BasisPoints;
 import app.budget.engine.Money;
+import app.budget.engine.buckets.BucketProjector;
+import app.budget.engine.buckets.BucketProjector.BucketBalance;
+import app.budget.engine.buckets.BucketProjector.InterestDestination;
+import app.budget.engine.buckets.BucketProjector.InterestRule;
+import app.budget.engine.buckets.BucketProjector.PeriodBuckets;
+import app.budget.engine.interest.InterestTerms;
+import app.budget.engine.interest.InterestTerms.RateChange;
 import app.budget.engine.projection.BalanceAnchor;
 import app.budget.engine.projection.BalanceProjector;
+import app.budget.engine.projection.InterestCredit;
 import app.budget.engine.projection.Movement;
 import app.budget.engine.projection.PeriodBalance;
+import app.budget.engine.projection.Projection;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.server.accounts.Account;
 import app.budget.server.accounts.Account.BalanceEntry;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
+import app.budget.server.accounts.InterestRepository;
+import app.budget.server.accounts.InterestRepository.Destination;
+import app.budget.server.accounts.InterestRepository.Rate;
+import app.budget.server.accounts.InterestRepository.RateKind;
+import app.budget.server.accounts.InterestRepository.Settings;
 import app.budget.server.api.Inputs;
+import app.budget.server.buckets.BucketsRepository;
+import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.entries.EntriesRepository;
 import app.budget.server.entries.EntriesRepository.Entry;
 import app.budget.server.entries.EntryKind;
@@ -18,8 +35,13 @@ import app.budget.server.income.PayCalendar;
 import app.budget.server.income.PayCalendar.Paycheck;
 import app.budget.server.items.ItemCalendar;
 import app.budget.server.items.ItemCalendar.Occurrence;
+import app.budget.server.items.ItemKind;
+import app.budget.server.items.ItemsRepository;
+import app.budget.server.items.ItemsRepository.Item;
+import app.budget.server.ledger.BucketMoves.Move;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,25 +51,41 @@ import java.util.stream.Collectors;
 
 /**
  * Puts everything that moves money together, pay period by pay period: paychecks, recurring
- * items, one-off entries and the balances the user entered. The arithmetic is the engine's
- * ({@link BalanceProjector}); this class decides what moves, in which account, on which day.
- * Like the calendars it reads from, nothing here is saved.
+ * items, one-off entries, interest, buckets and the balances the user entered. The arithmetic
+ * is the engine's ({@link BalanceProjector}, {@link BucketProjector}); this class decides what
+ * moves, in which account or bucket, on which day. Like the calendars it reads from, nothing
+ * here is saved.
  */
 public final class Ledger {
 
     /** Accounts whose balance is what is owed: spending raises it and a payment lowers it. */
     private static final Set<String> OWED = Set.of(Inputs.code(AccountType.CREDIT_CARD), Inputs.code(AccountType.LOAN));
 
+    private static final String INTEREST_LABEL = "Interest";
+
     private final AccountsRepository accounts;
     private final EntriesRepository entries;
+    private final ItemsRepository items;
     private final ItemCalendar itemCalendar;
     private final PayCalendar pay;
+    private final BucketsRepository buckets;
+    private final InterestRepository interest;
 
-    public Ledger(AccountsRepository accounts, EntriesRepository entries, ItemCalendar itemCalendar, PayCalendar pay) {
+    public Ledger(
+            AccountsRepository accounts,
+            EntriesRepository entries,
+            ItemsRepository items,
+            ItemCalendar itemCalendar,
+            PayCalendar pay,
+            BucketsRepository buckets,
+            InterestRepository interest) {
         this.accounts = accounts;
         this.entries = entries;
+        this.items = items;
         this.itemCalendar = itemCalendar;
         this.pay = pay;
+        this.buckets = buckets;
+        this.interest = interest;
     }
 
     /**
@@ -56,9 +94,12 @@ public final class Ledger {
      * <p>For a credit card or loan the balance is what is owed, so {@code inCents} is what was
      * added to it (charges) and {@code outCents} what came off it (payments).
      *
-     * @param startingOn the period's first day, or the day of a balance entered during it
-     * @param entered    true when the starting balance is one the user entered during the period
-     * @param lowestCents the lowest end-of-day balance in the period
+     * @param startingOn     the period's first day, or the day of a balance entered during it
+     * @param entered        true when the starting balance is one the user entered during the period
+     * @param lowestCents    the lowest end-of-day balance in the period
+     * @param bucketsCents   what the account's buckets hold at the end of the period
+     * @param availableCents the ending balance less what is in buckets
+     * @param lowBalance     true when the user asked for a warning and the balance dips below it
      */
     public record AccountPeriod(
             long accountId,
@@ -69,13 +110,24 @@ public final class Ledger {
             long outCents,
             long endingCents,
             long lowestCents,
-            LocalDate lowestOn) {}
+            LocalDate lowestOn,
+            long bucketsCents,
+            long availableCents,
+            boolean lowBalance) {}
+
+    /** One bucket across one pay period; {@code endingCents − startingCents} is what the period moved. */
+    public record BucketPeriod(long bucketId, long accountId, long startingCents, long endingCents) {}
+
+    /** A month's estimated interest arriving in an account. */
+    public record InterestLine(long accountId, LocalDate date, long amountCents, int rateBp) {}
 
     /**
      * A pay period in the list of them.
      *
      * @param projectedEndingCents the primary paycheck's account at the end of the period;
      *                             {@code null} until a balance has been entered for it
+     * @param availableCents       that ending balance less what is in the account's buckets
+     * @param lowBalance           true when that account dips below the warning the user set
      */
     public record PeriodSummary(
             LocalDate start,
@@ -85,7 +137,9 @@ public final class Ledger {
             long incomeCents,
             List<Paycheck> paychecks,
             Long projectedEndingCents,
-            Long lowestCents) {}
+            Long lowestCents,
+            Long availableCents,
+            boolean lowBalance) {}
 
     /** @param primarySourceId {@code null} until an income source exists; then there are no periods either */
     public record Periods(Long primarySourceId, Long primaryAccountId, List<PeriodSummary> periods) {}
@@ -97,7 +151,10 @@ public final class Ledger {
      * @param carriedOver items from an earlier period that are still unpaid, so their money comes
      *                    out of this one: what makes the figures differ from the list above
      * @param entries     one-off entries dated in this period
+     * @param interest    estimated interest counted in this period's figures
      * @param accounts    every account a balance is known for
+     * @param buckets     every open bucket
+     * @param bucketMoves what moved those buckets during the period, earliest first
      */
     public record PeriodDetail(
             LocalDate start,
@@ -109,26 +166,37 @@ public final class Ledger {
             List<Occurrence> occurrences,
             List<Occurrence> carriedOver,
             List<Entry> entries,
-            List<AccountPeriod> accounts) {}
+            List<InterestLine> interest,
+            List<AccountPeriod> accounts,
+            List<BucketPeriod> buckets,
+            List<Move> bucketMoves) {}
+
+    /** One account at the end of one pay period: a point on its chart. */
+    public record AccountPoint(LocalDate start, LocalDate end, long endingCents, long lowestCents, long availableCents) {}
 
     /** The pay periods overlapping {@code from}–{@code through}, each with its projected ending balance. */
     public Periods periods(LocalDate from, LocalDate through) {
         PayCalendar.Periods found = pay.periods(from, through);
         Long primaryAccountId = pay.primaryAccountId().orElse(null);
-        Map<LocalDate, PeriodBalance> primary = new HashMap<>();
+        Map<LocalDate, AccountPeriod> primary = new HashMap<>();
         if (primaryAccountId != null) {
-            for (PeriodBalance balance : workings(payPeriods(found.periods())).balances().getOrDefault(primaryAccountId, List.of())) {
-                primary.put(balance.period().start(), balance);
+            Workings workings = workings(payPeriods(found.periods()));
+            List<PeriodBalance> balances = workings.projection(primaryAccountId).balances();
+            List<AccountPeriod> figures = accountPeriods(workings, accounts.find(primaryAccountId).orElseThrow());
+            for (int i = 0; i < balances.size(); i++) {
+                primary.put(balances.get(i).period().start(), figures.get(i));
             }
         }
         List<PeriodSummary> summaries = found.periods().stream()
                 .map(period -> {
-                    PeriodBalance balance = primary.get(period.start());
+                    AccountPeriod account = primary.get(period.start());
                     return new PeriodSummary(
                             period.start(), period.end(), period.scheduledPayday(), period.current(),
                             period.incomeCents(), period.paychecks(),
-                            balance == null ? null : (Long) balance.ending().cents(),
-                            balance == null ? null : (Long) balance.lowest().cents());
+                            account == null ? null : (Long) account.endingCents(),
+                            account == null ? null : (Long) account.lowestCents(),
+                            account == null ? null : (Long) account.availableCents(),
+                            account != null && account.lowBalance());
                 })
                 .toList();
         return new Periods(found.primarySourceId(), primaryAccountId, summaries);
@@ -146,14 +214,26 @@ public final class Ledger {
         Workings workings = workings(payPeriods(List.of(period)));
 
         List<AccountPeriod> accountPeriods = new ArrayList<>();
+        List<InterestLine> interestLines = new ArrayList<>();
         for (Account account : accounts.all()) {
-            for (PeriodBalance balance : workings.balances().getOrDefault(account.id(), List.of())) {
-                accountPeriods.add(new AccountPeriod(
-                        account.id(), balance.starting().cents(), balance.startingOn(), balance.entered(),
-                        balance.in().cents(), balance.out().cents(), balance.ending().cents(),
-                        balance.lowest().cents(), balance.lowestOn()));
+            for (AccountPeriod figures : accountPeriods(workings, account)) {
+                accountPeriods.add(figures);
+                // Interest dated before a balance entered this period is already in that balance.
+                for (InterestCredit credit : workings.projection(account.id()).interest()) {
+                    if (!credit.date().isBefore(figures.startingOn()) && !credit.date().isAfter(period.end())) {
+                        interestLines.add(new InterestLine(account.id(), credit.date(), credit.amount().cents(), credit.apy().value()));
+                    }
+                }
             }
         }
+        List<BucketPeriod> bucketPeriods = new ArrayList<>();
+        workings.buckets().forEach((accountId, byPeriod) -> {
+            for (BucketBalance bucket : byPeriod.getFirst().buckets()) {
+                bucketPeriods.add(new BucketPeriod(bucket.bucketId(), accountId, bucket.starting().cents(), bucket.ending().cents()));
+            }
+        });
+        bucketPeriods.sort(Comparator.comparing(BucketPeriod::accountId).thenComparing(BucketPeriod::bucketId));
+
         return Optional.of(new PeriodDetail(
                 period.start(),
                 period.end(),
@@ -163,25 +243,101 @@ public final class Ledger {
                 period.paychecks(),
                 workings.occurrences().stream().filter(occurrence -> start.equals(occurrence.periodStart())).toList(),
                 workings.carried().stream()
-                        .filter(carried -> !carried.countsOn().isBefore(period.start()) && !carried.countsOn().isAfter(period.end()))
+                        .filter(carried -> within(carried.countsOn(), period.start(), period.end()))
                         .map(Carried::occurrence)
                         .toList(),
-                workings.entries().stream()
-                        .filter(entry -> !entry.date().isBefore(period.start()) && !entry.date().isAfter(period.end()))
-                        .toList(),
-                accountPeriods));
+                workings.entries().stream().filter(entry -> within(entry.date(), period.start(), period.end())).toList(),
+                interestLines,
+                accountPeriods,
+                bucketPeriods,
+                workings.bucketMoves().stream().filter(move -> within(move.date(), period.start(), period.end())).toList()));
+    }
+
+    /** What every open bucket holds at the end of {@code day}, by bucket id. */
+    public Map<Long, Long> bucketBalances(LocalDate day) {
+        Map<Long, Long> held = new HashMap<>();
+        for (List<PeriodBuckets> byPeriod : workings(List.of(new PayPeriod(day, day, day))).buckets().values()) {
+            for (BucketBalance bucket : byPeriod.getFirst().buckets()) {
+                held.put(bucket.bucketId(), bucket.ending().cents());
+            }
+        }
+        return held;
+    }
+
+    /**
+     * For each recurring item being saved up for: what the next paycheck sets aside for it.
+     * An item is left out once its next bill is fully saved for.
+     */
+    public Map<Long, Long> nextSaveUps() {
+        LocalDate today = pay.today();
+        Map<Long, Long> next = new HashMap<>();
+        // Moves come back in date order, so the first one seen for an item is its next.
+        for (Move move : workings(List.of(new PayPeriod(today, today, today))).bucketMoves()) {
+            if (move.kind() == BucketMoves.Kind.SAVE_UP && move.itemId() != null && !move.date().isBefore(today)) {
+                next.putIfAbsent(move.itemId(), move.amountCents());
+            }
+        }
+        return next;
+    }
+
+    /** One account at the end of each pay period overlapping {@code from}–{@code through}; empty until it has a balance. */
+    public List<AccountPoint> accountSeries(Account account, LocalDate from, LocalDate through) {
+        Workings workings = workings(pay.payPeriods(from, through));
+        List<PeriodBalance> balances = workings.projection(account.id()).balances();
+        List<AccountPeriod> figures = accountPeriods(workings, account);
+        List<AccountPoint> points = new ArrayList<>();
+        for (int i = 0; i < balances.size(); i++) {
+            PayPeriod period = balances.get(i).period();
+            AccountPeriod at = figures.get(i);
+            points.add(new AccountPoint(period.start(), period.end(), at.endingCents(), at.lowestCents(), at.availableCents()));
+        }
+        return points;
     }
 
     /** What was gathered to project {@code periods}: wider than the periods themselves. */
     private record Workings(
-            List<Occurrence> occurrences, List<Carried> carried, List<Entry> entries, Map<Long, List<PeriodBalance>> balances) {}
+            List<Occurrence> occurrences,
+            List<Carried> carried,
+            List<Entry> entries,
+            Map<Long, Projection> projections,
+            Map<Long, List<PeriodBuckets>> buckets,
+            List<Move> bucketMoves) {
+
+        static final Workings NONE = new Workings(List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of());
+
+        Projection projection(long accountId) {
+            return projections.getOrDefault(accountId, Projection.NONE);
+        }
+    }
 
     /** An unpaid occurrence whose money was carried forward to the day a balance was entered. */
     private record Carried(Occurrence occurrence, LocalDate countsOn) {}
 
+    /** One account's figures for each period it has a balance in, in period order. */
+    private static List<AccountPeriod> accountPeriods(Workings workings, Account account) {
+        Map<LocalDate, PeriodBuckets> inBuckets = new HashMap<>();
+        for (PeriodBuckets period : workings.buckets().getOrDefault(account.id(), List.of())) {
+            inBuckets.put(period.period().start(), period);
+        }
+        List<AccountPeriod> figures = new ArrayList<>();
+        for (PeriodBalance balance : workings.projection(account.id()).balances()) {
+            PeriodBuckets held = inBuckets.get(balance.period().start());
+            long bucketsCents = held == null ? 0 : held.total().cents();
+            Long threshold = account.lowBalanceThresholdCents();
+            figures.add(new AccountPeriod(
+                    account.id(), balance.starting().cents(), balance.startingOn(), balance.entered(),
+                    balance.in().cents(), balance.out().cents(), balance.ending().cents(),
+                    balance.lowest().cents(), balance.lowestOn(),
+                    bucketsCents,
+                    balance.ending().cents() - bucketsCents,
+                    threshold != null && balance.lowest().cents() < threshold));
+        }
+        return figures;
+    }
+
     private Workings workings(List<PayPeriod> periods) {
         if (periods.isEmpty()) {
-            return new Workings(List.of(), List.of(), List.of(), Map.of());
+            return Workings.NONE;
         }
         Map<Long, List<BalanceEntry>> entered = accounts.allBalances();
         LocalDate first = periods.getFirst().start();
@@ -201,7 +357,9 @@ public final class Ledger {
             }
         }
 
-        Map<Long, String> types = accounts.all().stream().collect(Collectors.toMap(Account::id, Account::type));
+        List<Account> allAccounts = accounts.all();
+        Map<Long, String> types = allAccounts.stream().collect(Collectors.toMap(Account::id, Account::type));
+        Set<Long> cash = allAccounts.stream().filter(AccountType::holdsCash).map(Account::id).collect(Collectors.toSet());
         Map<Long, List<Movement>> movements = new HashMap<>();
 
         for (Paycheck paycheck : pay.paychecks(from, last)) {
@@ -219,10 +377,26 @@ public final class Ledger {
             stillToPay.put(accountId, new StillToPay(newest, currentPeriod));
         });
 
-        List<Occurrence> occurrences = itemCalendar.expand(from, last).occurrences();
+        // A bucket holds everything moved into it since it was opened, and a bill saved up for
+        // looks ahead to when it is next due, so buckets widen the stretch occurrences are needed for.
+        List<Bucket> open = buckets.all().stream().filter(bucket -> !bucket.archived()).toList();
+        List<Item> active = items.all().stream().filter(item -> !item.archived()).toList();
+        LocalDate expandFrom = open.stream().map(Bucket::openedOn).filter(from::isAfter).min(Comparator.naturalOrder()).orElse(from);
+        LocalDate expandTo = open.isEmpty() ? last : last.plusMonths(BucketMoves.lookAheadMonths(active, last));
+        ItemCalendar.Expansion expansion = itemCalendar.expand(active, expandFrom, expandTo);
+
+        // A schedule only reaches a bucket from the day it was opened, so adding a bucket never
+        // back-fills it. Before that day a transfer still happens, into no bucket; a bucket
+        // move has nothing to do at all, so it is not listed.
+        Map<Long, LocalDate> openedOn = open.stream().collect(Collectors.toMap(Bucket::id, Bucket::openedOn));
+        List<Occurrence> occurrences = expansion.occurrences().stream()
+                .map(occurrence -> reachesItsBucket(occurrence, openedOn) ? occurrence : occurrence.withoutBucket())
+                .filter(occurrence -> occurrence.kind() != ItemKind.BUCKET_MOVE || occurrence.bucketId() != null)
+                .toList();
         List<Carried> carried = new ArrayList<>();
         for (Occurrence occurrence : occurrences) {
-            if (occurrence.skipped()) {
+            // A bucket move sets money aside inside its account: the account's balance does not change.
+            if (occurrence.skipped() || occurrence.kind() == ItemKind.BUCKET_MOVE) {
                 continue;
             }
             long payFrom = occurrence.payFromAccountId();
@@ -248,14 +422,77 @@ public final class Ledger {
             }
         }
 
-        Map<Long, List<PeriodBalance>> balances = new HashMap<>();
+        Map<Long, Settings> interestSettings = interest.allSettings();
+        Map<Long, List<Rate>> apys = interest.allRates(RateKind.APY);
+        Map<Long, Projection> projections = new HashMap<>();
         entered.forEach((accountId, forAccount) -> {
             List<BalanceAnchor> anchors = forAccount.stream()
                     .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents())))
                     .toList();
-            balances.put(accountId, BalanceProjector.project(anchors, movements.getOrDefault(accountId, List.of()), periods));
+            InterestTerms terms = cash.contains(accountId)
+                    ? interestTerms(interestSettings.get(accountId), apys.get(accountId))
+                    : null;
+            projections.put(accountId, BalanceProjector.project(anchors, movements.getOrDefault(accountId, List.of()), periods, terms));
         });
-        return new Workings(occurrences, carried, oneOffs, balances);
+
+        List<Move> bucketMoves = new ArrayList<>(open.isEmpty()
+                ? List.<Move>of()
+                : BucketMoves.derive(open, buckets.allChanges(), entries.withBucketSplits(), active, occurrences, expansion.periods()));
+        Map<Long, List<PeriodBuckets>> bucketsByAccount = new HashMap<>();
+        open.stream().collect(Collectors.groupingBy(Bucket::accountId)).forEach((accountId, ofAccount) -> {
+            Set<Long> ids = ofAccount.stream().map(Bucket::id).collect(Collectors.toSet());
+            BucketProjector.Result result = BucketProjector.project(
+                    ofAccount.stream().map(bucket -> new BucketProjector.Bucket(bucket.id(), bucket.openedOn())).toList(),
+                    bucketMoves.stream()
+                            .filter(move -> ids.contains(move.bucketId()))
+                            .map(move -> new BucketProjector.Move(move.bucketId(), move.date(), Money.ofCents(move.amountCents())))
+                            .toList(),
+                    projections.getOrDefault(accountId, Projection.NONE).interest(),
+                    interestRule(interestSettings.get(accountId), ids),
+                    periods);
+            bucketsByAccount.put(accountId, result.periods());
+            for (BucketProjector.Move share : result.interestShares()) {
+                bucketMoves.add(new Move(
+                        share.bucketId(), share.date(), share.amount().cents(), BucketMoves.Kind.INTEREST, INTEREST_LABEL, null));
+            }
+        });
+        bucketMoves.sort(Comparator.comparing(Move::date));
+        return new Workings(occurrences, carried, oneOffs, projections, bucketsByAccount, bucketMoves);
+    }
+
+    /** True unless the occurrence names a bucket that is archived, or was not open yet on the day it counts. */
+    private static boolean reachesItsBucket(Occurrence occurrence, Map<Long, LocalDate> openedOn) {
+        if (occurrence.bucketId() == null) {
+            return true;
+        }
+        LocalDate opened = openedOn.get(occurrence.bucketId());
+        return opened != null && !occurrence.payBy().isBefore(opened);
+    }
+
+    /**
+     * How an account earns interest; {@code null} when no APY has been entered for it. Until
+     * the user says otherwise, interest is credited on the last day of the month.
+     */
+    private static InterestTerms interestTerms(Settings settings, List<Rate> apys) {
+        if (apys == null || apys.isEmpty()) {
+            return null;
+        }
+        return new InterestTerms(
+                (settings == null ? Settings.DEFAULT : settings).creditDay(),
+                apys.stream().map(rate -> new RateChange(rate.effectiveDate(), BasisPoints.of(rate.rateBp()))).toList());
+    }
+
+    /** Where an account's interest goes. A bucket that has since been archived no longer receives any. */
+    private static InterestRule interestRule(Settings settings, Set<Long> openBuckets) {
+        if (settings == null || settings.destination() == Destination.UNASSIGNED) {
+            return InterestRule.UNASSIGNED;
+        }
+        if (settings.destination() == Destination.PROPORTIONAL) {
+            return new InterestRule(InterestDestination.PROPORTIONAL, null);
+        }
+        return openBuckets.contains(settings.destinationBucketId())
+                ? new InterestRule(InterestDestination.BUCKET, settings.destinationBucketId())
+                : InterestRule.UNASSIGNED;
     }
 
     /**
@@ -296,6 +533,10 @@ public final class Ledger {
         Money amount = Money.ofCents(cents);
         movements.computeIfAbsent(accountId, id -> new ArrayList<>())
                 .add(new Movement(date, raisesBalance ? amount : amount.negate(), outstanding));
+    }
+
+    private static boolean within(LocalDate date, LocalDate from, LocalDate to) {
+        return !date.isBefore(from) && !date.isAfter(to);
     }
 
     private static List<PayPeriod> payPeriods(List<PayCalendar.Period> periods) {

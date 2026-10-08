@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account } from "../../src/api/accounts";
+import type { Bucket } from "../../src/api/buckets";
 import type { Category, Tag } from "../../src/api/categories";
 import type { Item } from "../../src/api/items";
 import { todayIso } from "../../src/lib/dates";
@@ -15,6 +16,7 @@ const CHECKING: Account = {
   subtypeLabel: null,
   color: "#0f766e",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: null,
 };
 const SAVINGS: Account = { ...CHECKING, id: 2, name: "Rainy Day Savings", type: "savings", color: "#0369a1" };
@@ -50,6 +52,9 @@ const RENT: Item = {
     weekendRule: "none",
   },
   daysAfterPayday: 0,
+  bucketId: null,
+  saveUpBucketId: null,
+  saveUpPerPaycheckCents: null,
   perOccurrenceCents: 155000,
   perYearCents: 1860000,
   // Due on payday and paid by hand, so the paycheck before pays for it.
@@ -94,6 +99,19 @@ const TO_SAVINGS: Item = {
   perYearCents: 240000,
   next: { scheduledDate: "2026-11-02", dueDate: "2026-11-02", periodStart: "2026-11-01", early: false },
 };
+
+const GIFTS: Bucket = {
+  id: 7,
+  accountId: 1,
+  name: "Holiday gifts",
+  color: "#b45309",
+  goalCents: 60000,
+  note: null,
+  archived: false,
+  openedOn: "2026-09-01",
+  balanceCents: 15000,
+};
+const EMERGENCY: Bucket = { ...GIFTS, id: 8, accountId: 2, name: "Emergency fund", goalCents: null };
 
 function withItems(items: Item[] = [ELECTRIC, GROCERIES, RENT, TO_SAVINGS], overrides: Parameters<typeof fakeBackend>[0] = {}) {
   return fakeBackend({
@@ -272,6 +290,8 @@ describe("recurring items screen", () => {
           weekendRule: "none",
         },
         daysAfterPayday: 0,
+        bucketId: null,
+        saveUpBucketId: null,
       },
     ]);
   });
@@ -306,6 +326,68 @@ describe("recurring items screen", () => {
       daysAfterPayday: 3,
       schedule: { frequency: "every_pay_period", startDate: todayIso(), day1: null },
     });
+  });
+
+  it("adds a bucket move: money set aside in a bucket every paycheck", async () => {
+    const fetchMock = withItems([], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
+      "POST /api/items": () => ({ status: 201, data: GROCERIES }),
+    });
+    renderApp("/recurring");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "+ Add item" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Bucket move" }));
+
+    // The bucket says which account it is in, and nothing has to be paid by anyone.
+    expect(within(dialog).queryByRole("combobox", { name: "Paid from" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: "Autopay" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("every_pay_period");
+
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Gift fund");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "50");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the bucket this money goes into.");
+
+    await pick(dialog, "Into bucket", "Holiday");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const [sent] = bodiesSentTo(fetchMock, "POST /api/items") as [Record<string, unknown>];
+    expect(sent).toMatchObject({
+      kind: "bucket_move",
+      amountCents: 5000,
+      bucketId: 7,
+      payFromAccountId: 1,
+      payToAccountId: null,
+      autopay: true,
+      saveUpBucketId: null,
+      schedule: { frequency: "every_pay_period" },
+    });
+  });
+
+  it("saves up for a bill in a bucket of the account it is paid from", async () => {
+    const savedUpFor: Item = { ...ELECTRIC, saveUpBucketId: 7, saveUpPerPaycheckCents: 7000 };
+    const fetchMock = withItems([savedUpFor], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
+      "PUT /api/items/2": () => ({ status: 200, data: savedUpFor }),
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    const saveUp = within(dialog).getByRole("combobox", { name: "Save up for it in a bucket (optional)" });
+    expect(saveUp).toHaveValue("Holiday gifts");
+    expect(within(dialog).getByText(/The next paycheck sets aside/)).toHaveTextContent("$70.00");
+    // Only the buckets of the account it is paid from are offered.
+    await userEvent.click(saveUp);
+    expect(within(dialog).queryByRole("option", { name: /Emergency fund/ })).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")[0]).toMatchObject({ kind: "bill", saveUpBucketId: 7, bucketId: null });
   });
 
   it("adds a yearly bill entered as an annual amount", async () => {

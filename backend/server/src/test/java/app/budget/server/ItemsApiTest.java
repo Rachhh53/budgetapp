@@ -200,7 +200,7 @@ class ItemsApiTest extends ApiTestBase {
             assertError(bill("", 100, MONTHLY_5TH, ""), "Please add a name for this item.");
             assertError(bill("Rent", 100, MONTHLY_5TH, "").replace("\"bill\"", "\"rent\""), "Please choose the type of item from the list.");
             assertError(bill("Rent", 100, MONTHLY_5TH, "").replace("\"bill\"", "\"bucket_move\""),
-                    "Bucket moves aren't available yet — they arrive together with buckets.");
+                    "Please choose the bucket this money goes into.");
             assertError(bill("Rent", -1, MONTHLY_5TH, ""), "The amount can't be less than zero.");
             assertError("{\"name\":\"Rent\",\"kind\":\"bill\",\"payFromAccountId\":%d,\"schedule\":%s}".formatted(checking, MONTHLY_5TH),
                     "The amount is missing. Please enter an amount.");

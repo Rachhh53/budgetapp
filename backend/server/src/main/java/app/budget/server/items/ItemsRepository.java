@@ -7,6 +7,7 @@ import app.budget.server.schedule.ScheduleRules;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,9 +30,18 @@ public final class ItemsRepository {
     /**
      * A recurring item with every version of it.
      *
-     * @param versions oldest first; never empty
+     * @param createdOn the day it was added: saving up for it cannot have started any earlier
+     * @param versions  oldest first; never empty
      */
-    public record Item(long id, String name, ItemKind kind, String note, boolean archived, List<Long> tagIds, List<Version> versions) {
+    public record Item(
+            long id,
+            String name,
+            ItemKind kind,
+            String note,
+            boolean archived,
+            LocalDate createdOn,
+            List<Long> tagIds,
+            List<Version> versions) {
 
         /** The version in force on {@code date}. The earliest one also covers every date before it. */
         public Version versionOn(LocalDate date) {
@@ -48,7 +58,12 @@ public final class ItemsRepository {
     /** One version of an item: what was true from {@code effectiveFrom} until the next version. */
     public record Version(long id, LocalDate effectiveFrom, Terms terms) {}
 
-    /** What a "this and all future" edit can change. Amounts are whole cents. */
+    /**
+     * What a "this and all future" edit can change. Amounts are whole cents.
+     *
+     * @param bucketId       the bucket a bucket move, or a transfer, puts its money in; {@code null} otherwise
+     * @param saveUpBucketId the bucket a share of the bill is set aside in every paycheck; {@code null} when it is not saved up for
+     */
     public record Terms(
             long amountCents,
             AmountMode amountMode,
@@ -59,11 +74,13 @@ public final class ItemsRepository {
             boolean autopay,
             Placement placement,
             ScheduleRule schedule,
-            int daysAfterPayday) {
+            int daysAfterPayday,
+            Long bucketId,
+            Long saveUpBucketId) {
 
         Terms withSchedule(ScheduleRule rule) {
             return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
-                    autopay, placement, rule, daysAfterPayday);
+                    autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId);
         }
     }
 
@@ -217,10 +234,10 @@ public final class ItemsRepository {
     }
 
     /** The columns of {@code items}, before versions and tags are attached. */
-    private record ItemRow(long id, String name, ItemKind kind, String note, boolean archived) {}
+    private record ItemRow(long id, String name, ItemKind kind, String note, boolean archived, LocalDate createdOn) {}
 
-    private static List<ItemRow> rows(Handle handle, String clause, Long id) {
-        var query = handle.createQuery("SELECT id, name, kind, note, archived FROM items " + clause);
+    private List<ItemRow> rows(Handle handle, String clause, Long id) {
+        var query = handle.createQuery("SELECT id, name, kind, note, archived, created_at FROM items " + clause);
         if (id != null) {
             query.bind("id", id);
         }
@@ -229,7 +246,9 @@ public final class ItemsRepository {
                 rs.getString("name"),
                 ItemKind.valueOf(rs.getString("kind").toUpperCase(Locale.ROOT)),
                 rs.getString("note"),
-                rs.getBoolean("archived"))).list();
+                rs.getBoolean("archived"),
+                // Stored as an instant; the day it was on this PC is what counts.
+                Instant.parse(rs.getString("created_at")).atZone(clock.getZone()).toLocalDate())).list();
     }
 
     private static Item complete(Handle handle, ItemRow row) {
@@ -237,7 +256,8 @@ public final class ItemsRepository {
                 .bind("id", row.id())
                 .mapTo(Long.class)
                 .list();
-        return new Item(row.id(), row.name(), row.kind(), row.note(), row.archived(), tagIds, versions(handle, row.id()));
+        return new Item(
+                row.id(), row.name(), row.kind(), row.note(), row.archived(), row.createdOn(), tagIds, versions(handle, row.id()));
     }
 
     /** A version row before its schedule is loaded. */
@@ -261,7 +281,9 @@ public final class ItemsRepository {
                                 rs.getBoolean("autopay"),
                                 Placement.valueOf(rs.getString("placement").toUpperCase(Locale.ROOT)),
                                 null,
-                                rs.getInt("days_after_payday"))))
+                                rs.getInt("days_after_payday"),
+                                nullableLong(rs, "bucket_id"),
+                                nullableLong(rs, "save_up_bucket_id"))))
                 .list();
         List<Version> versions = new ArrayList<>();
         for (VersionRow row : rows) {
@@ -276,9 +298,10 @@ public final class ItemsRepository {
         handle.createUpdate("""
                         INSERT INTO item_versions
                             (item_id, effective_from, amount, amount_mode, is_estimate, category_id, pay_from_account_id,
-                             pay_to_account_id, autopay, placement, schedule_rule_id, days_after_payday)
+                             pay_to_account_id, autopay, placement, schedule_rule_id, days_after_payday,
+                             bucket_id, save_up_bucket_id)
                         VALUES (:itemId, :effectiveFrom, :amount, :amountMode, :estimate, :categoryId, :payFrom,
-                                :payTo, :autopay, :placement, :ruleId, :daysAfterPayday)
+                                :payTo, :autopay, :placement, :ruleId, :daysAfterPayday, :bucketId, :saveUpBucketId)
                         """)
                 .bind("itemId", itemId)
                 .bind("effectiveFrom", effectiveFrom.toString())
@@ -292,6 +315,8 @@ public final class ItemsRepository {
                 .bind("placement", Inputs.code(terms.placement()))
                 .bind("ruleId", ruleId)
                 .bind("daysAfterPayday", terms.daysAfterPayday())
+                .bind("bucketId", terms.bucketId())
+                .bind("saveUpBucketId", terms.saveUpBucketId())
                 .execute();
     }
 

@@ -9,6 +9,8 @@ import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
+import app.budget.server.buckets.BucketsRepository;
+import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.income.PayCalendar;
@@ -19,6 +21,7 @@ import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Override;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.items.ItemsRepository.Version;
+import app.budget.server.ledger.Ledger;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
@@ -45,6 +48,8 @@ public final class ItemsRoutes {
     private final AccountsRepository accounts;
     private final CategoriesRepository categories;
     private final TagsRepository tags;
+    private final BucketsRepository buckets;
+    private final Ledger ledger;
 
     public ItemsRoutes(
             ItemsRepository items,
@@ -52,13 +57,17 @@ public final class ItemsRoutes {
             PayCalendar pay,
             AccountsRepository accounts,
             CategoriesRepository categories,
-            TagsRepository tags) {
+            TagsRepository tags,
+            BucketsRepository buckets,
+            Ledger ledger) {
         this.items = items;
         this.calendar = calendar;
         this.pay = pay;
         this.accounts = accounts;
         this.categories = categories;
         this.tags = tags;
+        this.buckets = buckets;
+        this.ledger = ledger;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -73,8 +82,12 @@ public final class ItemsRoutes {
     /**
      * Request body for creating or changing an item. Amounts are whole cents.
      *
-     * @param effectiveFrom when changing: the change applies from this date on, and earlier
-     *                      occurrences keep what they had. Defaults to today.
+     * @param effectiveFrom  when changing: the change applies from this date on, and earlier
+     *                       occurrences keep what they had. Defaults to today.
+     * @param bucketId       a bucket move: the bucket the money goes into (its account is the item's
+     *                       account). A transfer: optionally, a bucket in the account it goes to.
+     * @param saveUpBucketId a bill or budget: optionally, a bucket in the account it is paid from,
+     *                       to set a share aside in every paycheck
      */
     public record ItemInput(
             String name,
@@ -92,7 +105,9 @@ public final class ItemsRoutes {
             String placement,
             ItemScheduleDto schedule,
             Integer daysAfterPayday,
-            LocalDate effectiveFrom) {}
+            LocalDate effectiveFrom,
+            Long bucketId,
+            Long saveUpBucketId) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -114,6 +129,8 @@ public final class ItemsRoutes {
      * An item as the API returns it: the version in force today, plus what it works out to.
      *
      * @param amountCents the amount as the user entered it (a yearly total when {@code amountMode} is annual)
+     * @param saveUpPerPaycheckCents what the next paycheck sets aside for it; {@code null} when it is
+     *                    not saved up for, or nothing more needs setting aside
      * @param next        the next occurrence still to pay; {@code null} when there is none in the coming year
      * @param history     every version, oldest first: the item's price history
      */
@@ -134,6 +151,9 @@ public final class ItemsRoutes {
             Placement placement,
             ItemScheduleDto schedule,
             int daysAfterPayday,
+            Long bucketId,
+            Long saveUpBucketId,
+            Long saveUpPerPaycheckCents,
             long perOccurrenceCents,
             long perYearCents,
             Next next,
@@ -228,10 +248,15 @@ public final class ItemsRoutes {
     private List<ItemView> views(List<Item> chosen) {
         // One pass over the calendar for all of them, rather than one per item.
         Map<Long, Occurrence> next = calendar.nextByItem(chosen.stream().filter(item -> !item.archived()).toList());
-        return chosen.stream().map(item -> view(item, Optional.ofNullable(next.get(item.id())))).toList();
+        boolean anySavedUpFor = chosen.stream()
+                .anyMatch(item -> !item.archived() && item.versionOn(pay.today()).terms().saveUpBucketId() != null);
+        Map<Long, Long> saveUps = anySavedUpFor ? ledger.nextSaveUps() : Map.of();
+        return chosen.stream()
+                .map(item -> view(item, Optional.ofNullable(next.get(item.id())), saveUps.get(item.id())))
+                .toList();
     }
 
-    private ItemView view(Item item, Optional<Occurrence> next) {
+    private ItemView view(Item item, Optional<Occurrence> next, Long saveUpPerPaycheckCents) {
         Terms terms = item.versionOn(pay.today()).terms();
         Amounts amounts = calendar.amounts(terms);
         return new ItemView(
@@ -251,6 +276,9 @@ public final class ItemsRoutes {
                 terms.placement(),
                 ItemScheduleDto.of(terms.schedule()),
                 terms.daysAfterPayday(),
+                terms.bucketId(),
+                terms.saveUpBucketId(),
+                saveUpPerPaycheckCents,
                 amounts.perOccurrenceCents(),
                 amounts.perYearCents(),
                 next.map(occurrence -> new Next(
@@ -265,11 +293,7 @@ public final class ItemsRoutes {
     }
 
     private static ItemKind kind(ItemInput input) {
-        ItemKind kind = Inputs.choice(ItemKind.class, input.kind(), "the type of item");
-        if (kind == ItemKind.BUCKET_MOVE) {
-            throw ApiException.badRequest("Bucket moves aren't available yet — they arrive together with buckets.");
-        }
-        return kind;
+        return Inputs.choice(ItemKind.class, input.kind(), "the type of item");
     }
 
     private Identity identity(ItemInput input) {
@@ -297,7 +321,10 @@ public final class ItemsRoutes {
             throw ApiException.badRequest("Please choose the category from the list.");
         }
 
-        Account from = input.payFromAccountId() == null ? null : accounts.find(input.payFromAccountId()).orElse(null);
+        // A bucket move stays inside one account: the bucket says which, so nothing else has to.
+        Bucket into = kind == ItemKind.BUCKET_MOVE ? bucket(input.bucketId(), "Please choose the bucket this money goes into.") : null;
+        Long payFromId = into != null ? (Long) into.accountId() : input.payFromAccountId();
+        Account from = payFromId == null ? null : accounts.find(payFromId).orElse(null);
         if (from == null) {
             throw ApiException.badRequest("Please choose the account this is paid from.");
         }
@@ -319,6 +346,24 @@ public final class ItemsRoutes {
             payTo = to.id();
         }
 
+        // Only the kinds that use a bucket keep one; the form sends whatever was last chosen.
+        Long bucketId = into != null ? (Long) into.id() : null;
+        if (kind == ItemKind.TRANSFER && input.bucketId() != null) {
+            Bucket inOtherAccount = bucket(input.bucketId(), "Please choose the bucket from the list.");
+            if (inOtherAccount.accountId() != payTo) {
+                throw ApiException.badRequest("Please choose a bucket in the account this money goes to.");
+            }
+            bucketId = inOtherAccount.id();
+        }
+        Long saveUpBucketId = null;
+        if ((kind == ItemKind.BILL || kind == ItemKind.BUDGET) && input.saveUpBucketId() != null) {
+            Bucket saveUp = bucket(input.saveUpBucketId(), "Please choose the bucket from the list.");
+            if (saveUp.accountId() != from.id()) {
+                throw ApiException.badRequest("Please choose a save-up bucket in the account this is paid from.");
+            }
+            saveUpBucketId = saveUp.id();
+        }
+
         if (input.schedule() == null) {
             throw ApiException.badRequest("Please choose how often it repeats.");
         }
@@ -334,11 +379,22 @@ public final class ItemsRoutes {
                 input.categoryId(),
                 from.id(),
                 payTo,
-                Boolean.TRUE.equals(input.autopay()),
+                // Setting money aside needs nobody to pay anything: it simply happens on its day.
+                kind == ItemKind.BUCKET_MOVE || Boolean.TRUE.equals(input.autopay()),
                 placement,
                 schedule,
                 // Only "every pay period" is dated from payday; any other schedule names its own day.
-                schedule.frequency() == Frequency.EVERY_PAY_PERIOD ? daysAfterPayday : 0);
+                schedule.frequency() == Frequency.EVERY_PAY_PERIOD ? daysAfterPayday : 0,
+                bucketId,
+                saveUpBucketId);
+    }
+
+    /** One of the user's open buckets, or {@code message} when it is missing, unknown or archived. */
+    private Bucket bucket(Long id, String message) {
+        return Optional.ofNullable(id)
+                .flatMap(buckets::find)
+                .filter(found -> !found.archived())
+                .orElseThrow(() -> ApiException.badRequest(message));
     }
 
     private static void requireSupported(LocalDate date, String label) {

@@ -56,6 +56,8 @@ public final class ItemCalendar {
      * @param payBy          the day it counts on: the due date, brought inside the period that pays for it
      * @param estimate       true while the amount is the item's estimate, not yet typed over or paid
      * @param projectedCents what the app showed before the amount was typed over; {@code null} if untouched
+     * @param bucketId       the bucket a bucket move, or a transfer, puts this money in
+     * @param saveUpBucketId the bucket this bill is saved up for in
      */
     public record Occurrence(
             long itemId,
@@ -78,7 +80,18 @@ public final class ItemCalendar {
             LocalDate paidDate,
             String confirmationCode,
             String note,
-            boolean skipped) {}
+            boolean skipped,
+            Long bucketId,
+            Long saveUpBucketId) {
+
+        /** This occurrence with its money going into no bucket: for one dated before its bucket was opened. */
+        public Occurrence withoutBucket() {
+            return new Occurrence(
+                    itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, amountCents, estimate, projectedCents,
+                    autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
+                    skipped, null, saveUpBucketId);
+        }
+    }
 
     /** Occurrences together with the pay periods they were placed in. */
     public record Expansion(List<PayPeriod> periods, List<Occurrence> occurrences) {}
@@ -130,7 +143,8 @@ public final class ItemCalendar {
                 : new Amounts(amount.cents(), AnnualAmount.yearly(amount, perYear).cents());
     }
 
-    private Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
+    /** As {@link #expand(LocalDate, LocalDate)}, for just these items (archived ones included, if given). */
+    public Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
         LocalDate lo = from.minusMonths(MARGIN_MONTHS);
         LocalDate hi = to.plusMonths(MARGIN_MONTHS);
         List<PayPeriod> periods = pay.payPeriods(lo, hi);
@@ -204,7 +218,9 @@ public final class ItemCalendar {
                 edit.paidDate(),
                 edit.confirmationCode(),
                 edit.note(),
-                edit.skipped());
+                edit.skipped(),
+                terms.bucketId(),
+                terms.saveUpBucketId());
     }
 
     private static OccurrencePlanner.Version<Terms> planned(Version version) {

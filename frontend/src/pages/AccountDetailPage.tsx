@@ -1,27 +1,35 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { type BalanceEntry, useAccount, useAccounts, useDeleteBalance } from "../api/accounts";
+import { type BalanceEntry, holdsCash, useAccount, useAccountProjection, useAccounts, useDeleteBalance } from "../api/accounts";
+import { useBuckets } from "../api/buckets";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { BalanceForm } from "../components/accounts/BalanceForm";
+import { InterestCard } from "../components/accounts/InterestCard";
 import { accountSubtitle, TYPE_LABELS } from "../components/accounts/labels";
+import { ProjectionChart } from "../components/accounts/ProjectionChart";
 import { Amount } from "../components/Amount";
+import { BucketsCard } from "../components/buckets/BucketsCard";
 import { Card } from "../components/Card";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
-import { formatDate } from "../lib/dates";
+import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { formatRate } from "../lib/rates";
 
 /* One row of "Balances you entered": stacked on a phone, columns from `md` up. */
 const ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[9rem_9rem_9rem_1fr_auto] md:items-center";
 
 /**
- * Account detail (design/account-detail.png). Phase 1 has the balance and the balances the
- * user entered; the chart, projection, buckets, interest and rate history arrive in Phase 3.
+ * Account detail (design/account-detail.png): the balance and where it is heading, the
+ * balances the user entered, and — for checking and savings — buckets, interest and the
+ * rate history. Growth against deposits arrives with investments (Phase 4).
  */
 export function AccountDetailPage() {
   const id = Number(useParams().id);
   const navigate = useNavigate();
   const detail = useAccount(id);
   const accounts = useAccounts();
+  const projection = useAccountProjection(id);
+  const buckets = useBuckets();
   const [editing, setEditing] = useState(false);
   const [updating, setUpdating] = useState(false);
 
@@ -46,6 +54,11 @@ export function AccountDetailPage() {
 
   const { account, balances } = detail.data;
   const latest = account.latestBalance;
+  const cash = holdsCash(account.type);
+  const points = projection.data ?? [];
+  const thisPeriod = points[0];
+  const hasBuckets = (buckets.data ?? []).some((bucket) => bucket.accountId === account.id && !bucket.archived);
+  const currentRate = detail.data.rates.find((rate) => rate.effectiveDate <= todayIso());
 
   return (
     <>
@@ -78,16 +91,58 @@ export function AccountDetailPage() {
 
       <div className="space-y-4">
         <Card>
-          <p className="text-muted">Balance</p>
-          {latest ? (
-            <>
-              <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(latest.amountCents)}</p>
-              <p className="text-muted">entered by you {formatDate(latest.date)}</p>
-            </>
-          ) : (
-            <p className="mt-1 font-medium">No balance entered yet.</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-muted">Balance</p>
+              {latest ? (
+                <>
+                  <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(latest.amountCents)}</p>
+                  <p className="text-muted">entered by you {formatDate(latest.date)}</p>
+                </>
+              ) : (
+                <p className="mt-1 font-medium">No balance entered yet.</p>
+              )}
+            </div>
+            {thisPeriod && (
+              <Stat label="Projected" cents={thisPeriod.endingCents} note={`at the end of this pay period, ${formatDate(thisPeriod.end)}`} />
+            )}
+            {thisPeriod && hasBuckets && (
+              <Stat label="Available after buckets" cents={thisPeriod.availableCents} note="at the end of this pay period" />
+            )}
+            {cash && currentRate && (
+              <div>
+                <p className="text-muted">Rate</p>
+                <p className="text-2xl font-bold tabular-nums">{formatRate(currentRate.rateBp)}</p>
+                <p className="text-muted">APY since {formatDate(currentRate.effectiveDate)}</p>
+              </div>
+            )}
+          </div>
+          {account.lowBalanceThresholdCents !== null && (
+            <p className="mt-3 text-muted">
+              Pay periods are flagged when this account is projected to dip below{" "}
+              <span data-amount className="font-semibold text-ink tabular-nums">
+                {formatCents(account.lowBalanceThresholdCents)}
+              </span>
+              .
+            </p>
           )}
         </Card>
+
+        {projection.isError && (
+          <Card>
+            <p role="alert" className="text-danger">
+              {projection.error.message}
+            </p>
+          </Card>
+        )}
+        {latest && points.length > 0 && (
+          <Card title="Where it's heading">
+            <ProjectionChart account={account} balances={balances} points={points} showAvailable={hasBuckets} />
+          </Card>
+        )}
+
+        {cash && <BucketsCard account={account} />}
+        {cash && <InterestCard detail={detail.data} />}
 
         <Card title="Balances you entered">
           {balances.length === 0 ? (
@@ -111,6 +166,17 @@ export function AccountDetailPage() {
       )}
       {updating && <BalanceForm account={account} onClose={() => setUpdating(false)} />}
     </>
+  );
+}
+
+/** One of the figures beside the balance. */
+function Stat({ label, cents, note }: { label: string; cents: number; note: string }) {
+  return (
+    <div>
+      <p className="text-muted">{label}</p>
+      <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(cents)}</p>
+      <p className="text-muted">{note}</p>
+    </div>
   );
 }
 

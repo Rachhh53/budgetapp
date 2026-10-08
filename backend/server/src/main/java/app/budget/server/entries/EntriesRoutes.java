@@ -4,14 +4,18 @@ import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
+import app.budget.server.buckets.BucketsRepository;
+import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.entries.EntriesRepository.Entry;
 import app.budget.server.entries.EntriesRepository.Fields;
+import app.budget.server.entries.EntriesRepository.Split;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 /** One-off money in, money out and transfers: {@code /api/entries} and {@code /api/entries/{id}}. */
@@ -21,19 +25,28 @@ public final class EntriesRoutes {
     private static final int NOTE_MAX = 500;
     private static final int MAX_TAGS = 20;
     private static final String CHOOSE_TAGS = "Please choose tags from the list.";
+    private static final int MAX_SPLITS = 20;
+    private static final String CHOOSE_BUCKETS = "Please choose each bucket once, from the list.";
 
     private final EntriesRepository entries;
     private final AccountsRepository accounts;
     private final CategoriesRepository categories;
     private final TagsRepository tags;
+    private final BucketsRepository buckets;
     private final Clock clock;
 
     public EntriesRoutes(
-            EntriesRepository entries, AccountsRepository accounts, CategoriesRepository categories, TagsRepository tags, Clock clock) {
+            EntriesRepository entries,
+            AccountsRepository accounts,
+            CategoriesRepository categories,
+            TagsRepository tags,
+            BucketsRepository buckets,
+            Clock clock) {
         this.entries = entries;
         this.accounts = accounts;
         this.categories = categories;
         this.tags = tags;
+        this.buckets = buckets;
         this.clock = clock;
     }
 
@@ -56,7 +69,11 @@ public final class EntriesRoutes {
             Long accountId,
             Long toAccountId,
             String note,
-            List<Long> tagIds) {}
+            List<Long> tagIds,
+            List<SplitInput> bucketSplits) {}
+
+    /** Part of money coming in to set aside in one bucket. */
+    public record SplitInput(Long bucketId, Long amountCents) {}
 
     public record Deleted(boolean deleted) {}
 
@@ -133,6 +150,42 @@ public final class EntriesRoutes {
                 input.accountId(),
                 toAccountId,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
-                tagIds);
+                tagIds,
+                splits(input.bucketSplits(), kind, amount, toAccountId == null ? input.accountId() : toAccountId));
+    }
+
+    /**
+     * What is set aside in buckets out of money arriving in {@code arrivesIn}. Money going out
+     * has nothing to set aside.
+     */
+    private List<Split> splits(List<SplitInput> inputs, EntryKind kind, long amount, long arrivesIn) {
+        if (inputs == null || inputs.isEmpty()) {
+            return List.of();
+        }
+        if (kind == EntryKind.MONEY_OUT) {
+            throw ApiException.badRequest("Only money coming in can be set aside in a bucket.");
+        }
+        if (inputs.size() > MAX_SPLITS || inputs.stream().anyMatch(split -> split == null || split.bucketId() == null)
+                || inputs.stream().map(SplitInput::bucketId).distinct().count() != inputs.size()) {
+            throw ApiException.badRequest(CHOOSE_BUCKETS);
+        }
+        List<Split> splits = new ArrayList<>();
+        long total = 0;
+        for (SplitInput input : inputs) {
+            Bucket bucket = buckets.find(input.bucketId()).orElse(null);
+            if (bucket == null || bucket.archived() || bucket.accountId() != arrivesIn) {
+                throw ApiException.badRequest("Please choose buckets in the account this money goes into.");
+            }
+            long cents = Inputs.amount(input.amountCents(), "The amount to set aside");
+            if (cents == 0) {
+                throw ApiException.badRequest("Please enter how much to set aside, or remove that bucket.");
+            }
+            total += cents;
+            splits.add(new Split(bucket.id(), cents));
+        }
+        if (total > amount) {
+            throw ApiException.badRequest("That sets aside more than the amount itself. Please lower one of the buckets.");
+        }
+        return splits;
     }
 }
