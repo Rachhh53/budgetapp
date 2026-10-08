@@ -6,7 +6,7 @@ All data stays on your PC: no cloud, no telemetry, no update checks, no outbound
 - `spec.md` — the build plan and source of truth
 - `proposals.md` — the features being tracked
 - `design/` — mockups for every screen (sample data only)
-- `.github/workflows/ci.yml` — tests and dependency checks on every push; the installer on `main`
+- `.github/workflows/ci.yml` — tests and dependency checks on every branch push; the installer on `main`
 
 ## Layout
 
@@ -125,13 +125,15 @@ Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Ite
 
 ## CI and dependency checks
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every push:
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push to a branch:
 
 - **Backend tests** on Windows, and the **frontend** typecheck, tests and build.
 - **Dependency checks:** OSV-Scanner fails the build on any known vulnerability in a Maven, npm or
   Cargo dependency, and `check-dependency-age.ps1` fails it if a dependency version is less than
   14 days old. Both also run weekly.
-- On `main` only, the **installer** is built and kept as a workflow artifact for 30 days.
+- On `main` only the **installer** is built (kept as a workflow artifact for 30 days). The checks above
+  are not repeated there, since the branch already passed them; `build-installer.ps1` runs the
+  tests itself before packaging, so the merged code is still tested once.
 
 To run the dependency age check yourself (it needs the network; the app itself never does):
 
