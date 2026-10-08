@@ -88,7 +88,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const [day2, setDay2] = useState(schedule?.day2 ?? 15);
   const [month, setMonth] = useState(schedule?.month ?? 1);
   const [monthsApart, setMonthsApart] = useState(schedule?.interval && schedule.interval > 1 ? schedule.interval : 3);
-  const [startDate, setStartDate] = useState(schedule?.startDate ?? todayIso());
+  // `null` until chosen: a new item then starts where its kind of schedule usually does (see `startsOn`).
+  const [chosenStart, setChosenStart] = useState<string | null>(schedule?.startDate ?? null);
   const [daysAfterPayday, setDaysAfterPayday] = useState(item?.daysAfterPayday ?? 0);
   const [autopay, setAutopay] = useState(item?.autopay ?? false);
   const [placement, setPlacement] = useState<Placement>(item?.placement ?? "due_period");
@@ -137,6 +138,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const everyPaycheck = frequency === "every_pay_period";
   // These repeat from a date the user gives; the rest name their own day of the month or year.
   const countsFromADate = frequency === "weekly" || frequency === "biweekly" || frequency === "one_time";
+  // Where a new item starts until the user says otherwise. One that names its own day of the
+  // month or year starts in January, so this year's occurrences exist; anything dated from
+  // today starts today. Money set aside in a bucket never reaches back on its own: it would
+  // fill the bucket with months of moves that never happened.
+  const startsOn = chosenStart ?? (countsFromADate || everyPaycheck || isBucketMove ? todayIso() : `${todayIso().slice(0, 4)}-01-01`);
 
   // Archived accounts are left out, unless this item already points at one.
   const offered = accounts.filter((account) => !account.archived || [payFrom, payTo].includes(String(account.id)));
@@ -189,11 +195,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
         day1: byDayOfMonth || frequency === "yearly" ? day1 : null,
         day2: frequency === "semi_monthly" ? day2 : null,
         month: frequency === "yearly" ? month : null,
-        // Schedules that name their own day need no anchor; start them in January so this
-        // year's occurrences exist. "Every paycheck" starts with the paycheck in hand.
-        startDate: countsFromADate
-          ? startDate
-          : (schedule?.startDate ?? (everyPaycheck ? todayIso() : `${todayIso().slice(0, 4)}-01-01`)),
+        startDate: startsOn,
         endDate: schedule?.endDate ?? null,
         weekendRule: schedule?.weekendRule ?? "none",
       },
@@ -354,8 +356,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
               <input
                 id={`${id}-start`}
                 type="date"
-                value={startDate}
-                onChange={(event) => setStartDate(event.target.value)}
+                value={startsOn}
+                onChange={(event) => setChosenStart(event.target.value)}
                 required
                 className={INPUT}
               />
@@ -405,6 +407,29 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
                 onChange={setDay1}
               />
               {frequency === "semi_monthly" && <DaySelect id={`${id}-day2`} label="Second day of the month" value={day2} onChange={setDay2} />}
+            </div>
+          )}
+
+          {/* The schedules above name their own first date; these need to be told when they begin. */}
+          {!countsFromADate && (
+            <div>
+              <label htmlFor={`${id}-starts`} className={LABEL}>
+                Starts
+              </label>
+              <input
+                id={`${id}-starts`}
+                type="date"
+                value={startsOn}
+                onChange={(event) => setChosenStart(event.target.value)}
+                required
+                className={INPUT}
+              />
+              <p className={HINT}>
+                {everyPaycheck
+                  ? "It begins with the paycheck for the pay period this day falls in. Choose an earlier day to include earlier paychecks."
+                  : "Nothing is scheduled before this day. Choose an earlier day to include earlier ones."}
+                {isBucketMove && " The bucket counts from then too."}
+              </p>
             </div>
           )}
 
@@ -483,7 +508,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
               <p className={HINT}>
                 This and all future. Anything dated before this keeps what it had. This date belongs to the change you are making now,
                 so it starts at today every time you open the item; it is not when the item began.
-                {isBucketMove && " To bring earlier moves into a bucket, change the bucket's “Counts from” day on its account's page."}
+                {" To change when the item itself begins, use “"}
+                {countsFromADate ? (frequency === "one_time" ? "Date" : "A date it falls on") : "Starts"}
+                {"” above."}
               </p>
             </div>
 

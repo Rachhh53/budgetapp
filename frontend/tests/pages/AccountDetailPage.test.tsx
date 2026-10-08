@@ -321,29 +321,93 @@ describe("account detail screen", () => {
       rates: [{ id: 4, kind: "apy", rateBp: 410, effectiveDate: "2026-01-01" }],
     };
 
-    it("shows the rate and its history, and adds a new rate in basis points", async () => {
-      const fetchMock = fakeBackend({
-        "GET /api/accounts/1": () => ({ status: 200, data: SAVINGS_DETAIL }),
-        "POST /api/accounts/1/rates": () => ({ status: 201, data: SAVINGS_DETAIL, changed: true }),
-      });
+    const SETTINGS_ROUTES = {
+      "GET /api/accounts/1": () => ({ status: 200, data: SAVINGS_DETAIL }),
+      "POST /api/accounts/1/rates": () => ({ status: 201, data: SAVINGS_DETAIL, changed: true }),
+      "DELETE /api/accounts/1/rates/4": () => ({ status: 200, data: SAVINGS_DETAIL, changed: true }),
+      "PUT /api/accounts/1/interest": () => ({ status: 200, data: SAVINGS_DETAIL, changed: true }),
+    };
+
+    /** Opens the one Edit there is for interest and returns its dialog. */
+    async function editInterest() {
+      const interest = await screen.findByRole("region", { name: "Interest" });
+      await userEvent.click(within(interest).getByRole("button", { name: "Edit interest" }));
+      return screen.getByRole("dialog", { name: "Edit interest — Rainy Day Savings" });
+    }
+
+    it("shows the rate, when it is credited and where it goes, with one Edit for all of it", async () => {
+      fakeBackend(SETTINGS_ROUTES);
       renderApp("/accounts/1");
 
       const interest = await screen.findByRole("region", { name: "Interest" });
       expect(within(interest).getByText("4.10% APY")).toBeInTheDocument();
-      expect(within(interest).getByText("from Jan 1, 2026")).toBeInTheDocument();
+      expect(within(interest).getByText("since Jan 1, 2026")).toBeInTheDocument();
+      expect(within(interest).getByText("The last day of the month")).toBeInTheDocument();
+      expect(within(interest).getByText("Not into a bucket")).toBeInTheDocument();
+      // No second form on the page: the fields only exist once Edit is pressed.
+      expect(within(interest).queryByRole("textbox")).not.toBeInTheDocument();
+      expect(within(interest).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    });
 
-      await userEvent.type(within(interest).getByRole("textbox", { name: "APY (%)" }), "about four");
-      await userEvent.click(within(interest).getByRole("button", { name: "Add rate" }));
-      expect(within(interest).getByRole("alert")).toHaveTextContent("Please enter a rate like 4.10.");
+    it("a new rate from a new date is added, leaving the old one in the history", async () => {
+      const fetchMock = fakeBackend(SETTINGS_ROUTES);
+      renderApp("/accounts/1");
+      const dialog = await editInterest();
+      const rate = within(dialog).getByRole("textbox", { name: "APY (%)" });
+      expect(rate).toHaveValue("4.10");
+      expect(within(dialog).getByLabelText("Rate applies from")).toHaveValue("2026-01-01");
+
+      await userEvent.clear(rate);
+      await userEvent.type(rate, "about four");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter a rate like 4.10.");
       expect(calls(fetchMock)).not.toContain("POST /api/accounts/1/rates");
 
-      await userEvent.clear(within(interest).getByRole("textbox", { name: "APY (%)" }));
-      await userEvent.type(within(interest).getByRole("textbox", { name: "APY (%)" }), "3.85");
-      await userEvent.click(within(interest).getByRole("button", { name: "Add rate" }));
+      await userEvent.clear(rate);
+      await userEvent.type(rate, "3.85");
+      await userEvent.clear(within(dialog).getByLabelText("Rate applies from"));
+      await userEvent.type(within(dialog).getByLabelText("Rate applies from"), "2026-10-01");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-      await waitFor(() =>
-        expect(bodiesSentTo(fetchMock, "POST /api/accounts/1/rates")).toEqual([{ rateBp: 385, effectiveDate: todayIso() }]),
-      );
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "POST /api/accounts/1/rates")).toEqual([{ rateBp: 385, effectiveDate: "2026-10-01" }]);
+      expect(calls(fetchMock)).not.toContain("DELETE /api/accounts/1/rates/4");
+    });
+
+    it("the same rate on another date corrects when it began, replacing the entry", async () => {
+      const fetchMock = fakeBackend(SETTINGS_ROUTES);
+      renderApp("/accounts/1");
+      const dialog = await editInterest();
+
+      await userEvent.clear(within(dialog).getByLabelText("Rate applies from"));
+      await userEvent.type(within(dialog).getByLabelText("Rate applies from"), "2025-11-15");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "POST /api/accounts/1/rates")).toEqual([{ rateBp: 410, effectiveDate: "2025-11-15" }]);
+      expect(calls(fetchMock)).toContain("DELETE /api/accounts/1/rates/4");
+    });
+
+    it("lists earlier rates with the day each one ended", async () => {
+      fakeBackend({
+        "GET /api/accounts/1": () => ({
+          status: 200,
+          data: {
+            ...SAVINGS_DETAIL,
+            rates: [
+              { id: 5, kind: "apy", rateBp: 385, effectiveDate: "2026-10-01" },
+              { id: 4, kind: "apy", rateBp: 410, effectiveDate: "2026-01-01" },
+            ],
+          },
+        }),
+      });
+      renderApp("/accounts/1");
+
+      const history = await screen.findByRole("region", { name: "Rate history" });
+      expect(within(history).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+        "3.85% from Oct 1, 2026Remove",
+        "4.10% Jan 1, 2026 to Sep 30, 2026Remove",
+      ]);
     });
 
     it("removes a rate", async () => {
@@ -359,14 +423,10 @@ describe("account detail screen", () => {
     });
 
     it("chooses the day interest is credited and the bucket it goes into", async () => {
-      const fetchMock = fakeBackend({
-        "GET /api/accounts/1": () => ({ status: 200, data: SAVINGS_DETAIL }),
-        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
-        "PUT /api/accounts/1/interest": () => ({ status: 200, data: SAVINGS_DETAIL, changed: true }),
-      });
+      const fetchMock = fakeBackend({ ...SETTINGS_ROUTES, "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }) });
       renderApp("/accounts/1");
 
-      const interest = await screen.findByRole("region", { name: "Interest" });
+      const interest = await editInterest();
       expect(within(interest).getByRole("combobox", { name: "Credited on" })).toHaveValue("31");
       await userEvent.selectOptions(within(interest).getByRole("combobox", { name: "Credited on" }), "15th");
       await waitFor(() => expect(within(interest).getByRole("option", { name: "All into one bucket" })).toBeInTheDocument());
@@ -382,6 +442,8 @@ describe("account detail screen", () => {
           { creditDay: 15, destination: "bucket", destinationBucketId: 7 },
         ]),
       );
+      // The rate was not touched, so it is not saved again.
+      expect(calls(fetchMock)).not.toContain("POST /api/accounts/1/rates");
     });
 
     it("has no buckets or interest for a credit card", async () => {

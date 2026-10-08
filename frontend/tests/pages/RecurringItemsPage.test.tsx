@@ -544,6 +544,23 @@ describe("recurring items screen", () => {
     ]);
   });
 
+  it("shows when an item starts, and saves an earlier start so it can be backdated", async () => {
+    const fetchMock = withItems([GROCERIES], { "PUT /api/items/3": () => ({ status: 200, data: GROCERIES }) });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Groceries" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Groceries" });
+    // What was saved, not today: this is the item's own date and stays put between visits.
+    const starts = within(dialog).getByLabelText("Starts");
+    expect(starts).toHaveValue("2026-10-01");
+    await userEvent.clear(starts);
+    await userEvent.type(starts, "2026-09-01");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/3")).toMatchObject([{ schedule: { startDate: "2026-09-01" } }]);
+  });
+
   it("shows the backend's message when a change is refused", async () => {
     withItems([RENT], { "PUT /api/items/1": () => ({ status: 400, error: "Please choose the category from the list." }) });
     renderApp("/recurring");

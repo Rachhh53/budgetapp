@@ -165,11 +165,56 @@ class BucketsLedgerApiTest extends ApiTestBase {
             emergency = bucket(savings, "Emergency fund", 0);
             created("/api/items", """
                     {"name":"Gift fund","kind":"bucket_move","amountCents":5000,"bucketId":%d,
-                     "schedule":{"frequency":"every_pay_period","startDate":"2026-01-01"}}""".formatted(gifts));
+                     "schedule":{"frequency":"every_pay_period","startDate":"2026-10-15"}}""".formatted(gifts));
             created("/api/items", """
                     {"name":"To savings","kind":"transfer","amountCents":20000,"payFromAccountId":%d,"payToAccountId":%d,
                      "autopay":true,"bucketId":%d,"schedule":{"frequency":"monthly","day1":2,"startDate":"2026-01-01"}}"""
                     .formatted(checking, savings, emergency));
+        }
+
+        private long giftsBucket() throws Exception {
+            return server.get("/api/buckets", cookie).data().get(0).get("id").asLong();
+        }
+
+        private String giftFundStarting(String startDate) throws Exception {
+            return """
+                    {"name":"Gift fund","kind":"bucket_move","amountCents":5000,"bucketId":%d,
+                     "schedule":{"frequency":"every_pay_period","startDate":"%s"}}""".formatted(giftsBucket(), startDate);
+        }
+
+        @Test
+        void aBucketMoveBackdatedToAnEarlierStartIsCountedFromThen() throws Exception {
+            long item = server.get("/api/items", cookie).data().get(0).get("id").asLong();
+
+            // No "effectiveFrom": the change is made today, yet it has to reach back to the new start.
+            Reply reply = server.put("/api/items/" + item, giftFundStarting("2026-09-20"), cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.data().get("schedule").get("startDate").asText()).isEqualTo("2026-09-20");
+            // The bucket counts from the payday of the period the move now starts in.
+            assertThat(server.get("/api/buckets/" + giftsBucket(), cookie).data().get("bucket").get("openedOn").asText())
+                    .isEqualTo("2026-09-15");
+            JsonNode period = period("2026-10-01");
+            assertThat(moves(period, "bucket_move")).containsExactly("2026-10-01 5000");
+            // 150.00 set aside by hand, plus the Sep 15 and Oct 1 paychecks.
+            assertThat(account(period, checking).get("bucketsCents").asLong()).isEqualTo(25000);
+        }
+
+        @Test
+        void aNewBucketMoveThatStartsEarlierBringsItsBucketWithIt() throws Exception {
+            long travel = bucket(checking, "Travel", 0);
+            created("/api/items", """
+                    {"name":"Travel fund","kind":"bucket_move","amountCents":2500,"bucketId":%d,
+                     "schedule":{"frequency":"every_pay_period","startDate":"2026-10-08"}}""".formatted(travel));
+
+            // Added on Oct 8, it still belongs to the paycheck in hand, dated Oct 1.
+            assertThat(bucketIn(period("2026-10-01"), travel).get("endingCents").asLong()).isEqualTo(2500);
+        }
+
+        @Test
+        void aTransferNeverMovesTheDayItsBucketCountsFrom() throws Exception {
+            assertThat(server.get("/api/buckets/" + emergency, cookie).data().get("bucket").get("openedOn").asText())
+                    .isEqualTo("2026-10-08");
         }
 
         @Test
@@ -201,17 +246,15 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
-        void countingFromAnEarlierDayBringsThisPaychecksMovesIn() throws Exception {
-            long gifts = server.get("/api/buckets", cookie).data().get(0).get("id").asLong();
-            Reply reply = server.put("/api/buckets/" + gifts,
-                    "{\"name\":\"Holiday gifts\",\"color\":\"#b45309\",\"openedOn\":\"2026-10-01\"}", cookie);
+        void countingFromAnEarlierDayBringsThisPaychecksTransferIn() throws Exception {
+            Reply reply = server.put("/api/buckets/" + emergency,
+                    "{\"name\":\"Emergency fund\",\"color\":\"#b45309\",\"openedOn\":\"2026-10-01\"}", cookie);
             assertThat(reply.status()).isEqualTo(200);
 
             JsonNode period = period("2026-10-01");
 
-            assertThat(moves(period, "bucket_move")).containsExactly("2026-10-01 5000");
-            assertThat(account(period, checking).get("bucketsCents").asLong()).isEqualTo(20000);
-            assertThat(period.get("occurrences").findValuesAsText("name")).contains("Gift fund");
+            assertThat(moves(period, "transfer")).containsExactly("2026-10-02 20000");
+            assertThat(account(period, savings).get("bucketsCents").asLong()).isEqualTo(20000);
         }
     }
 

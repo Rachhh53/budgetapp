@@ -114,6 +114,15 @@ public final class BucketsRepository {
                 .execute()) > 0;
     }
 
+    /** Sets the day a bucket counts from, leaving everything else about it alone. */
+    public void countFrom(long id, LocalDate openedOn) {
+        jdbi.useHandle(handle -> handle
+                .createUpdate("UPDATE buckets SET opened_on = :openedOn WHERE id = :id")
+                .bind("id", id)
+                .bind("openedOn", openedOn.toString())
+                .execute());
+    }
+
     /** True when a recurring item moves money into this bucket or saves up in it. */
     public boolean isUsedByItems(long id) {
         return jdbi.withHandle(handle -> handle

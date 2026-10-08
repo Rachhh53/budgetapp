@@ -171,7 +171,30 @@ public final class ItemsRoutes {
         Terms terms = terms(input, kind(input));
         // The first version covers the item's whole life, so it is dated from when the schedule starts.
         long id = items.create(identity(input), terms, terms.schedule().startDate());
+        letItsBucketCountFromItsStart(terms);
         ApiResponse.send(ctx, 201, view(id));
+    }
+
+    /**
+     * A bucket move is an instruction to put money in one bucket, so its own start date decides
+     * when that begins: if the bucket was only counting from a later day, it now counts from the
+     * payday of the pay period the move starts in. (Transfers and save-ups do not do this: they
+     * exist for other reasons, and a new bucket should not be back-filled from them.)
+     */
+    private void letItsBucketCountFromItsStart(Terms terms) {
+        if (terms.bucketId() == null || terms.payToAccountId() != null) {
+            return;
+        }
+        LocalDate start = terms.schedule().startDate();
+        // "Every paycheck" is dated from its period's payday, which can fall before the start day itself.
+        LocalDate from = pay.payPeriods(start, start).stream()
+                .filter(period -> !start.isBefore(period.start()) && !start.isAfter(period.end()))
+                .map(period -> period.start())
+                .findFirst()
+                .orElse(start);
+        buckets.find(terms.bucketId())
+                .filter(bucket -> from.isBefore(bucket.openedOn()))
+                .ifPresent(bucket -> buckets.countFrom(bucket.id(), from));
     }
 
     private void update(Context ctx) {
@@ -183,10 +206,16 @@ public final class ItemsRoutes {
         if (!Inputs.inSupportedYears(effectiveFrom)) {
             throw ApiException.badRequest("Please choose the date this change starts from.");
         }
-        if (items.find(id).isEmpty()) {
-            throw ApiException.notFound();
+        Item existing = items.find(id).orElseThrow(ApiException::notFound);
+        // Moving the start earlier is a change to the past by its nature: it has to reach back
+        // to the new start, or everything before today would keep the old, later start.
+        LocalDate start = terms.schedule().startDate();
+        LocalDate startWas = existing.versionOn(effectiveFrom).terms().schedule().startDate();
+        if (start.isBefore(startWas) && start.isBefore(effectiveFrom)) {
+            effectiveFrom = start;
         }
         items.update(id, identity, terms, effectiveFrom);
+        letItsBucketCountFromItsStart(terms);
         ApiResponse.ok(ctx, view(id));
     }
 
