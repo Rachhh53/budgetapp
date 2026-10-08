@@ -158,7 +158,7 @@ public final class BucketMoves {
         for (Occurrence bill : due) {
             Bucket bucket = open.get(bill.saveUpBucketId());
             if (bucket != null) {
-                LocalDate from = latest(afterPrevious, savingBegan(item, bill), bucket.openedOn());
+                LocalDate from = latest(afterPrevious, paydayInHand(savingBegan(item, bill), periods), bucket.openedOn());
                 List<LocalDate> paydays = periods.stream()
                         .map(PayPeriod::start)
                         .filter(payday -> !payday.isBefore(from) && !payday.isAfter(bill.payBy()))
@@ -188,6 +188,19 @@ public final class BucketMoves {
             index--;
         }
         return index == 0 ? item.createdOn() : versions.get(index).effectiveFrom();
+    }
+
+    /**
+     * The payday of the pay period {@code day} falls in. Saving set up part-way through a
+     * period starts with the paycheck in hand, the same as an "every paycheck" item does,
+     * instead of quietly waiting for the next one.
+     */
+    private static LocalDate paydayInHand(LocalDate day, List<PayPeriod> periods) {
+        return periods.stream()
+                .filter(period -> !day.isBefore(period.start()) && !day.isAfter(period.end()))
+                .map(PayPeriod::start)
+                .findFirst()
+                .orElse(day);
     }
 
     private static LocalDate latest(LocalDate first, LocalDate second, LocalDate third) {

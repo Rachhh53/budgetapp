@@ -227,21 +227,35 @@ describe("account detail screen", () => {
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
         "POST /api/buckets": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
+        "GET /api/pay-periods": () => ({
+          status: 200,
+          data: { primarySourceId: 1, primaryAccountId: 1, periods: [{ start: "2026-01-01", end: "2099-12-31", current: true }] },
+        }),
       });
       renderApp("/accounts/1");
 
       const buckets = await screen.findByRole("region", { name: "Buckets" });
-      expect(await within(buckets).findByText(/A bucket sets part of this account aside/)).toBeInTheDocument();
-      await userEvent.click(within(buckets).getByRole("button", { name: "Add a bucket" }));
+      expect(await within(buckets).findByText(/A bucket sets part of this account aside/)).toBeInTheDocument();      await userEvent.click(within(buckets).getByRole("button", { name: "Add a bucket" }));
       const dialog = screen.getByRole("dialog", { name: "Add a bucket to Everyday Checking" });
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Holiday gifts");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Goal (optional)" }), "600");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
+      // It counts from this paycheck's payday unless told otherwise, so the paycheck in hand is included.
+      await waitFor(() => expect(within(dialog).getByLabelText("Counts from")).toHaveValue("2026-01-01"));
       await userEvent.click(within(dialog).getByRole("button", { name: "Add bucket" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(bodiesSentTo(fetchMock, "POST /api/buckets")).toEqual([
-        { accountId: 1, name: "Holiday gifts", color: expect.stringMatching(/^#[0-9a-f]{6}$/), goalCents: 60000, note: null, archived: false, startingCents: 15000 },
+        {
+          accountId: 1,
+          name: "Holiday gifts",
+          color: expect.stringMatching(/^#[0-9a-f]{6}$/),
+          goalCents: 60000,
+          note: null,
+          archived: false,
+          openedOn: "2026-01-01",
+          startingCents: 15000,
+        },
       ]);
     });
 

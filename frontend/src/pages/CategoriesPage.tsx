@@ -188,6 +188,8 @@ function Row({
         {formatCents(perYearCents)}
         <span className="text-xs font-normal text-muted sm:block"> a year</span>
       </span>
+      {/* The whole row opens it; the word is what says so. */}
+      <span className="shrink-0 font-semibold text-accent-ink">Edit</span>
     </button>
   );
 }

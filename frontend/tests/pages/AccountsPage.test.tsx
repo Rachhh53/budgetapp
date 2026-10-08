@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account, AccountDetail } from "../../src/api/accounts";
+import { todayIso } from "../../src/lib/dates";
 import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
@@ -121,6 +122,47 @@ describe("accounts screen", () => {
     ]);
     const investments = await screen.findByRole("region", { name: "Investments" });
     expect(within(investments).getByRole("link", { name: /Retirement/ })).toHaveTextContent("401(k) · Coastal Credit Union");
+  });
+
+  it("takes a savings account's interest rate while adding it, and saves it from today", async () => {
+    const detail = (account: Account): AccountDetail => ({
+      account,
+      balances: [],
+      interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null },
+      rates: [],
+    });
+    const fetchMock = fakeBackend({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }),
+      "POST /api/accounts": (body) => ({
+        status: 201,
+        data: detail({ ...(body as Omit<Account, "id" | "latestBalance">), id: 9, latestBalance: null }),
+      }),
+      "POST /api/accounts/9/rates": () => ({ status: 201, data: detail({ ...CHECKING, id: 9 }) }),
+    });
+    renderApp("/accounts");
+    await screen.findByRole("link", { name: /Everyday Checking/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Rainy Day Savings");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Savings");
+    await userEvent.type(within(dialog).getByLabelText("Interest rate, APY % (optional)"), "4.1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "POST /api/accounts/9/rates")).toEqual([{ rateBp: 410, effectiveDate: todayIso() }]);
+  });
+
+  it("offers no interest rate for an account that earns none this way", async () => {
+    fakeBackend();
+    renderApp("/accounts");
+    await screen.findByText("No accounts yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Credit card");
+
+    expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
   });
 
   it("starts a new account on a color no other account uses", async () => {

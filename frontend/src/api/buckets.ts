@@ -16,7 +16,7 @@ export interface Bucket {
   goalCents: number | null;
   note: string | null;
   archived: boolean;
-  /** The day it was added: recurring moves, save-ups and interest reach it from then on. */
+  /** The day it counts from: recurring moves, save-ups and interest reach it from then on. */
   openedOn: string;
   /** What it holds today; zero once archived. */
   balanceCents: number;
@@ -47,6 +47,8 @@ export interface BucketInput {
   archived: boolean;
   /** When adding: what is already set aside, if anything. */
   startingCents?: number;
+  /** The day it counts from: today or earlier. */
+  openedOn: string;
 }
 
 export interface BucketChangeInput {

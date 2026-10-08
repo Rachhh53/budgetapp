@@ -110,7 +110,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
 | POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |
 | DELETE | `/api/accounts/{id}/rates/{rateId}` | remove one rate |
-| GET, POST | `/api/buckets` | buckets with today's balance; add `{ accountId, name, color, goalCents?, note?, startingCents? }` (checking and savings only) |
+| GET, POST | `/api/buckets` | buckets with today's balance; add `{ accountId, name, color, goalCents?, note?, startingCents?, openedOn? }` (checking and savings only); `openedOn` is the day it counts from, today or earlier |
 | GET, PUT, DELETE | `/api/buckets/{id}` | one bucket with the money moved by hand; change or archive; delete (refused while a recurring item uses it) |
 | POST | `/api/buckets/{id}/changes` | put money in or take it out by hand `{ date, amountCents, note? }` (negative takes out) |
 | DELETE | `/api/buckets/{id}/changes/{changeId}` | remove one of those |

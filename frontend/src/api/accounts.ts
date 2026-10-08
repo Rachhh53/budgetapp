@@ -181,6 +181,16 @@ export function useSaveRate(accountId: number) {
   });
 }
 
+/** As {@link useSaveRate}, for an account that did not exist when the form opened: one just added. */
+export function useSaveRateFor() {
+  const refresh = useRefreshAccounts();
+  return useMutation({
+    mutationFn: ({ accountId, ...input }: RateInput & { accountId: number }) =>
+      api.post<AccountDetail>(`/api/accounts/${accountId}/rates`, input),
+    onSuccess: refresh,
+  });
+}
+
 export function useDeleteRate(accountId: number) {
   const refresh = useRefreshAccounts();
   return useMutation({

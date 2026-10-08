@@ -56,9 +56,17 @@ public final class BucketsRoutes {
      *
      * @param accountId     when adding: the checking or savings account it sits in. It cannot be changed later.
      * @param startingCents when adding: what is already set aside, if anything
+     * @param openedOn      the day it counts from; left out, a new bucket counts from today and an existing one keeps its day
      */
     public record BucketInput(
-            Long accountId, String name, String color, Long goalCents, String note, Boolean archived, Long startingCents) {}
+            Long accountId,
+            String name,
+            String color,
+            Long goalCents,
+            String note,
+            Boolean archived,
+            Long startingCents,
+            LocalDate openedOn) {}
 
     /** Request body for putting money into (+) or taking it out of (−) a bucket by hand. */
     public record ChangeInput(LocalDate date, Long amountCents, String note) {}
@@ -170,7 +178,12 @@ public final class BucketsRoutes {
         }
     }
 
-    private static Fields fields(BucketInput input) {
+    private Fields fields(BucketInput input) {
+        // A bucket cannot start counting on a day that has not come: nothing could be shown in it until then.
+        if (input.openedOn() != null
+                && (!Inputs.inSupportedYears(input.openedOn()) || input.openedOn().isAfter(LocalDate.now(clock)))) {
+            throw ApiException.badRequest("Please choose today or an earlier day for this bucket to count from.");
+        }
         Long goal = input.goalCents() == null ? null : (Long) Inputs.amount(input.goalCents(), "The goal");
         return new Fields(
                 Inputs.text(input.name(), "a name for the bucket", NAME_MAX),
@@ -178,6 +191,7 @@ public final class BucketsRoutes {
                 // A goal of nothing is no goal.
                 goal == null || goal == 0 ? null : goal,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
-                Boolean.TRUE.equals(input.archived()));
+                Boolean.TRUE.equals(input.archived()),
+                input.openedOn());
     }
 }

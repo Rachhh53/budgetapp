@@ -199,6 +199,20 @@ class BucketsLedgerApiTest extends ApiTestBase {
             assertThat(bucketIn(november, emergency).get("endingCents").asLong()).isEqualTo(20000);
             assertThat(november.get("occurrences").findValuesAsText("name")).contains("Gift fund", "To savings");
         }
+
+        @Test
+        void countingFromAnEarlierDayBringsThisPaychecksMovesIn() throws Exception {
+            long gifts = server.get("/api/buckets", cookie).data().get(0).get("id").asLong();
+            Reply reply = server.put("/api/buckets/" + gifts,
+                    "{\"name\":\"Holiday gifts\",\"color\":\"#b45309\",\"openedOn\":\"2026-10-01\"}", cookie);
+            assertThat(reply.status()).isEqualTo(200);
+
+            JsonNode period = period("2026-10-01");
+
+            assertThat(moves(period, "bucket_move")).containsExactly("2026-10-01 5000");
+            assertThat(account(period, checking).get("bucketsCents").asLong()).isEqualTo(20000);
+            assertThat(period.get("occurrences").findValuesAsText("name")).contains("Gift fund");
+        }
     }
 
     @Nested

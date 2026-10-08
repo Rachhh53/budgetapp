@@ -203,7 +203,11 @@ describe("recurring items screen", () => {
       "Paid from",
       "Lands in",
       "Next",
+      "Edit",
     ]);
+    // Being able to change an item is never left to be discovered: every row says so.
+    expect(within(table).getAllByRole("button", { name: /^Edit / })).toHaveLength(4);
+    expect(within(table).getAllByText("Edit", { selector: "button span" })).toHaveLength(4);
     // One header row and one row per item.
     expect(within(table).getAllByRole("row")).toHaveLength(5);
   });
@@ -531,7 +535,7 @@ describe("recurring items screen", () => {
     await userEvent.clear(amount);
     await userEvent.type(amount, "1600");
     // By default the change starts today; earlier pay periods keep the old rent.
-    expect(within(dialog).getByLabelText("Changes apply from")).toHaveValue(todayIso());
+    expect(within(dialog).getByLabelText("Apply these changes from")).toHaveValue(todayIso());
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

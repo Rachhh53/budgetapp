@@ -74,6 +74,16 @@ class BucketsApiTest extends ApiTestBase {
         }
 
         @Test
+        void canCountFromAnEarlierDayButNotALaterOne() throws Exception {
+            Reply reply = server.post("/api/buckets", bucketJson(checking, "Holiday gifts", "\"openedOn\":\"2026-09-15\""), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            assertThat(reply.data().get("bucket").get("openedOn").asText()).isEqualTo("2026-09-15");
+            assertError(server.post("/api/buckets", bucketJson(checking, "Travel", "\"openedOn\":\"2026-10-02\""), cookie),
+                    400, "Please choose today or an earlier day for this bucket to count from.");
+        }
+
+        @Test
         void whatIsAlreadySetAsideBecomesItsFirstChange() throws Exception {
             Reply reply = server.post("/api/buckets", bucketJson(savings, "Emergency fund", "\"startingCents\":250000"), cookie);
 

@@ -470,7 +470,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           <>
             <div>
               <label htmlFor={`${id}-from`} className={LABEL}>
-                Changes apply from
+                Apply these changes from
               </label>
               <input
                 id={`${id}-from`}
@@ -480,7 +480,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
                 required
                 className={INPUT}
               />
-              <p className={HINT}>This and all future. Anything dated before this keeps what it had.</p>
+              <p className={HINT}>
+                This and all future. Anything dated before this keeps what it had. This date belongs to the change you are making now,
+                so it starts at today every time you open the item; it is not when the item began.
+                {isBucketMove && " To bring earlier moves into a bucket, change the bucket's “Counts from” day on its account's page."}
+              </p>
             </div>
 
             <div>

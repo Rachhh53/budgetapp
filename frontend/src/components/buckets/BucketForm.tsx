@@ -1,6 +1,8 @@
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Bucket, useDeleteBucket, useSaveBucket } from "../../api/buckets";
+import { usePayPeriods } from "../../api/income";
+import { todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { Modal } from "../Modal";
@@ -30,7 +32,13 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const [starting, setStarting] = useState("");
   const [note, setNote] = useState(bucket?.note ?? "");
   const [archived, setArchived] = useState(bucket?.archived ?? false);
+  const [chosenOpenedOn, setChosenOpenedOn] = useState<string | null>(bucket?.openedOn ?? null);
   const [problem, setProblem] = useState<string>();
+
+  // A new bucket counts from this paycheck's payday unless told otherwise, so a move set up
+  // for "every paycheck" includes the paycheck in hand instead of silently waiting for the next.
+  const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
+  const openedOn = chosenOpenedOn ?? currentPeriod?.start ?? todayIso();
 
   /** An optional amount: empty is "none", anything else has to read as zero or more. */
   const optionalCents = (text: string): number | null | "invalid" => {
@@ -58,6 +66,7 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
         goalCents,
         note: note.trim() === "" ? null : note,
         archived,
+        openedOn,
         ...(bucket ? {} : { startingCents: startingCents ?? 0 }),
       },
       { onSuccess: onClose },
@@ -97,6 +106,25 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
               hint="What this bucket holds today."
             />
           )}
+        </div>
+
+        <div>
+          <label htmlFor={`${id}-opened`} className={LABEL}>
+            Counts from
+          </label>
+          <input
+            id={`${id}-opened`}
+            type="date"
+            value={openedOn}
+            max={todayIso()}
+            onChange={(event) => setChosenOpenedOn(event.target.value)}
+            required
+            className={INPUT}
+          />
+          <p className={HINT}>
+            Recurring bucket moves, save-ups and interest reach this bucket from this day on. Choose an earlier day to bring in ones
+            dated before it.
+          </p>
         </div>
 
         <div>

@@ -5,6 +5,7 @@ import { useCategories, useTags } from "../api/categories";
 import { type Item, ITEM_KINDS, type ItemKind, useItems } from "../api/items";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
+import { EditButton } from "../components/EditButton";
 import { ItemForm } from "../components/items/ItemForm";
 import { describeItemSchedule, describeKind, describeLandsIn, KIND_PLURALS } from "../components/items/labels";
 import { BUTTON_PRIMARY, INPUT, PAGE_TITLE } from "../components/ui";
@@ -21,7 +22,7 @@ type Filter = "all" | ItemKind;
  * the same order, two to a line, with the amount lifted beside the name.
  */
 const COLUMNS =
-  "md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_7.5rem_6.5rem_minmax(0,1.1fr)_5.5rem_4.5rem] md:items-center md:gap-x-3";
+  "md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_7.5rem_6.5rem_minmax(0,1.1fr)_5.5rem_4.5rem_4.75rem] md:items-center md:gap-x-3";
 
 /**
  * Recurring items (design/recurring.png): every bill, transfer, budget and card payment,
@@ -158,6 +159,9 @@ export function RecurringItemsPage() {
                   <span role="columnheader">Paid from</span>
                   <span role="columnheader">Lands in</span>
                   <span role="columnheader">Next</span>
+                  <span role="columnheader" className="sr-only">
+                    Edit
+                  </span>
                 </div>
               </div>
               <div role="rowgroup" className="divide-y divide-line">
@@ -208,14 +212,7 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
   return (
     <div role="row" className={`grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 md:px-5 ${COLUMNS} ${item.archived ? "text-muted" : ""}`}>
       <span role="cell" className="min-w-0">
-        <button
-          type="button"
-          onClick={onEdit}
-          aria-label={`Edit ${item.name}`}
-          className="-my-2 min-h-11 max-w-full truncate rounded-lg text-left font-semibold underline decoration-line underline-offset-4"
-        >
-          {item.name}
-        </button>
+        <span className="block max-w-full truncate font-semibold">{item.name}</span>
         {item.archived && <span className="ml-2 rounded-md border border-line px-1.5 py-0.5 text-xs font-semibold">Archived</span>}
       </span>
       <Cell className="text-sm md:text-base">{describeKind(item)}</Cell>
@@ -235,6 +232,10 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
       </Cell>
       <Cell label="Next" className="text-sm md:text-base">
         {item.next ? formatDay(item.next.dueDate) : "—"}
+      </Cell>
+      {/* On a phone it closes the card, on the right where a thumb reaches. */}
+      <Cell className="col-span-2 -my-2 justify-self-end md:col-span-1 md:-my-1">
+        <EditButton name={item.name} onClick={onEdit} labelled />
       </Cell>
     </div>
   );

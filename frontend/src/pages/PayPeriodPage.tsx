@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { EditButton } from "../components/EditButton";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
@@ -504,16 +505,17 @@ function Row({
   );
 }
 
-/** A recurring item's name, as the button that opens it for a "this and all future" change. */
+/** A recurring item's name, with the button that opens it for a "this and all future" change. */
 function ItemName({ occurrence, context }: { occurrence: Occurrence; context: RowContext }) {
   const item = context.items.find((candidate) => candidate.id === occurrence.itemId);
   if (item === undefined) {
     return <>{occurrence.name}</>;
   }
   return (
-    <button type="button" onClick={() => context.editItem(item)} aria-label={`Edit ${occurrence.name}`} className="rounded-md text-left font-medium underline-offset-2 hover:underline">
-      {occurrence.name}
-    </button>
+    <span className="flex items-center gap-1">
+      <span className="min-w-0">{occurrence.name}</span>
+      <EditButton name={occurrence.name} onClick={() => context.editItem(item)} />
+    </span>
   );
 }
 
@@ -574,13 +576,14 @@ function PaycheckAmount({ paycheck }: { paycheck: Paycheck }) {
   );
 }
 
-/** A one-off's description, as the button that opens it in the + Add item form. */
+/** A one-off's description, with the button that opens it in the + Add item form. */
 function EntryName({ entry }: { entry: Entry }) {
   const { editEntry } = useAddItem();
   return (
-    <button type="button" onClick={() => editEntry(entry)} aria-label={`Edit ${entry.description}`} className="rounded-md text-left font-medium underline-offset-2 hover:underline">
-      {entry.description}
-    </button>
+    <span className="flex items-center gap-1">
+      <span className="min-w-0">{entry.description}</span>
+      <EditButton name={entry.description} onClick={() => editEntry(entry)} />
+    </span>
   );
 }
 
