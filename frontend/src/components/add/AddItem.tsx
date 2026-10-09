@@ -181,7 +181,7 @@ const MENU: readonly { kind: AddKind; label: string; about: string; shortcut?: s
   { kind: "money_out", label: "Money out", about: "One-time purchase, gift, donation, emergency", shortcut: "Ctrl+E", icon: Minus },
   { kind: "money_in", label: "Money in", about: "Bonus, refund, gift, reimbursement, side cash", shortcut: "Ctrl+I", icon: Plus },
   { kind: "transfer", label: "Transfer", about: "Between two of your accounts", icon: ArrowLeftRight },
-  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer, bucket move or card payment that repeats", icon: CalendarClock },
+  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer or card payment that repeats", icon: CalendarClock },
 ];
 
 /**

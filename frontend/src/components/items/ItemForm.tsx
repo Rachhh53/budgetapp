@@ -21,6 +21,7 @@ import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { firstUnusedColor } from "../ColorPicker";
+import { BucketForm } from "../buckets/BucketForm";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { FormSection } from "../FormSection";
@@ -32,6 +33,8 @@ import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { ITEM_FREQUENCY_LABELS, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
 
 const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind], icon: KIND_ICONS[kind] }));
+/** What a new item can be. Setting money aside in a bucket is set up on the bucket itself, so it is not offered. */
+const KINDS_TO_ADD = KIND_OPTIONS.filter((option) => option.value !== "bucket_move");
 
 const AMOUNT_MODE_OPTIONS: readonly { value: AmountMode; label: string }[] = [
   { value: "per_occurrence", label: "Each time" },
@@ -65,8 +68,17 @@ interface ItemFormProps {
  *
  * A change to an existing item applies from a date on ("this and all future"): earlier
  * occurrences keep what they had.
+ *
+ * A bucket's own recurring amount is the exception: it belongs to its bucket, so editing it
+ * from anywhere opens the bucket's form, the one place it is changed or stopped.
  */
 export function ItemForm(props: ItemFormProps) {
+  const buckets = useBuckets().data;
+  const bucket = props.item?.kind === "bucket_move" ? buckets?.find((candidate) => candidate.id === props.item?.bucketId) : undefined;
+  const account = bucket && props.accounts.find((candidate) => candidate.id === bucket.accountId);
+  if (bucket && account && buckets) {
+    return <BucketForm account={account} bucket={bucket} buckets={buckets} onClose={props.onClose} />;
+  }
   return (
     <Modal
       title={props.item ? `Edit ${props.item.name}` : "Add a recurring item"}
@@ -246,15 +258,12 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   };
 
   const kindChanged = item !== undefined && kind !== item.kind;
-  // A bucket with a goal and a date knows what it is still short of: offer that as the amount.
-  const goalBucket = isBucketMove ? openBuckets.find((bucket) => String(bucket.id) === bucketId) : undefined;
-  const goalNeeds = goalBucket?.goalProgress?.morePerPaycheckCents ?? null;
   const failure = problem ?? save.error?.message ?? replace.error?.message;
 
   return (
     <>
       <form onSubmit={submit} className="space-y-4">
-        <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={changeKind} />
+        <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
 
         {kindChanged && (
           // An item is one kind for its whole life, so this cannot apply "from today on" like other changes.
@@ -335,38 +344,6 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
                     ? "There are no buckets yet. Add one on a checking or savings account's page first."
                     : "The money stays in its account. It is set aside, so less shows as available."}
                 </p>
-                {goalBucket?.goalDate && goalNeeds !== null && (
-                  <div role="status" className="mt-2 rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
-                    <p>
-                      {goalBucket.name} is short of its goal for {formatDate(goalBucket.goalDate)}.{" "}
-                      <span data-amount className="font-semibold tabular-nums">
-                        {formatCents(goalNeeds)}
-                      </span>{" "}
-                      more every paycheck would get there
-                      {goalBucket.goalProgress?.morePerMonthCents != null && (
-                        <>
-                          , or{" "}
-                          <span data-amount className="font-semibold tabular-nums">
-                            {formatCents(goalBucket.goalProgress.morePerMonthCents)}
-                          </span>{" "}
-                          a month
-                        </>
-                      )}
-                      .
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAmount(centsToInput(goalNeeds));
-                        setAmountMode("per_occurrence");
-                        setFrequency("every_pay_period");
-                      }}
-                      className={`${BUTTON_SECONDARY} mt-2`}
-                    >
-                      Use <span data-amount>{formatCents(goalNeeds)}</span> every paycheck
-                    </button>
-                  </div>
-                )}
               </div>
             ) : (
               <Picker
@@ -545,72 +522,81 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           )}
         </FormSection>
 
+        {/* A different thing from saving towards a goal, and easily mistaken for it: out of the way unless it is in use. */}
         {canSaveUp && (
-          <FormSection title="Saving up">
-          {/* Always shown on a bill or budget, so it can be found; when it cannot be used, it says why. */}
-          {saveUpAccount === undefined && (
-            <div>
-              <p className={LABEL}>Save up for it in a bucket (optional)</p>
-              <p className={HINT}>
-                {payFrom === null
-                  ? "Choose the account it is paid from first. A share can then be set aside in one of that account's buckets every paycheck."
-                  : "Buckets live in checking and savings accounts, so there is nowhere to save up for something paid from this one."}
-              </p>
-            </div>
-          )}
-          {saveUpAccount !== undefined && (
-            <div>
-              <Picker
-                label="Save up for it in a bucket (optional)"
-                noun="bucket"
-                placeholder={saveUpBuckets.length === 0 ? "Type a name to add a bucket" : "Choose a bucket, or type a new one"}
-                options={saveUpBuckets}
-                value={chosenSaveUpBucket}
-                onChange={setSaveUpBucketId}
-                // A bucket that does not exist yet is added in place, in the account this is paid from.
-                onCreate={(text) =>
-                  addBucket.mutate(
-                    {
-                      accountId: saveUpAccount.id,
-                      name: text,
-                      color: firstUnusedColor([...everyBucket].reverse().map((bucket) => bucket.color)),
-                      goalCents: null,
-                      goalDate: null,
-                      note: null,
-                      archived: false,
-                      // From this paycheck's payday, as a bucket added on its own page would be.
-                      openedOn: currentPeriod?.start ?? todayIso(),
-                      startingCents: 0,
-                    },
-                    { onSuccess: (created) => setSaveUpBucketId(String(created.bucket.id)) },
-                  )
-                }
-                clearable
-              />
-              {addBucket.error && (
-                <p role="alert" className="mt-1 text-sm text-danger">
-                  {addBucket.error.message}
-                </p>
-              )}
-              <p className={HINT}>
-                This does not save anything extra. It spreads this {kind === "budget" ? "budget" : "bill"}'s own amount over the
-                paychecks before it is due, and holds each share in the bucket until then.
-                {item?.saveUpPerPaycheckCents != null && chosenSaveUpBucket !== null && (
-                  <>
-                    {" "}
-                    The next paycheck sets aside{" "}
-                    <span data-amount className="font-semibold text-ink tabular-nums">
-                      {formatCents(item.saveUpPerPaycheckCents)}
-                    </span>{" "}
-                    of the <span data-amount>{formatCents(item.perOccurrenceCents)}</span>
-                    {item.next ? ` due ${formatDate(item.next.dueDate)}` : ""}.
-                  </>
+          <details open={item?.saveUpBucketId != null} className="rounded-lg border border-line px-4 py-1">
+            <summary className="min-h-11 cursor-pointer content-center font-medium">More options</summary>
+            <div className="pb-3">
+              <FormSection title="Saving up">
+                {/* Always shown on a bill or budget, so it can be found; when it cannot be used, it says why. */}
+                {saveUpAccount === undefined && (
+                  <div>
+                    <p className={LABEL}>Save up for it in a bucket (optional)</p>
+                    <p className={HINT}>
+                      {payFrom === null
+                        ? "Choose the account it is paid from first. A share can then be set aside in one of that account's buckets every paycheck."
+                        : "Buckets live in checking and savings accounts, so there is nowhere to save up for something paid from this one."}
+                    </p>
+                  </div>
                 )}
-              </p>
-              <p className={HINT}>To put a set amount in a bucket every paycheck or month instead, choose the type Bucket move.</p>
+                {saveUpAccount !== undefined && (
+                  <div>
+                    <Picker
+                      label="Save up for it in a bucket (optional)"
+                      noun="bucket"
+                      placeholder={saveUpBuckets.length === 0 ? "Type a name to add a bucket" : "Choose a bucket, or type a new one"}
+                      options={saveUpBuckets}
+                      value={chosenSaveUpBucket}
+                      onChange={setSaveUpBucketId}
+                      // A bucket that does not exist yet is added in place, in the account this is paid from.
+                      onCreate={(text) =>
+                        addBucket.mutate(
+                          {
+                            accountId: saveUpAccount.id,
+                            name: text,
+                            color: firstUnusedColor([...everyBucket].reverse().map((bucket) => bucket.color)),
+                            goalCents: null,
+                            goalDate: null,
+                            note: null,
+                            archived: false,
+                            // From this paycheck's payday, as a bucket added on its own page would be.
+                            openedOn: currentPeriod?.start ?? todayIso(),
+                            startingCents: 0,
+                          },
+                          { onSuccess: (created) => setSaveUpBucketId(String(created.bucket.id)) },
+                        )
+                      }
+                      clearable
+                    />
+                    {addBucket.error && (
+                      <p role="alert" className="mt-1 text-sm text-danger">
+                        {addBucket.error.message}
+                      </p>
+                    )}
+                    <p className={HINT}>
+                      This does not save anything extra. It spreads this {kind === "budget" ? "budget" : "bill"}'s own amount over the
+                      paychecks before it is due, and holds each share in the bucket until then.
+                      {item?.saveUpPerPaycheckCents != null && chosenSaveUpBucket !== null && (
+                        <>
+                          {" "}
+                          The next paycheck sets aside{" "}
+                          <span data-amount className="font-semibold text-ink tabular-nums">
+                            {formatCents(item.saveUpPerPaycheckCents)}
+                          </span>{" "}
+                          of the <span data-amount>{formatCents(item.perOccurrenceCents)}</span>
+                          {item.next ? ` due ${formatDate(item.next.dueDate)}` : ""}.
+                        </>
+                      )}
+                    </p>
+                    <p className={HINT}>
+                      To put a set amount in a bucket every paycheck or month instead, open the bucket on its account's page and fill in
+                      "Set aside".
+                    </p>
+                  </div>
+                )}
+              </FormSection>
             </div>
-          )}
-          </FormSection>
+          </details>
         )}
 
         <FormSection title="Tags and notes">

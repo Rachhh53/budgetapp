@@ -22,6 +22,8 @@ export interface Bucket {
   balanceCents: number;
   /** The day the goal is to be reached by; `null` when there is none. */
   goalDate: string | null;
+  /** True when recurring bucket moves stop once it holds its goal. */
+  stopAtGoal: boolean;
   /** How it stands against its goal; `null` unless it has both a goal and a date for it. */
   goalProgress: GoalProgress | null;
 }
@@ -68,6 +70,8 @@ export interface BucketInput {
   openedOn: string;
   /** The day to reach the goal by; `null` for none. */
   goalDate: string | null;
+  /** Stop recurring bucket moves once it holds its goal. Left out, a bucket stays as it is. */
+  stopAtGoal?: boolean;
 }
 
 export interface BucketChangeInput {

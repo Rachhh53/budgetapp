@@ -45,6 +45,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -452,9 +453,26 @@ public final class Ledger {
             projections.put(accountId, BalanceProjector.project(anchors, movements.getOrDefault(accountId, List.of()), periods, terms));
         });
 
-        List<Move> bucketMoves = new ArrayList<>(open.isEmpty()
-                ? List.<Move>of()
-                : BucketMoves.derive(open, buckets.allChanges(), entries.withBucketSplits(), active, occurrences, expansion.periods()));
+        // A bucket that stops at its goal takes only what it still has room for; a move that puts
+        // nothing in is not listed in its pay period, and one cut down shows what it really moves.
+        Map<Long, Long> stopAt = open.stream()
+                .filter(bucket -> bucket.stopAtGoal() && bucket.goalCents() != null)
+                .collect(Collectors.toMap(Bucket::id, Bucket::goalCents));
+        BucketMoves.Capped capped = BucketMoves.stopAtGoals(
+                open.isEmpty()
+                        ? List.<Move>of()
+                        : BucketMoves.derive(open, buckets.allChanges(), entries.withBucketSplits(), active, occurrences, expansion.periods()),
+                stopAt);
+        List<Move> bucketMoves = new ArrayList<>(capped.moves());
+        List<Occurrence> listed = occurrences.stream()
+                .map(occurrence -> {
+                    Long room = occurrence.kind() == ItemKind.BUCKET_MOVE && !occurrence.skipped()
+                            ? capped.changed().get(new BucketMoves.MoveKey(occurrence.itemId(), occurrence.payBy()))
+                            : null;
+                    return room == null ? occurrence : room == 0 ? null : occurrence.withAmount(room);
+                })
+                .filter(Objects::nonNull)
+                .toList();
         Map<Long, List<PeriodBuckets>> bucketsByAccount = new HashMap<>();
         open.stream().collect(Collectors.groupingBy(Bucket::accountId)).forEach((accountId, ofAccount) -> {
             Set<Long> ids = ofAccount.stream().map(Bucket::id).collect(Collectors.toSet());
@@ -474,7 +492,7 @@ public final class Ledger {
             }
         });
         bucketMoves.sort(Comparator.comparing(Move::date));
-        return new Workings(occurrences, carried, oneOffs, projections, bucketsByAccount, bucketMoves);
+        return new Workings(listed, carried, oneOffs, projections, bucketsByAccount, bucketMoves);
     }
 
     /** True unless the occurrence names a bucket that is archived, or was not open yet on the day it counts. */

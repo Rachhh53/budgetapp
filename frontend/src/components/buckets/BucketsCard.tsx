@@ -2,8 +2,8 @@ import { PartyPopper } from "lucide-react";
 import { useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
-import { type Item, useItems, useSaveItem } from "../../api/items";
-import { addDays, formatDate, todayIso } from "../../lib/dates";
+import { type Item, useItems } from "../../api/items";
+import { formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
 import { EditButton } from "../EditButton";
@@ -228,11 +228,10 @@ function PutTheRestIn({ buckets, cents }: { buckets: readonly Bucket[]; cents: n
 
 /**
  * For a bucket with a goal and a date: whether what is already scheduled gets there in time,
- * and if not, what it would take each paycheck or month, with a one-step way to start.
+ * and if not, what it would take each paycheck or month. Acting on it happens in Edit.
  * Said in words, never by color alone.
  */
 function GoalPaceNote({ bucket }: { bucket: Bucket }) {
-  const addMove = useSaveItem();
   const progress = bucket.goalProgress;
   if (progress === null || bucket.goalDate === null) {
     return null;
@@ -271,51 +270,6 @@ function GoalPaceNote({ bucket }: { bucket: Bucket }) {
             </>
           )}
           <span data-amount className="font-semibold tabular-nums">{formatCents(perMonth)}</span> more a month.
-        </p>
-      )}
-      {perPaycheck !== null && (
-        <button
-          type="button"
-          disabled={addMove.isPending}
-          onClick={() =>
-            addMove.mutate({
-              name: `${bucket.name} goal`,
-              kind: "bucket_move",
-              note: null,
-              archived: false,
-              tagIds: [],
-              amountCents: perPaycheck,
-              amountMode: "per_occurrence",
-              estimate: false,
-              categoryId: null,
-              payFromAccountId: bucket.accountId,
-              payToAccountId: null,
-              autopay: true,
-              placement: "due_period",
-              // From the next payday: this paycheck is not among the ones the amount was shared over.
-              schedule: {
-                frequency: "every_pay_period",
-                interval: null,
-                day1: null,
-                day2: null,
-                month: null,
-                startDate: addDays(todayIso(), 1),
-                endDate: bucket.goalDate,
-                weekendRule: "none",
-              },
-              daysAfterPayday: 0,
-              bucketId: bucket.id,
-              saveUpBucketId: null,
-            })
-          }
-          className={`${BUTTON_SECONDARY} mt-2`}
-        >
-          {addMove.isPending ? "Adding…" : <>Start saving <span data-amount>{formatCents(perPaycheck)}</span> every paycheck</>}
-        </button>
-      )}
-      {addMove.isError && (
-        <p role="alert" className="mt-1 text-danger">
-          {addMove.error.message}
         </p>
       )}
     </div>

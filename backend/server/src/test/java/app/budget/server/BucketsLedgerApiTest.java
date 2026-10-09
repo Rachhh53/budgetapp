@@ -296,6 +296,43 @@ class BucketsLedgerApiTest extends ApiTestBase {
     class SavingTowardsAGoalByADate {
 
         @Test
+        void aBucketThatStopsAtItsGoalTakesOnlyWhatItStillHasRoomFor() throws Exception {
+            // 150.00 there already and 50.00 every paycheck: 200 on Oct 1, 250 on Oct 15, then full at 270.
+            JsonNode bucket = giftsWithGoal("\"goalCents\":27000,\"stopAtGoal\":true");
+            long id = bucket.get("id").asLong();
+            assertThat(bucket.get("stopAtGoal").asBoolean()).isTrue();
+            save50EveryPaycheck(id);
+
+            // The move that reaches the goal is cut down to what was missing …
+            JsonNode november = server.get("/api/pay-periods/2026-11-01", cookie).data();
+            assertThat(november.get("occurrences").findValuesAsText("name")).contains("Gift fund");
+            assertThat(november.get("occurrences").get(0).get("amountCents").asLong()).isEqualTo(2000);
+            assertThat(november.get("buckets").get(0).get("endingCents").asLong()).isEqualTo(27000);
+            // … and after that the move is not listed, and the bucket stays at its goal.
+            JsonNode later = server.get("/api/pay-periods/2026-11-15", cookie).data();
+            assertThat(later.get("occurrences").findValuesAsText("name")).doesNotContain("Gift fund");
+            assertThat(later.get("buckets").get(0).get("endingCents").asLong()).isEqualTo(27000);
+        }
+
+        @Test
+        void aBucketThatDoesNotStopKeepsTakingItsMoves() throws Exception {
+            long id = giftsWithGoal("\"goalCents\":27000").get("id").asLong();
+            save50EveryPaycheck(id);
+
+            JsonNode later = server.get("/api/pay-periods/2026-11-15", cookie).data();
+            assertThat(later.get("occurrences").findValuesAsText("name")).contains("Gift fund");
+            assertThat(later.get("buckets").get(0).get("endingCents").asLong()).isEqualTo(35000);
+
+            // Turning it on later is enough; leaving it out of a change keeps it as it was.
+            server.put("/api/buckets/" + id,
+                    "{\"name\":\"Holiday gifts\",\"color\":\"#b45309\",\"goalCents\":27000,\"stopAtGoal\":true}", cookie);
+            server.put("/api/buckets/" + id, "{\"name\":\"Holiday gifts\",\"color\":\"#b45309\",\"goalCents\":27000}", cookie);
+            assertThat(server.get("/api/buckets/" + id, cookie).data().get("bucket").get("stopAtGoal").asBoolean()).isTrue();
+            assertThat(server.get("/api/pay-periods/2026-11-15", cookie).data().get("buckets").get(0).get("endingCents").asLong())
+                    .isEqualTo(27000);
+        }
+
+        @Test
         void saysWhatAGoalWouldTakeBeforeItIsSaved() throws Exception {
             // A bucket that does not exist yet: 150.00 to start with, 600.00 wanted by Dec 1.
             Reply reply = server.get("/api/goal-pace?goalCents=60000&goalDate=2026-12-01&heldCents=15000", cookie);

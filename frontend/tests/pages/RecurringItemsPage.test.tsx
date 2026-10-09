@@ -111,6 +111,7 @@ const GIFTS: Bucket = {
   archived: false,
   openedOn: "2026-09-01",
   goalDate: null,
+  stopAtGoal: false,
   goalProgress: null,
   balanceCents: 15000,
 };
@@ -386,43 +387,30 @@ describe("recurring items screen", () => {
     });
   });
 
-  it("adds a bucket move: money set aside in a bucket every paycheck", async () => {
-    const fetchMock = withItems([], {
-      "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
-      "POST /api/items": () => ({ status: 201, data: GROCERIES }),
-    });
+  it("does not offer a bucket move as a type, and opens a bucket's own move in the bucket's form", async () => {
+    const fund: Item = { ...GROCERIES, id: 8, name: "Gift fund", kind: "bucket_move", bucketId: 7, categoryId: null };
+    withItems([fund, RENT], { "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }) });
     renderApp("/recurring");
 
+    // Setting money aside is set up on the bucket, so it is not among the types of a new item.
     await waitFor(() => expect(screen.getByRole("button", { name: "+ Add item" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
-    const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
-    await userEvent.click(within(dialog).getByRole("radio", { name: "Bucket move" }));
+    const adding = screen.getByRole("dialog", { name: "Add a recurring item" });
+    expect(within(adding).getAllByRole("radio").slice(0, 4).map((radio) => radio.closest("label")?.textContent)).toEqual([
+      "Bill",
+      "Transfer",
+      "Budget",
+      "Card payment",
+    ]);
+    expect(within(adding).queryByRole("radio", { name: "Bucket move" })).not.toBeInTheDocument();
+    await userEvent.click(within(adding).getByRole("button", { name: "Cancel" }));
 
-    // The bucket says which account it is in, and nothing has to be paid by anyone.
-    expect(within(dialog).queryByRole("combobox", { name: "Paid from" })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("checkbox", { name: "Autopay" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("every_pay_period");
-
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Gift fund");
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "50");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the bucket this money goes into.");
-
-    await pick(dialog, "Into bucket", "Holiday");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
-
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    const [sent] = bodiesSentTo(fetchMock, "POST /api/items") as [Record<string, unknown>];
-    expect(sent).toMatchObject({
-      kind: "bucket_move",
-      amountCents: 5000,
-      bucketId: 7,
-      payFromAccountId: 1,
-      payToAccountId: null,
-      autopay: true,
-      saveUpBucketId: null,
-      schedule: { frequency: "every_pay_period" },
-    });
+    // The move is still listed here, and editing it opens the one place it is changed: its bucket.
+    await userEvent.click(screen.getByRole("button", { name: "Edit Gift fund" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+    expect(await within(dialog).findByRole("textbox", { name: "Set aside (optional)" })).toHaveValue(
+      (fund.amountCents / 100).toFixed(2),
+    );
   });
 
   it("saves up for a bill in a bucket of the account it is paid from", async () => {

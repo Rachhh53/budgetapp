@@ -132,6 +132,7 @@ const GIFTS: Bucket = {
   archived: false,
   openedOn: "2026-09-01",
   goalDate: null,
+  stopAtGoal: false,
   goalProgress: null,
   balanceCents: 20000,
 };

@@ -63,6 +63,8 @@ public final class BucketsRoutes {
      * @param startingCents when adding: what is already set aside, if anything
      * @param goalDate      the day the goal is to be reached by, if there is one; it means nothing without a goal
      * @param openedOn      the day it counts from; left out, a new bucket counts from today and an existing one keeps its day
+     * @param stopAtGoal    true to stop recurring bucket moves into it once it holds its goal; left out, a new
+     *                      bucket keeps going and an existing one stays as it is
      */
     public record BucketInput(
             Long accountId,
@@ -73,7 +75,8 @@ public final class BucketsRoutes {
             Boolean archived,
             Long startingCents,
             LocalDate openedOn,
-            LocalDate goalDate) {}
+            LocalDate goalDate,
+            Boolean stopAtGoal) {}
 
     /** Request body for putting money into (+) or taking it out of (−) a bucket by hand. */
     public record ChangeInput(LocalDate date, Long amountCents, String note) {}
@@ -95,6 +98,7 @@ public final class BucketsRoutes {
             LocalDate openedOn,
             long balanceCents,
             LocalDate goalDate,
+            boolean stopAtGoal,
             GoalProgress goalProgress) {}
 
     /**
@@ -244,7 +248,7 @@ public final class BucketsRoutes {
         return chosen.stream()
                 .map(bucket -> new BucketView(
                         bucket.id(), bucket.accountId(), bucket.name(), bucket.color(), bucket.goalCents(), bucket.note(),
-                        bucket.archived(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L), bucket.goalDate(),
+                        bucket.archived(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L), bucket.goalDate(), bucket.stopAtGoal(),
                         goalProgress(bucket, today, held, heldOn)))
                 .toList();
     }
@@ -319,6 +323,7 @@ public final class BucketsRoutes {
                 Boolean.TRUE.equals(input.archived()),
                 input.openedOn(),
                 // A date for a goal that is not there says nothing.
-                goal == null || goal == 0 ? null : input.goalDate());
+                goal == null || goal == 0 ? null : input.goalDate(),
+                input.stopAtGoal());
     }
 }

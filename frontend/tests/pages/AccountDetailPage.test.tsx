@@ -38,6 +38,7 @@ const GIFTS: Bucket = {
   archived: false,
   openedOn: "2026-09-01",
   goalDate: null,
+  stopAtGoal: false,
   goalProgress: null,
   balanceCents: 20000,
 };
@@ -244,16 +245,15 @@ describe("account detail screen", () => {
       );
     });
 
-    it("shows what reaching a goal by its date would take, and starts saving it in one step", async () => {
+    it("shows on a bucket's row what reaching its goal by its date would take", async () => {
       const short = {
         ...GIFTS,
         goalDate: "2099-12-01",
         goalProgress: { projectedCents: 40000, shortCents: 20000, paydaysLeft: 4, morePerPaycheckCents: 5000, morePerMonthCents: 10000 },
       };
-      const fetchMock = fakeBackend({
+      fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
         "GET /api/buckets": () => ({ status: 200, data: [short] }),
-        "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
       });
       renderApp("/accounts/1");
 
@@ -262,21 +262,11 @@ describe("account detail screen", () => {
       expect(gifts).toHaveTextContent("Short by $200.00.");
       expect(gifts).toHaveTextContent("it will hold $400.00 by Dec 1, 2099");
       expect(gifts).toHaveTextContent("set aside $50.00 more every paycheck, or $100.00 more a month");
-
-      await userEvent.click(within(gifts).getByRole("button", { name: "Start saving $50.00 every paycheck" }));
-
-      await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/items")).toHaveLength(1));
-      expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({
-        name: "Holiday gifts goal",
-        kind: "bucket_move",
-        amountCents: 5000,
-        bucketId: 7,
-        payFromAccountId: 1,
-        schedule: { frequency: "every_pay_period", endDate: "2099-12-01" },
-      });
+      // The row says how it is going; Edit is the one place to act on it.
+      expect(within(gifts).getAllByRole("button")).toHaveLength(1);
     });
 
-    it("sets up a recurring move from a bucket's Edit form, and says what its goal still takes", async () => {
+    it("says in the bucket's form what its goal takes, and sets that aside every paycheck", async () => {
       const short = {
         ...GIFTS,
         goalDate: "2099-12-01",
@@ -285,47 +275,91 @@ describe("account detail screen", () => {
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
         "GET /api/buckets": () => ({ status: 200, data: [short] }),
+        "GET /api/items": () => ({ status: 200, data: [] }),
         "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: short, changes: [] }, changed: true }),
         "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
         "GET /api/goal-pace": () => ({ status: 200, data: short.goalProgress }),
       });
       renderApp("/accounts/1");
 
-      // The row itself only offers Edit; the move is set up inside it.
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
-      expect(screen.queryByRole("button", { name: /Add a recurring move/ })).not.toBeInTheDocument();
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
-      const amount = within(dialog).getByRole("textbox", { name: "Set aside every paycheck (optional)" });
+      // Three questions, in order.
+      for (const question of ["What are you saving for?", "How much, by when?", "How much each time?"]) {
+        expect(within(dialog).getByRole("group", { name: question })).toBeInTheDocument();
+      }
+      const amount = await within(dialog).findByRole("textbox", { name: "Set aside (optional)" });
       // The form says what the goal takes, and one press fills it in; it can still be typed over.
       const advice = await within(dialog).findByRole("status");
       expect(advice).toHaveTextContent("To have $600.00 by Dec 1, 2099, set aside $50.00 every paycheck (4 paychecks left), or $100.00 a month.");
-      await userEvent.click(within(advice).getByRole("button", { name: "Set aside $50.00 every paycheck" }));
+      await userEvent.click(within(advice).getByRole("button", { name: "Use $100.00 a month" }));
+      expect(amount).toHaveValue("100.00");
+      expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("monthly");
+      await userEvent.click(within(advice).getByRole("button", { name: "Use $50.00 every paycheck" }));
       expect(amount).toHaveValue("50.00");
+      expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("every_pay_period");
       await userEvent.clear(amount);
       await userEvent.type(amount, "75");
-      // With a goal date ahead, the move stops on it unless told to keep going.
-      const stopAtGoal = within(dialog).getByRole("checkbox", { name: "Stop on the goal date (Dec 1, 2099)" });
-      expect(stopAtGoal).toBeChecked();
+      await userEvent.click(within(dialog).getByRole("checkbox", { name: "Stop when the goal is reached" }));
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[0]).toMatchObject({ goalCents: 60000, goalDate: "2099-12-01", stopAtGoal: true });
+      // The bucket stops itself at its goal, so the move needs no end date of its own.
       expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({
         name: "Holiday gifts",
         kind: "bucket_move",
         amountCents: 7500,
         bucketId: 7,
         payFromAccountId: 1,
-        schedule: { frequency: "every_pay_period", endDate: "2099-12-01" },
+        schedule: { frequency: "every_pay_period", endDate: null },
       });
+    });
 
-      // Unticked, it keeps going after the goal date.
+    it("changes and stops a bucket's own recurring amount from its form", async () => {
+      const fund = {
+        id: 5, name: "Gift fund", kind: "bucket_move", archived: false, note: null, tagIds: [], bucketId: 7, saveUpBucketId: null,
+        amountCents: 5000, amountMode: "per_occurrence", estimate: false, categoryId: null, payFromAccountId: 1, payToAccountId: null,
+        autopay: true, placement: "due_period", daysAfterPayday: 0, perOccurrenceCents: 5000,
+        schedule: { frequency: "every_pay_period", interval: null, day1: null, day2: null, month: null, startDate: "2026-10-01", endDate: null, weekendRule: "none" },
+      };
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "GET /api/items": () => ({ status: 200, data: [fund] }),
+        "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: GIFTS, changes: [] }, changed: true }),
+        "PUT /api/items/5": () => ({ status: 200, data: fund, changed: true }),
+        "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      // It opens showing what already goes in; a new amount changes that same move from today.
+      await screen.findByRole("list", { name: "Recurring into Holiday gifts" });
+      await userEvent.click(screen.getByRole("button", { name: "Edit Holiday gifts" }));
+      const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      const amount = within(dialog).getByRole("textbox", { name: "Set aside (optional)" });
+      expect(amount).toHaveValue("50.00");
+      await userEvent.clear(amount);
+      await userEvent.type(amount, "60");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/5")[0]).toMatchObject({
+        name: "Gift fund",
+        amountCents: 6000,
+        schedule: { frequency: "every_pay_period", endDate: null },
+      });
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/5")[0]).toHaveProperty("effectiveFrom");
+
+      // Emptied, it stops: the move ends today and no second one is added.
       await userEvent.click(screen.getByRole("button", { name: "Edit Holiday gifts" }));
       const again = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
-      await userEvent.type(within(again).getByRole("textbox", { name: "Set aside every paycheck (optional)" }), "10");
-      await userEvent.click(within(again).getByRole("checkbox", { name: "Stop on the goal date (Dec 1, 2099)" }));
+      await userEvent.clear(within(again).getByRole("textbox", { name: "Set aside (optional)" }));
       await userEvent.click(within(again).getByRole("button", { name: "Save changes" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(bodiesSentTo(fetchMock, "POST /api/items")[1]).toMatchObject({ amountCents: 1000, schedule: { endDate: null } });
+      const stopped = bodiesSentTo(fetchMock, "PUT /api/items/5")[1] as { amountCents: number; schedule: { endDate: string | null } };
+      expect(stopped.amountCents).toBe(5000);
+      expect(stopped.schedule.endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(bodiesSentTo(fetchMock, "POST /api/items")).toEqual([]);
     });
 
     it("adds nothing recurring when that amount is left empty", async () => {
@@ -448,7 +482,7 @@ describe("account detail screen", () => {
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Holiday gifts");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Goal (optional)" }), "600");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
-      await userEvent.type(within(dialog).getByRole("textbox", { name: "Set aside every paycheck (optional)" }), "50");
+      await userEvent.type(within(dialog).getByRole("textbox", { name: "Set aside (optional)" }), "50");
       // It counts from this paycheck's payday unless told otherwise, so the paycheck in hand is included.
       await waitFor(() => expect(within(dialog).getByLabelText("Counts from")).toHaveValue("2026-01-01"));
       await userEvent.click(within(dialog).getByRole("button", { name: "Add bucket" }));
@@ -464,6 +498,8 @@ describe("account detail screen", () => {
           archived: false,
           openedOn: "2026-01-01",
           goalDate: null,
+          // A goal stops its own saving once it is reached, unless that is unticked.
+          stopAtGoal: true,
           startingCents: 15000,
         },
       ]);

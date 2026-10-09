@@ -84,6 +84,14 @@ public final class ItemCalendar {
             Long bucketId,
             Long saveUpBucketId) {
 
+        /** This occurrence at another amount: for a bucket move that only has room for part of itself. */
+        public Occurrence withAmount(long cents) {
+            return new Occurrence(
+                    itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, cents, estimate, projectedCents,
+                    autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
+                    skipped, bucketId, saveUpBucketId);
+        }
+
         /** This occurrence with its money going into no bucket: for one dated before its bucket was opened. */
         public Occurrence withoutBucket() {
             return new Occurrence(

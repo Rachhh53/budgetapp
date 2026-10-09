@@ -148,6 +148,52 @@ public final class BucketMoves {
         return moves;
     }
 
+    /** One recurring move, as an occurrence and the move derived from it both know it. */
+    record MoveKey(long itemId, LocalDate date) {}
+
+    /**
+     * @param moves   every move, with recurring bucket moves cut down to what their bucket had room for
+     * @param changed what each cut-down move puts in instead; zero when the bucket was already full
+     */
+    record Capped(List<Move> moves, Map<MoveKey, Long> changed) {}
+
+    /**
+     * Stops recurring bucket moves at a bucket's goal, for the buckets that asked for it. Going
+     * through the moves in date order, a bucket move only puts in what is still missing: the
+     * one that reaches the goal is cut down to fit, and those after it put in nothing. Anything
+     * else (money moved by hand, a transfer, a save-up) is left alone, so a bucket can still
+     * end up over its goal if the user puts more in.
+     *
+     * @param moves earliest first
+     * @param goals goal in cents by bucket id, for the buckets that stop at their goal
+     */
+    static Capped stopAtGoals(List<Move> moves, Map<Long, Long> goals) {
+        if (goals.isEmpty()) {
+            return new Capped(moves, Map.of());
+        }
+        Map<Long, Long> held = new HashMap<>();
+        Map<MoveKey, Long> changed = new HashMap<>();
+        List<Move> kept = new ArrayList<>();
+        for (Move move : moves) {
+            Long goal = goals.get(move.bucketId());
+            long amount = move.amountCents();
+            if (goal != null && move.kind() == Kind.BUCKET_MOVE && amount > 0) {
+                long room = Math.max(0, goal - held.getOrDefault(move.bucketId(), 0L));
+                if (amount > room) {
+                    amount = room;
+                    changed.put(new MoveKey(move.itemId(), move.date()), room);
+                }
+            }
+            if (amount == move.amountCents()) {
+                kept.add(move);
+            } else if (amount > 0) {
+                kept.add(new Move(move.bucketId(), move.date(), amount, move.kind(), move.label(), move.itemId()));
+            }
+            held.merge(move.bucketId(), amount, Long::sum);
+        }
+        return new Capped(kept, changed);
+    }
+
     /**
      * Saving up for one item's bills. Each bill is shared out over the paydays between the
      * one before it and its own; the money leaves the bucket on the day the bill counts.

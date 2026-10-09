@@ -153,7 +153,7 @@ export function useReplaceItem(id: number | undefined) {
 }
 
 /** An item as the request that would save it unchanged, to change one thing about it. */
-function asInput(item: Item): ItemInput {
+export function itemAsInput(item: Item): ItemInput {
   return {
     name: item.name,
     kind: item.kind,
@@ -185,7 +185,7 @@ export function useEndItems() {
     mutationFn: ({ items, endDate, effectiveFrom }: { items: readonly Item[]; endDate: string; effectiveFrom: string }) =>
       Promise.all(
         items.map((item) =>
-          api.put<Item>(`/api/items/${item.id}`, { ...asInput(item), schedule: { ...item.schedule, endDate }, effectiveFrom }),
+          api.put<Item>(`/api/items/${item.id}`, { ...itemAsInput(item), schedule: { ...item.schedule, endDate }, effectiveFrom }),
         ),
       ),
     onSuccess: refresh,
@@ -201,7 +201,7 @@ export function useChangeItemAmount() {
   return useMutation({
     mutationFn: ({ item, amountCents, effectiveFrom }: { item: Item; amountCents: number; effectiveFrom: string }) => {
       // A typed amount is the amount: it stops being an estimate (spec §1).
-      const input: ItemInput = { ...asInput(item), amountCents, estimate: false, effectiveFrom };
+      const input: ItemInput = { ...itemAsInput(item), amountCents, estimate: false, effectiveFrom };
       return api.put<Item>(`/api/items/${item.id}`, input);
     },
     onSuccess: refresh,
