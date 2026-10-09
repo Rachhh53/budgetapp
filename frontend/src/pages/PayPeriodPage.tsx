@@ -763,7 +763,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
 function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurrence[]; context: RowContext }) {
   const total = occurrences.reduce((sum, occurrence) => sum + occurrence.amountCents, 0);
   return (
-    <Panel title="Spending budgets" aside="this paycheck">
+    <Panel title="Budgets" aside="this paycheck">
       {occurrences.length === 0 ? (
         <Empty>No budgets this period. Add one as a recurring item of the Budget type.</Empty>
       ) : (

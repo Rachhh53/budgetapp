@@ -293,7 +293,7 @@ describe("pay period screen", () => {
     expect(within(auto).getByText("Car loan")).toBeInTheDocument();
     expect(within(auto).getByText("AUTO")).toBeInTheDocument();
 
-    const budgets = await panel("Spending budgets");
+    const budgets = await panel("Budgets");
     expect(within(budgets).getByText("Groceries")).toBeInTheDocument();
     expect(within(budgets).getByText("Total").closest("p")).toHaveTextContent("$300.00");
 
