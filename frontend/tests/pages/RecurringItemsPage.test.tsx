@@ -243,16 +243,36 @@ describe("recurring items screen", () => {
     expect(screen.getByText("Nothing matches that.")).toBeInTheDocument();
   });
 
-  it("shows an archived item last and labelled", async () => {
+  it("hides archived items until Archived is chosen, and counts them only there", async () => {
     withItems([{ ...ELECTRIC, archived: true, next: null }, RENT]);
     renderApp("/recurring");
 
     const table = await screen.findByRole("table", { name: "Recurring items" });
-    const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows[0]).toHaveTextContent("Rent");
-    expect(rows[1]).toHaveTextContent("Electric");
-    expect(rows[1]).toHaveTextContent("Archived");
-    expect(rows[1]).toHaveTextContent("—");
+    expect(within(table).getAllByRole("row").slice(1)).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Edit Electric" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All · 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bills · 1" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Archived · 1" }));
+    const rows = within(screen.getByRole("table", { name: "Recurring items" })).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Electric");
+    expect(rows[0]).toHaveTextContent("Archived");
+    expect(rows[0]).toHaveTextContent("—");
+    expect(screen.getByRole("button", { name: "Edit Electric" })).toBeInTheDocument();
+  });
+
+  it("offers no Archived chip when nothing is archived, and says so when everything is", async () => {
+    withItems([RENT]);
+    const { unmount } = renderApp("/recurring");
+    await screen.findByRole("button", { name: "All · 1" });
+    expect(screen.queryByRole("button", { name: /^Archived/ })).not.toBeInTheDocument();
+    unmount();
+
+    withItems([{ ...ELECTRIC, archived: true, next: null }]);
+    renderApp("/recurring");
+    expect(await screen.findByText("Everything here is archived.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archived · 1" })).toBeInTheDocument();
   });
 
   it("adds a bill", async () => {

@@ -16,7 +16,7 @@ import { formatCents } from "../lib/money";
 /** What the form is open for: a new item, an existing one, or closed. */
 type FormState = { item?: Item } | null;
 
-type Filter = "all" | ItemKind;
+type Filter = "all" | ItemKind | "archived";
 
 /**
  * Column widths from `md` up. Below that each row becomes a card instead: the same cells in
@@ -41,6 +41,9 @@ export function RecurringItemsPage() {
   const [search, setSearch] = useState("");
 
   const all = items.data ?? [];
+  // Archived items are out of the way until asked for: they have their own chip, and count nowhere else.
+  const active = all.filter((item) => !item.archived);
+  const archived = all.filter((item) => item.archived);
   const allAccounts = accounts.data ?? [];
   const allCategories = categories.data ?? [];
   const needsAccount = accounts.data !== undefined && allAccounts.every((account) => account.archived);
@@ -49,17 +52,15 @@ export function RecurringItemsPage() {
   const categoryName = (id: number | null) => allCategories.find((category) => category.id === id)?.name ?? "";
 
   const typed = search.trim().toLowerCase();
-  const shown = all
-    .filter((item) => filter === "all" || item.kind === filter)
+  const shown = (filter === "archived" ? archived : active)
+    .filter((item) => filter === "all" || filter === "archived" || item.kind === filter)
     .filter(
       (item) =>
         typed === "" ||
         [item.name, accountName(item.payFromAccountId), accountName(item.payToAccountId), categoryName(item.categoryId)].some((text) =>
           text.toLowerCase().includes(typed),
         ),
-    )
-    // Archived items sink to the bottom; the backend already sorts by name.
-    .sort((a, b) => Number(a.archived) - Number(b.archived));
+    );
 
   return (
     <>
@@ -109,16 +110,20 @@ export function RecurringItemsPage() {
         <>
           <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
             <div role="group" aria-label="Show" className="flex flex-wrap gap-2">
-              <FilterChip label="All" count={all.length} pressed={filter === "all"} onPress={() => setFilter("all")} />
+              <FilterChip label="All" count={active.length} pressed={filter === "all"} onPress={() => setFilter("all")} />
               {ITEM_KINDS.map((kind) => (
                 <FilterChip
                   key={kind}
                   label={KIND_PLURALS[kind]}
-                  count={all.filter((item) => item.kind === kind).length}
+                  count={active.filter((item) => item.kind === kind).length}
                   pressed={filter === kind}
                   onPress={() => setFilter(kind)}
                 />
               ))}
+              {/* Only when there is something in it, or while it is the one chosen (the last one may just have been restored). */}
+              {(archived.length > 0 || filter === "archived") && (
+                <FilterChip label="Archived" count={archived.length} pressed={filter === "archived"} onPress={() => setFilter("archived")} />
+              )}
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:ml-auto">
               {all.some((item) => item.estimate) && <EstimateKey />}
@@ -141,8 +146,25 @@ export function RecurringItemsPage() {
 
           {shown.length === 0 ? (
             <Card>
-              <p className="font-medium">Nothing matches that.</p>
-              <p className="mt-1 text-muted">Try a different search, or choose All to see every item again.</p>
+              {typed === "" && filter === "archived" ? (
+                <>
+                  <p className="font-medium">Nothing is archived.</p>
+                  <p className="mt-1 text-muted">Choose All to see your items.</p>
+                </>
+              ) : typed === "" && filter === "all" ? (
+                <>
+                  <p className="font-medium">Everything here is archived.</p>
+                  <p className="mt-1 text-muted">Choose Archived to see those items, or add a new one.</p>
+                </>
+              ) : (
+                <>
+                  <p className="font-medium">Nothing matches that.</p>
+                  <p className="mt-1 text-muted">
+                    Try a different search, or choose All to see every item again.
+                    {archived.length > 0 && filter !== "archived" && " Archived items are under Archived."}
+                  </p>
+                </>
+              )}
             </Card>
           ) : (
             <div role="table" aria-label="Recurring items" className="rounded-card border border-line bg-surface">

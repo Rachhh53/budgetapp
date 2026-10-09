@@ -489,6 +489,8 @@ Also in this branch: migration `V5` (buckets, bucket changes, entry splits, inte
 
 Form redesign (2026-10-09, §6): the recurring item form is a centered dialog like every other form, no longer a slide-out (Rachel, 2026-10-09: "make it consistent"); header strip and icon on every dialog; the recurring item form is grouped into Amount, What it is, Where it's paid from, Schedule, Saving up, Tags and notes, with a large amount field, icons on the type switch and the "In short" sentence; "Goal reached" on buckets. **Not yet:** the grouped layout and large amount on the other forms (account, bucket, interest, one-off money in/out), waiting on Rachel's say on the recurring form.
 
+Archived recurring items (decided 2026-10-09): hidden from the Recurring items list and left out of the All and per-kind counts; an **Archived** filter chip, shown only when something is archived, lists them.
+
 ### Carried forward into later phases
 
 | Feature | Notes |
