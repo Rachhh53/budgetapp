@@ -507,6 +507,8 @@ Savings goals streamlined (decided 2026-10-09; replaces the bucket-form and buck
 
 Account tabs on the pay period screen (decided 2026-10-09): every account that is not archived has a tab. An account that has any balance entered shows in every pay period (Rachel, 2026-10-09: "that account has a balance, it should show … whether that balance changes or not"): a period that ends before its first balance stands at that balance, dated the day it was entered, with nothing counted and no in/out lines. Only an account with no balance at all has a tab that says so and links to its page.
 
+Building a balance from an earlier day (decided 2026-10-09; Rachel: "I should always be able to build it"): the bucket's recurring amount has a **Starting** date (today by default; any day, and an earlier one fills in what it would have set aside since, moving the bucket's counts-from day back with it). The amount typed for a bucket ("Already set aside" / "In this bucket") has an **As of** date, today by default. Account balances already take a date on Update balance. Archive is a button beside Delete in the bucket form ("Archive this bucket" / "Bring this bucket back"), no longer a tick among the fields.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

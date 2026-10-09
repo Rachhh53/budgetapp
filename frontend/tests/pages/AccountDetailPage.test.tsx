@@ -483,6 +483,11 @@ describe("account detail screen", () => {
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Goal (optional)" }), "600");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Set aside (optional)" }), "50");
+      // It starts today unless backdated; an earlier day builds up what it would already hold.
+      const starting = within(dialog).getByLabelText("Starting");
+      expect(starting).toHaveValue(new Date().toLocaleDateString("en-CA"));
+      await userEvent.clear(starting);
+      await userEvent.type(starting, "2026-01-01");
       // It counts from this paycheck's payday unless told otherwise, so the paycheck in hand is included.
       await waitFor(() => expect(within(dialog).getByLabelText("Counts from")).toHaveValue("2026-01-01"));
       await userEvent.click(within(dialog).getByRole("button", { name: "Add bucket" }));
@@ -510,7 +515,55 @@ describe("account detail screen", () => {
         amountCents: 5000,
         bucketId: 7,
         payFromAccountId: 1,
+        schedule: { frequency: "every_pay_period", startDate: "2026-01-01" },
       });
+    });
+
+    it("backdates the amount a new bucket starts with, so its balance builds from then", async () => {
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "POST /api/buckets": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
+        "POST /api/buckets/7/changes": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      const buckets = await screen.findByRole("region", { name: "Buckets" });
+      await userEvent.click(await within(buckets).findByRole("button", { name: "Add a bucket" }));
+      const dialog = screen.getByRole("dialog", { name: "Add a bucket to Everyday Checking" });
+      await userEvent.type(await within(dialog).findByRole("textbox", { name: "Name" }), "Holiday gifts");
+      await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
+      const asOf = within(dialog).getByLabelText("As of");
+      expect(asOf).toHaveValue(new Date().toLocaleDateString("en-CA"));
+      await userEvent.clear(asOf);
+      await userEvent.type(asOf, "2026-01-15");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Add bucket" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      // The bucket is added empty, and the amount goes in on the day chosen.
+      expect(bodiesSentTo(fetchMock, "POST /api/buckets")[0]).toMatchObject({ name: "Holiday gifts", startingCents: 0 });
+      expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/changes")).toEqual([
+        { date: "2026-01-15", amountCents: 15000, note: "Starting amount" },
+      ]);
+    });
+
+    it("archives a bucket from the button beside Delete", async () => {
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: { ...GIFTS, archived: true }, changes: [] }, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      // Archive is an action next to Delete, not a tick among the fields.
+      expect(within(dialog).queryByRole("checkbox", { name: "Archived" })).not.toBeInTheDocument();
+      const archive = await within(dialog).findByRole("button", { name: "Archive this bucket" });
+      expect(archive.parentElement).toContainElement(within(dialog).getByRole("button", { name: "Delete this bucket" }));
+      await userEvent.click(archive);
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[0]).toMatchObject({ name: "Holiday gifts", goalCents: 60000, archived: true });
     });
 
     it("lists what was changed by hand in the bucket's Edit form, and removes one", async () => {

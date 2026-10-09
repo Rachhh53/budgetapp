@@ -1,10 +1,10 @@
 import { PiggyBank } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
-import { type Bucket, useDeleteBucket, useGoalPace, useMoveBucketMoney, useSaveBucket } from "../../api/buckets";
+import { type Bucket, useDeleteBucket, useGoalPace, useMoveMoneyInto, useSaveBucket } from "../../api/buckets";
 import { usePayPeriods } from "../../api/income";
 import { type Item, itemAsInput, type ItemSchedule, useItems, useSaveItem } from "../../api/items";
-import { addDays, formatDate, todayIso } from "../../lib/dates";
+import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { DaySelect } from "../DaySelect";
@@ -14,6 +14,9 @@ import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { describeItemSchedule } from "../items/labels";
 import { BucketHistory } from "./BucketHistory";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+
+/** What the history calls the amount a new bucket was given, when that is dated earlier than today. */
+const STARTING_NOTE = "Starting amount";
 
 /** What the history calls a move made by typing a new amount into the bucket's form. */
 const ADJUSTED_NOTE = "Amount adjusted";
@@ -82,14 +85,20 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
   const [amount, setAmount] = useState(own ? centsToInput(own.amountCents) : "");
   const [cadence, setCadence] = useState<Cadence>(own?.schedule.frequency === "monthly" ? "monthly" : "every_pay_period");
   const [monthDay, setMonthDay] = useState(own?.schedule.day1 ?? 1);
+  // When the recurring amount begins. Today unless told otherwise; an earlier day builds up what it would already hold.
+  const [startsOn, setStartsOn] = useState(own?.schedule.startDate ?? todayIso());
   const [starting, setStarting] = useState("");
   const [held, setHeld] = useState(bucket ? centsToInput(bucket.balanceCents) : "");
-  // Only used for a bucket that exists; a new one takes its first amount as it is added.
-  const adjust = useMoveBucketMoney(bucket?.id ?? 0);
+  // The day the amount typed here is true for: today, or earlier to build the balance up from then.
+  const [heldOn, setHeldOn] = useState(todayIso());
+  const adjust = useMoveMoneyInto();
+  // Set once a backdated starting amount has gone in, so trying again after a later step failed does not add it twice.
+  const [startingPosted, setStartingPosted] = useState(false);
   const addMove = useSaveItem();
   const changeMove = useSaveItem(own?.id);
   const [note, setNote] = useState(bucket?.note ?? "");
-  const [archived, setArchived] = useState(bucket?.archived ?? false);
+  // Archiving has its own button beside Delete; saving the form leaves it as it is.
+  const archived = bucket?.archived ?? false;
   const [chosenOpenedOn, setChosenOpenedOn] = useState<string | null>(bucket?.openedOn ?? null);
   const [problem, setProblem] = useState<string>();
   // Set once a new bucket has been added, so trying again after a later step failed does not add it twice.
@@ -151,7 +160,8 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
           // A date, and stopping at the goal, only mean something beside a goal.
           goalDate: goalSet && goalDate !== "" ? goalDate : null,
           stopAtGoal: goalSet && stopAtGoal,
-          ...(bucket ? {} : { startingCents: startingCents ?? 0 }),
+          // Dated today it goes in with the bucket; an earlier day is recorded as its own dated amount below.
+          ...(bucket ? {} : { startingCents: heldOn === todayIso() ? (startingCents ?? 0) : 0 }),
         });
         bucketId = saved.bucket.id;
         if (!bucket) {
@@ -161,7 +171,11 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
       // A bucket's amount is the sum of what moved in and out, so a new amount is recorded
       // as one more move, for the difference: the history keeps how it got there.
       if (bucket && heldCents !== null && !archived && heldCents !== bucket.balanceCents) {
-        await adjust.mutateAsync({ date: todayIso(), amountCents: heldCents - bucket.balanceCents, note: ADJUSTED_NOTE });
+        await adjust.mutateAsync({ bucketId: bucket.id, date: heldOn, amountCents: heldCents - bucket.balanceCents, note: ADJUSTED_NOTE });
+      }
+      if (!bucket && heldOn !== todayIso() && startingCents !== null && startingCents > 0 && !startingPosted) {
+        await adjust.mutateAsync({ bucketId, date: heldOn, amountCents: startingCents, note: STARTING_NOTE });
+        setStartingPosted(true);
       }
       const wanted = moveCents !== null && moveCents > 0;
       const timing: Pick<ItemSchedule, "frequency" | "interval" | "day1" | "day2" | "month"> = {
@@ -180,13 +194,17 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
         });
       } else if (own && wanted) {
         const same =
-          own.amountCents === moveCents && own.schedule.frequency === cadence && (cadence !== "monthly" || own.schedule.day1 === monthDay);
+          own.amountCents === moveCents &&
+          own.schedule.frequency === cadence &&
+          (cadence !== "monthly" || own.schedule.day1 === monthDay) &&
+          own.schedule.startDate === startsOn;
         if (!same) {
           await changeMove.mutateAsync({
             ...itemAsInput(own),
             amountCents: moveCents,
             amountMode: "per_occurrence",
-            schedule: { ...own.schedule, ...timing },
+            // A different start reaches back (or forward) to that day; the backend handles the history.
+            schedule: { ...own.schedule, ...timing, startDate: startsOn },
             effectiveFrom: todayIso(),
           });
         }
@@ -205,9 +223,9 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
           payToAccountId: null,
           autopay: true,
           placement: "due_period",
-          // From tomorrow, so "every paycheck" begins with the next one: the paychecks a goal's
-          // amount is shared over do not include the one in hand.
-          schedule: { ...timing, startDate: addDays(todayIso(), 1), endDate: null, weekendRule: "none" },
+          // From the day chosen: today counts for the paycheck in hand, and an earlier day fills in
+          // what it would have set aside since (the bucket then counts from that day too).
+          schedule: { ...timing, startDate: startsOn, endDate: null, weekendRule: "none" },
           daysAfterPayday: 0,
           bucketId,
           saveUpBucketId: null,
@@ -320,11 +338,25 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
                 </select>
               </div>
               {cadence === "monthly" && <DaySelect id={`${id}-day`} label="Day of the month" value={monthDay} onChange={setMonthDay} />}
+              <div>
+                <label htmlFor={`${id}-starts`} className={LABEL}>
+                  Starting
+                </label>
+                <input
+                  id={`${id}-starts`}
+                  type="date"
+                  value={startsOn}
+                  onChange={(event) => setStartsOn(event.target.value)}
+                  required={amount.trim() !== ""}
+                  className={INPUT}
+                />
+              </div>
             </div>
             <p className={HINT}>
               {own
                 ? "Change the amount to save more or less from now on. Empty it to stop."
-                : "Starts with your next paycheck. The money stays in this account; it is set aside, so less shows as available."}
+                : "The money stays in this account; it is set aside, so less shows as available."}{" "}
+              Choose an earlier starting day to build up what it would already have set aside since then.
             </p>
 
             {hasGoal && (
@@ -374,7 +406,7 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
                 label="Already set aside (optional)"
                 value={starting}
                 onChange={setStarting}
-                hint="What this bucket holds today."
+                hint="What this bucket already holds."
               />
             )}
             {bucket && !bucket.archived && (
@@ -384,6 +416,24 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
                 onChange={setHeld}
                 hint="What it holds today. Change it to set a new amount; the difference is recorded as an adjustment."
               />
+            )}
+            {!bucket?.archived && (
+              <div>
+                <label htmlFor={`${id}-held-on`} className={LABEL}>
+                  As of
+                </label>
+                <input
+                  id={`${id}-held-on`}
+                  type="date"
+                  value={heldOn}
+                  onChange={(event) => setHeldOn(event.target.value)}
+                  required
+                  className={INPUT}
+                />
+                <p className={HINT}>
+                  The day that amount {bucket ? "changes" : "went in"}. Today unless you choose an earlier day, to build the balance up from then.
+                </p>
+              </div>
             )}
 
             <div>
@@ -412,20 +462,6 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
               <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={200} autoComplete="off" className={INPUT} />
             </div>
 
-            {bucket && (
-              <div>
-                <label className="flex min-h-11 items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={archived}
-                    onChange={(event) => setArchived(event.target.checked)}
-                    className="size-5 accent-(--accent)"
-                  />
-                  <span className="font-medium">Archived</span>
-                </label>
-                <p className={HINT}>An archived bucket no longer sets anything aside: what it held counts as available again.</p>
-              </div>
-            )}
           </div>
         </details>
 
@@ -446,28 +482,58 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
       </form>
 
       {bucket && <BucketHistory bucket={bucket} />}
-      {bucket && <DeleteBucket bucket={bucket} onDeleted={onClose} />}
+      {bucket && <ArchiveOrDelete bucket={bucket} onDone={onClose} />}
     </>
   );
 }
 
-/** No "are you sure?" for a bucket (spec §6): it is deleted, and Undo brings it back. */
-function DeleteBucket({ bucket, onDeleted }: { bucket: Bucket; onDeleted: () => void }) {
+/**
+ * The two ways to put a bucket away, side by side. Archiving keeps it and its history, and can
+ * be undone here; deleting removes it. No "are you sure?" for either (spec §6): Undo brings it back.
+ */
+function ArchiveOrDelete({ bucket, onDone }: { bucket: Bucket; onDone: () => void }) {
   const remove = useDeleteBucket(bucket.id);
+  const save = useSaveBucket(bucket.id);
+  const busy = remove.isPending || save.isPending;
+  const failure = remove.error?.message ?? save.error?.message;
   return (
     <div className="mt-6 border-t border-line pt-4">
-      <button
-        type="button"
-        onClick={() => remove.mutate(undefined, { onSuccess: onDeleted })}
-        disabled={remove.isPending}
-        className={BUTTON_DANGER_OUTLINE}
-      >
-        {remove.isPending ? "Deleting…" : "Delete this bucket"}
-      </button>
-      <p className={HINT}>The money stays in the account; it just stops being set aside.</p>
-      {remove.error && (
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          onClick={() =>
+            save.mutate(
+              {
+                accountId: bucket.accountId,
+                name: bucket.name,
+                color: bucket.color,
+                goalCents: bucket.goalCents,
+                note: bucket.note,
+                archived: !bucket.archived,
+                openedOn: bucket.openedOn,
+                goalDate: bucket.goalDate,
+              },
+              { onSuccess: onDone },
+            )
+          }
+          disabled={busy}
+          className={BUTTON_SECONDARY}
+        >
+          {save.isPending ? "Saving…" : bucket.archived ? "Bring this bucket back" : "Archive this bucket"}
+        </button>
+        <button type="button" onClick={() => remove.mutate(undefined, { onSuccess: onDone })} disabled={busy} className={BUTTON_DANGER_OUTLINE}>
+          {remove.isPending ? "Deleting…" : "Delete this bucket"}
+        </button>
+      </div>
+      <p className={HINT}>
+        {bucket.archived
+          ? "Archived: it sets nothing aside. Bring it back to use it again, or delete it for good."
+          : "Archiving keeps the bucket and its history but stops it setting anything aside. Deleting removes it."}{" "}
+        Either way the money stays in the account.
+      </p>
+      {failure && (
         <p role="alert" className="mt-2 text-danger">
-          {remove.error.message}
+          {failure}
         </p>
       )}
     </div>
