@@ -49,6 +49,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Puts everything that moves money together, pay period by pay period: paychecks, recurring
@@ -101,6 +102,8 @@ public final class Ledger {
      * @param bucketsCents   what the account's buckets hold at the end of the period
      * @param availableCents the ending balance less what is in buckets
      * @param lowBalance     true when the user asked for a warning and the balance dips below it
+     * @param builtFromZero  true when no balance was ever entered for the account, so it is added
+     *                       up from nothing since the first money that moved in or out of it
      */
     public record AccountPeriod(
             long accountId,
@@ -114,7 +117,8 @@ public final class Ledger {
             LocalDate lowestOn,
             long bucketsCents,
             long availableCents,
-            boolean lowBalance) {}
+            boolean lowBalance,
+            boolean builtFromZero) {}
 
     /** One bucket across one pay period; {@code endingCents − startingCents} is what the period moved. */
     public record BucketPeriod(long bucketId, long accountId, long startingCents, long endingCents) {}
@@ -267,11 +271,14 @@ public final class Ledger {
 
     /**
      * What an account has left outside its buckets at the end of {@code day}: the most that can
-     * still be set aside. Empty until a balance has been entered for it, when nothing is known.
+     * still be set aside. Empty until a balance has been entered for it: a balance added up from
+     * nothing is only as complete as what has been set up so far, too little to refuse anything on.
      */
     public Optional<Long> availableOn(Account account, LocalDate day) {
         List<AccountPeriod> figures = accountPeriods(workings(List.of(new PayPeriod(day, day, day))), account);
-        return figures.isEmpty() ? Optional.empty() : Optional.of(figures.getFirst().availableCents());
+        return figures.isEmpty() || figures.getFirst().builtFromZero()
+                ? Optional.empty()
+                : Optional.of(figures.getFirst().availableCents());
     }
 
     /** How many paydays fall within {@code from}–{@code through}, both inclusive. */
@@ -318,10 +325,11 @@ public final class Ledger {
             List<Carried> carried,
             List<Entry> entries,
             Map<Long, Projection> projections,
+            Set<Long> builtFromZero,
             Map<Long, List<PeriodBuckets>> buckets,
             List<Move> bucketMoves) {
 
-        static final Workings NONE = new Workings(List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of());
+        static final Workings NONE = new Workings(List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), List.of());
 
         Projection projection(long accountId) {
             return projections.getOrDefault(accountId, Projection.NONE);
@@ -348,7 +356,8 @@ public final class Ledger {
                     balance.lowest().cents(), balance.lowestOn(),
                     bucketsCents,
                     balance.ending().cents() - bucketsCents,
-                    threshold != null && balance.lowest().cents() < threshold));
+                    threshold != null && balance.lowest().cents() < threshold,
+                    workings.builtFromZero().contains(account.id())));
         }
         return figures;
     }
@@ -375,7 +384,22 @@ public final class Ledger {
             }
         }
 
+        // An account nobody has entered a balance for starts at nothing and is added up from the
+        // first money that moved in or out of it, the way an account builds from the day it is
+        // opened. That needs everything there is, not just what follows the oldest balance.
         List<Account> allAccounts = accounts.all();
+        List<Item> active = items.all().stream().filter(item -> !item.archived()).toList();
+        Set<Long> builtFromZero = allAccounts.stream()
+                .filter(account -> !account.archived() && !entered.containsKey(account.id()))
+                .map(Account::id)
+                .collect(Collectors.toSet());
+        if (!builtFromZero.isEmpty()) {
+            LocalDate earliest = earliestMovement(active);
+            if (earliest != null && earliest.isBefore(from)) {
+                from = earliest;
+            }
+        }
+
         Map<Long, String> types = allAccounts.stream().collect(Collectors.toMap(Account::id, Account::type));
         Set<Long> cash = allAccounts.stream().filter(AccountType::holdsCash).map(Account::id).collect(Collectors.toSet());
         Map<Long, List<Movement>> movements = new HashMap<>();
@@ -398,7 +422,6 @@ public final class Ledger {
         // A bucket holds everything moved into it since it was opened, and a bill saved up for
         // looks ahead to when it is next due, so buckets widen the stretch occurrences are needed for.
         List<Bucket> open = buckets.all().stream().filter(bucket -> !bucket.archived()).toList();
-        List<Item> active = items.all().stream().filter(item -> !item.archived()).toList();
         LocalDate expandFrom = open.stream().map(Bucket::openedOn).filter(from::isAfter).min(Comparator.naturalOrder()).orElse(from);
         LocalDate expandTo = open.isEmpty() ? last : last.plusMonths(BucketMoves.lookAheadMonths(active, last));
         ItemCalendar.Expansion expansion = itemCalendar.expand(active, expandFrom, expandTo);
@@ -410,7 +433,8 @@ public final class Ledger {
         // A transfer into a bucket also has to arrive in the bucket's account. The account only
         // adds up from the first balance entered for it, so the bucket takes the transfer from that
         // day too: otherwise a backdated transfer would fill the bucket with money the account's
-        // balance never shows, and the buckets would hold more than the account does.
+        // balance never shows, and the buckets would hold more than the account does. An account
+        // with no balance entered is added up from nothing, so it takes every transfer.
         Map<Long, LocalDate> firstBalance = new HashMap<>();
         entered.forEach((accountId, forAccount) -> firstBalance.put(accountId, forAccount.getFirst().date()));
         List<Occurrence> occurrences = expansion.occurrences().stream()
@@ -460,6 +484,15 @@ public final class Ledger {
                     : null;
             projections.put(accountId, BalanceProjector.project(anchors, movements.getOrDefault(accountId, List.of()), periods, terms));
         });
+        for (long accountId : builtFromZero) {
+            List<Movement> counted = movements.getOrDefault(accountId, List.of());
+            LocalDate since = counted.stream().map(Movement::date).min(Comparator.naturalOrder()).orElse(first);
+            InterestTerms terms = cash.contains(accountId)
+                    ? interestTerms(interestSettings.get(accountId), apys.get(accountId))
+                    : null;
+            projections.put(accountId, BalanceProjector.project(
+                    List.of(new BalanceAnchor(since, Money.ZERO)), counted, periods, terms));
+        }
 
         // A bucket that stops at its goal takes only what it still has room for; a move that puts
         // nothing in is not listed in its pay period, and one cut down shows what it really moves.
@@ -500,7 +533,7 @@ public final class Ledger {
             }
         });
         bucketMoves.sort(Comparator.comparing(Move::date));
-        return new Workings(listed, carried, oneOffs, projections, bucketsByAccount, bucketMoves);
+        return new Workings(listed, carried, oneOffs, projections, builtFromZero, bucketsByAccount, bucketMoves);
     }
 
     /** True unless the occurrence names a bucket that is archived, or was not open yet on the day it counts. */
@@ -513,16 +546,28 @@ public final class Ledger {
     }
 
     /**
-     * True unless this is a transfer into a bucket dated before its account had any balance to
-     * add it to. Money set aside inside an account (a bucket move) moves nothing between
-     * accounts, so it is never held back by this.
+     * True unless this is a transfer into a bucket dated before the first balance entered for
+     * its account. Money set aside inside an account (a bucket move) moves nothing between
+     * accounts, so it is never held back by this; nor is anything arriving in an account with
+     * no balance entered, which is added up from nothing and so counts all of it.
      */
     private static boolean arrivesWithItsAccount(Occurrence occurrence, Map<Long, LocalDate> firstBalance) {
         if (occurrence.bucketId() == null || occurrence.payToAccountId() == null) {
             return true;
         }
         LocalDate first = firstBalance.get(occurrence.payToAccountId());
-        return first != null && !occurrence.payBy().isBefore(first);
+        return first == null || !occurrence.payBy().isBefore(first);
+    }
+
+    /**
+     * The first day anything set up could move money: the earliest start of a paycheck or
+     * recurring item, or the earliest one-off entry. {@code null} when nothing is set up.
+     */
+    private LocalDate earliestMovement(List<Item> active) {
+        Stream<LocalDate> starts = Stream.concat(
+                pay.sourceStarts().stream(),
+                active.stream().flatMap(item -> item.versions().stream()).map(version -> version.terms().schedule().startDate()));
+        return Stream.concat(starts, entries.earliestDate().stream()).min(Comparator.naturalOrder()).orElse(null);
     }
 
     /**

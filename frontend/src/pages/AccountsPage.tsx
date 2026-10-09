@@ -137,7 +137,7 @@ function AccountRow({ account, onEdit }: { account: Account; onEdit: (id: number
               <span className="block pr-2 text-sm text-muted">entered {formatDay(account.latestBalance.date)}</span>
             </>
           ) : (
-            <span className="text-sm text-muted">No balance yet</span>
+            <span className="text-sm text-muted">No balance entered · built from $0</span>
           )}
         </span>
       </Link>

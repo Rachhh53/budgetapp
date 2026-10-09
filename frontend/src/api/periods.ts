@@ -58,6 +58,8 @@ export interface AccountPeriod {
   bucketsCents: number;
   /** The ending balance less what is in buckets. */
   availableCents: number;
+  /** True when no balance was ever entered for the account, so it is added up from nothing. */
+  builtFromZero: boolean;
   /** True when the user asked for a warning and the balance dips below it. */
   lowBalance: boolean;
 }

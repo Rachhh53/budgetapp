@@ -903,8 +903,11 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
-        void isEmptyUntilABalanceIsEntered() throws Exception {
-            assertThat(server.get("/api/accounts/" + visa + "/projection", cookie).data()).isEmpty();
+        void standsAtNothingUntilSomethingMovesOrABalanceIsEntered() throws Exception {
+            JsonNode points = server.get("/api/accounts/" + visa + "/projection", cookie).data();
+
+            assertThat(points.size()).isGreaterThanOrEqualTo(24);
+            assertThat(points.get(0).get("endingCents").asLong()).isZero();
         }
 
         @Test

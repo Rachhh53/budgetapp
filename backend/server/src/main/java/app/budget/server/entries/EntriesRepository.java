@@ -80,6 +80,15 @@ public final class EntriesRepository {
                 .list()));
     }
 
+    /** The date of the oldest entry; empty when there are none. */
+    public Optional<LocalDate> earliestDate() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT min(date) FROM entries")
+                .mapTo(String.class)
+                .findOne()
+                .map(LocalDate::parse));
+    }
+
     /** Every entry, whenever it is dated, that set something aside in a bucket; oldest first. */
     public List<Entry> withBucketSplits() {
         return jdbi.withHandle(handle -> complete(handle, handle

@@ -195,8 +195,8 @@ const OCTOBER: PeriodDetail = {
   buckets: [],
   bucketMoves: [],
   accounts: [
-    { accountId: 1, startingCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08", bucketsCents: 0, availableCents: 309610, lowBalance: false },
-    { accountId: 3, startingCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13", bucketsCents: 0, availableCents: 0, lowBalance: false },
+    { accountId: 1, startingCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08", bucketsCents: 0, availableCents: 309610, lowBalance: false, builtFromZero: false },
+    { accountId: 3, startingCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13", bucketsCents: 0, availableCents: 0, lowBalance: false, builtFromZero: false },
   ],
 };
 
@@ -432,6 +432,20 @@ describe("pay period screen", () => {
     expect(accounts).toHaveTextContent("Nothing is counted for Visa before the first balance you entered");
     // Nothing has been added up yet, so there are no in and out lines to mislead.
     expect(within(accounts).queryByText(/^Paid off/)).not.toBeInTheDocument();
+  });
+
+  it("says when an account has no balance entered and is added up from nothing", async () => {
+    withPeriod({
+      ...OCTOBER,
+      accounts: [OCTOBER.accounts[0]!, { ...OCTOBER.accounts[1]!, entered: false, builtFromZero: true }],
+    });
+    renderApp();
+
+    const accounts = await panel("Accounts & buckets");
+    await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
+    expect(within(accounts).getByText("Owed Oct 1 · built from $0").closest("div")).toHaveTextContent("$612.48");
+    expect(accounts).toHaveTextContent("No balance has been entered for Visa, so it is added up from $0 using everything set up for it.");
+    expect(within(accounts).getByRole("link", { name: "Enter a balance" })).toHaveAttribute("href", "/accounts/3");
   });
 
   it("says which day an account counts from when its balance was entered part-way through", async () => {

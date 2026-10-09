@@ -100,7 +100,10 @@ export function AccountDetailPage() {
                   <p className="text-muted">entered by you {formatDate(latest.date)}</p>
                 </>
               ) : (
-                <p className="mt-1 font-medium">No balance entered yet.</p>
+                <>
+                  <p className="mt-1 font-medium">No balance entered yet.</p>
+                  <p className="text-muted">Until one is, this account is added up from $0 using everything set up for it.</p>
+                </>
               )}
             </div>
             {thisPeriod && (

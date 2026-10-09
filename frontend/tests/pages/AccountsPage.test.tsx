@@ -63,7 +63,7 @@ describe("accounts screen", () => {
     expect(within(cash).getByRole("link", { name: /Rainy Day/ })).toHaveTextContent("High-yield · Sunrise Bank");
 
     const cards = screen.getByRole("region", { name: "Credit cards" });
-    expect(within(cards).getByRole("link", { name: /Travel Card/ })).toHaveTextContent("No balance yet");
+    expect(within(cards).getByRole("link", { name: /Travel Card/ })).toHaveTextContent("No balance entered · built from $0");
     expect(screen.queryByRole("region", { name: "Loans" })).not.toBeInTheDocument();
   });
 
