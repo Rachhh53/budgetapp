@@ -371,7 +371,10 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       <Figure
         label="Starting balance"
         cents={balance.startingCents}
-        note={`${account.name} · ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
+        // A balance dated after this period is the first one entered: nothing earlier is counted, and the note says so.
+        note={`${account.name} · ${formatDay(balance.startingOn)}${
+          balance.entered ? " · set by you" : balance.startingOn > detail.end ? " · first balance, entered later" : ""
+        }`}
         className="order-2 lg:order-1"
       />
       <Figure
@@ -1001,6 +1004,8 @@ function AccountsPanel({
     );
   }
   // Only when it differs from the period itself; otherwise the lines mean the whole period, as they read.
+  // This period ends before the first balance entered for the account: it stands at that balance, with nothing counted yet.
+  const beforeFirst = balance.startingOn > periodEnd;
   const since = balance.entered && balance.startingOn > periodStart ? ` since ${formatDay(balance.startingOn)}` : "";
   const held = bucketPeriods.flatMap((period) => {
     const bucket = buckets.find((candidate) => candidate.id === period.bucketId);
@@ -1011,18 +1016,26 @@ function AccountsPanel({
       {tabs}
       <dl id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`} className="divide-y divide-line">
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />
-        <AccountLine
-          label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
-          cents={balance.startingCents}
-        />
-        {/* A balance entered part-way through already holds what moved before it, so only later days are counted: say so. */}
-        <AccountLine label={`${owed ? "Charged" : "Coming in"}${since}`} cents={balance.inCents} sign="+" />
-        <AccountLine label={`${owed ? "Paid off" : "Going out"}${since}`} cents={balance.outCents} sign="−" />
-        <AccountLine
-          label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
-          cents={balance.lowestCents}
-          warn={balance.lowBalance}
-        />
+        {beforeFirst ? (
+          <AccountLine label={`First balance, entered ${formatDay(balance.startingOn)}`} cents={balance.startingCents} />
+        ) : (
+          <AccountLine
+            label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
+            cents={balance.startingCents}
+          />
+        )}
+        {!beforeFirst && (
+          <>
+            {/* A balance entered part-way through already holds what moved before it, so only later days are counted: say so. */}
+            <AccountLine label={`${owed ? "Charged" : "Coming in"}${since}`} cents={balance.inCents} sign="+" />
+            <AccountLine label={`${owed ? "Paid off" : "Going out"}${since}`} cents={balance.outCents} sign="−" />
+            <AccountLine
+              label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
+              cents={balance.lowestCents}
+              warn={balance.lowBalance}
+            />
+          </>
+        )}
         {held.length > 0 && (
           <>
             <AccountLine label="In buckets" cents={balance.bucketsCents} sign="−" />
@@ -1030,6 +1043,11 @@ function AccountsPanel({
           </>
         )}
       </dl>
+      {beforeFirst && (
+        <p className="mt-1 text-sm text-muted">
+          Nothing is counted for {shown.account.name} before the first balance you entered, so this pay period shows that balance as it is.
+        </p>
+      )}
       {held.length > 0 && (
         <section aria-label={`Buckets in ${shown.account.name}`} className="mt-2 border-t border-line pt-2">
           <div className="flex items-baseline justify-between gap-3">

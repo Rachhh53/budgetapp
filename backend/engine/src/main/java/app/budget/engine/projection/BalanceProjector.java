@@ -29,7 +29,8 @@ public final class BalanceProjector {
      * @param anchors   balances the user entered for this account, in any order
      * @param movements everything that moves this account's balance, in any order
      * @param periods   consecutive pay periods, earliest first
-     * @return one entry per period from the first one a balance is known for; empty when
+     * @return one entry per period; a period that ends before the first balance entered stands at
+     *         that balance, dated the day it was entered, with nothing counted. Empty when
      *         no balance has been entered yet
      */
     public static List<PeriodBalance> project(List<BalanceAnchor> anchors, List<Movement> movements, List<PayPeriod> periods) {
@@ -61,7 +62,13 @@ public final class BalanceProjector {
         for (PayPeriod period : periods) {
             Map.Entry<LocalDate, Money> latest = entered.floorEntry(period.end());
             if (latest == null) {
-                // Nothing has been entered yet as of this period: there is no number to show.
+                // Before the first balance entered. Nothing earlier than a balance is counted, so there is
+                // nothing to add up yet; the account is still shown, at that first balance, rather than
+                // seeming not to exist. Its date (after this period) tells the caller which case this is.
+                Map.Entry<LocalDate, Money> first = entered.firstEntry();
+                result.add(new PeriodBalance(
+                        period, first.getValue(), first.getKey(), false, Money.ZERO, Money.ZERO,
+                        first.getValue(), first.getValue(), first.getKey()));
                 continue;
             }
             boolean enteredDuring = !latest.getKey().isBefore(period.start());

@@ -416,6 +416,24 @@ describe("pay period screen", () => {
     );
   });
 
+  it("still shows an account in a pay period that ends before its first balance was entered", async () => {
+    withPeriod({
+      ...OCTOBER,
+      accounts: [
+        OCTOBER.accounts[0]!,
+        { ...OCTOBER.accounts[1]!, startingCents: 61248, startingOn: "2026-10-20", entered: false, inCents: 0, outCents: 0, endingCents: 61248 },
+      ],
+    });
+    renderApp();
+
+    const accounts = await panel("Accounts & buckets");
+    await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
+    expect(within(accounts).getByText("First balance, entered Oct 20").closest("div")).toHaveTextContent("$612.48");
+    expect(accounts).toHaveTextContent("Nothing is counted for Visa before the first balance you entered");
+    // Nothing has been added up yet, so there are no in and out lines to mislead.
+    expect(within(accounts).queryByText(/^Paid off/)).not.toBeInTheDocument();
+  });
+
   it("says which day an account counts from when its balance was entered part-way through", async () => {
     withPeriod({
       ...OCTOBER,
