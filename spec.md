@@ -501,6 +501,8 @@ Recurring items sort (decided 2026-10-09): pressing a column heading orders the 
 
 Changing an item's type (decided 2026-10-09): an item is one kind for its whole life, so a change of type cannot apply "from today on". Saving it moves every earlier version to the new accounts and buckets while keeping each version's date, amount and schedule (Amount history keeps every entry). The form warns about this as soon as the type differs and offers one button, **Archive this and add a new item** (`POST /api/items/{id}/replacement`), which leaves the old item's past alone: it is archived and the form is added as a new item starting today. Found when a bucket move turned into a transfer left its earlier dates paying from the savings account to nowhere.
 
+Saying how much to save (decided 2026-10-09): the bucket form answers it as soon as a goal and a date are typed, before saving (`GET /api/goal-pace`): "To have $600 by Dec 1, set aside $X every paycheck (n paychecks left), or $Y a month", with one button that fills "Set aside every paycheck". That move now starts with the next paycheck, to match the count. A bucket move in the recurring item form offers the same amount when its bucket is short of a dated goal. The save-up section says plainly that it saves nothing extra (it spreads the bill's own amount over the paychecks before it is due) and points to Bucket move for a set amount; Rachel had read "$20 ... the next paycheck sets aside $6.67" as a contradiction.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

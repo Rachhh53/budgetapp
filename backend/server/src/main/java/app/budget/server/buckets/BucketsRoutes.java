@@ -47,6 +47,7 @@ public final class BucketsRoutes {
 
     public void register(JavalinDefaultRoutingApi routes) {
         routes.get("/api/buckets", ctx -> ApiResponse.ok(ctx, views(buckets.all())));
+        routes.get("/api/goal-pace", this::goalPace);
         routes.post("/api/buckets", this::create);
         routes.get("/api/buckets/{id}", ctx -> ApiResponse.ok(ctx, detail(Inputs.id(ctx, "id"))));
         routes.put("/api/buckets/{id}", this::update);
@@ -114,6 +115,50 @@ public final class BucketsRoutes {
     public record BucketDetail(BucketView bucket, List<Change> changes) {}
 
     public record Deleted(boolean deleted) {}
+
+    /**
+     * What a goal would take, before it is saved: for a form to say "set aside this much every
+     * paycheck" while the goal and its date are still being typed. With {@code bucketId} it
+     * counts what is already scheduled into that bucket; without, it starts from
+     * {@code heldCents} alone (a bucket that does not exist yet has nothing scheduled).
+     */
+    private void goalPace(Context ctx) {
+        long goalCents = Inputs.amount(longParam(ctx, "goalCents"), "The goal");
+        LocalDate by = Inputs.dateParam(ctx, "goalDate", null);
+        if (by == null || !Inputs.inSupportedYears(by)) {
+            throw ApiException.badRequest("Please choose the date for this goal.");
+        }
+        Long bucketId = longParam(ctx, "bucketId");
+        Long heldParam = longParam(ctx, "heldCents");
+        Long heldCents = heldParam == null ? null : Inputs.amount(heldParam, "The amount in the bucket");
+        LocalDate today = LocalDate.now(clock);
+        long projected;
+        if (bucketId == null) {
+            projected = heldCents == null ? 0 : heldCents;
+        } else {
+            if (buckets.find(bucketId).isEmpty()) {
+                throw ApiException.notFound();
+            }
+            long heldToday = ledger.bucketBalances(today).getOrDefault(bucketId, 0L);
+            long then = by.isAfter(today) ? ledger.bucketBalances(by).getOrDefault(bucketId, 0L) : heldToday;
+            // A different amount typed into the form moves the whole projection by the difference.
+            projected = then + (heldCents == null ? 0 : heldCents - heldToday);
+        }
+        ApiResponse.ok(ctx, pace(goalCents, by, today, Money.ofCents(projected)));
+    }
+
+    /** An optional whole-number query parameter. */
+    private static Long longParam(Context ctx, String name) {
+        String value = ctx.queryParam(name);
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value);
+        } catch (NumberFormatException e) {
+            throw ApiException.badRequest("Please send " + name + " as a whole number.");
+        }
+    }
 
     private void create(Context ctx) {
         BucketInput input = Inputs.body(ctx, BucketInput.class);
@@ -211,8 +256,12 @@ public final class BucketsRoutes {
         LocalDate by = bucket.goalDate();
         // A date already gone by has nothing left to project: what it holds now is what it reached.
         Map<Long, Long> then = by.isAfter(today) ? heldOn.computeIfAbsent(by, ledger::bucketBalances) : heldToday;
-        Money projected = Money.ofCents(then.getOrDefault(bucket.id(), 0L));
-        Money shortBy = GoalPace.shortfall(Money.ofCents(bucket.goalCents()), projected);
+        return pace(bucket.goalCents(), by, today, Money.ofCents(then.getOrDefault(bucket.id(), 0L)));
+    }
+
+    /** How a goal stands on {@code today} given what the bucket is projected to hold on its date. */
+    private GoalProgress pace(long goalCents, LocalDate by, LocalDate today, Money projected) {
+        Money shortBy = GoalPace.shortfall(Money.ofCents(goalCents), projected);
         int paydays = by.isAfter(today) ? ledger.paydaysBetween(today.plusDays(1), by) : 0;
         boolean missing = shortBy.cents() > 0;
         return new GoalProgress(

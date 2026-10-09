@@ -83,6 +83,36 @@ export function useBuckets() {
   return useQuery({ queryKey: BUCKETS_KEY, queryFn: () => api.get<Bucket[]>("/api/buckets") });
 }
 
+/** A goal as it stands in a form, before it is saved. */
+export interface GoalInMind {
+  goalCents: number;
+  goalDate: string;
+  /** Count what is already scheduled into this bucket; leave out for one that does not exist yet. */
+  bucketId?: number;
+  /** What the bucket holds, or will start with. */
+  heldCents: number;
+}
+
+/**
+ * What a goal would take, worked out while it is still being typed, so the form can say how
+ * much to set aside. Asks nothing until there is both a goal and a date.
+ */
+export function useGoalPace(goal: GoalInMind | undefined) {
+  return useQuery({
+    queryKey: [...BUCKETS_KEY, "goal-pace", goal],
+    queryFn: () => {
+      const query = new URLSearchParams({
+        goalCents: String(goal!.goalCents),
+        goalDate: goal!.goalDate,
+        heldCents: String(goal!.heldCents),
+        ...(goal!.bucketId === undefined ? {} : { bucketId: String(goal!.bucketId) }),
+      });
+      return api.get<GoalProgress>(`/api/goal-pace?${query}`);
+    },
+    enabled: goal !== undefined,
+  });
+}
+
 export function useBucket(id: number) {
   return useQuery({ queryKey: [...BUCKETS_KEY, id], queryFn: () => api.get<BucketDetail>(`/api/buckets/${id}`) });
 }

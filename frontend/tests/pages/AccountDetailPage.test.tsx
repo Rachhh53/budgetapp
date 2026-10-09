@@ -287,6 +287,7 @@ describe("account detail screen", () => {
         "GET /api/buckets": () => ({ status: 200, data: [short] }),
         "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: short, changes: [] }, changed: true }),
         "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
+        "GET /api/goal-pace": () => ({ status: 200, data: short.goalProgress }),
       });
       renderApp("/accounts/1");
 
@@ -295,7 +296,12 @@ describe("account detail screen", () => {
       expect(screen.queryByRole("button", { name: /Add a recurring move/ })).not.toBeInTheDocument();
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
       const amount = within(dialog).getByRole("textbox", { name: "Set aside every paycheck (optional)" });
-      expect(amount).toHaveAccessibleDescription(/Reaching the goal by Dec 1, 2099 takes \$50\.00 more every paycheck\./);
+      // The form says what the goal takes, and one press fills it in; it can still be typed over.
+      const advice = await within(dialog).findByRole("status");
+      expect(advice).toHaveTextContent("To have $600.00 by Dec 1, 2099, set aside $50.00 every paycheck (4 paychecks left), or $100.00 a month.");
+      await userEvent.click(within(advice).getByRole("button", { name: "Set aside $50.00 every paycheck" }));
+      expect(amount).toHaveValue("50.00");
+      await userEvent.clear(amount);
       await userEvent.type(amount, "75");
       // With a goal date ahead, the move stops on it unless told to keep going.
       const stopAtGoal = within(dialog).getByRole("checkbox", { name: "Stop on the goal date (Dec 1, 2099)" });

@@ -295,6 +295,44 @@ class BucketsLedgerApiTest extends ApiTestBase {
     @Nested
     class SavingTowardsAGoalByADate {
 
+        @Test
+        void saysWhatAGoalWouldTakeBeforeItIsSaved() throws Exception {
+            // A bucket that does not exist yet: 150.00 to start with, 600.00 wanted by Dec 1.
+            Reply reply = server.get("/api/goal-pace?goalCents=60000&goalDate=2026-12-01&heldCents=15000", cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            JsonNode pace = reply.data();
+            assertThat(pace.get("projectedCents").asLong()).isEqualTo(15000);
+            assertThat(pace.get("shortCents").asLong()).isEqualTo(45000);
+            // Paydays from tomorrow: Oct 15, Nov 1, Nov 15, Dec 1.
+            assertThat(pace.get("paydaysLeft").asInt()).isEqualTo(4);
+            assertThat(pace.get("morePerPaycheckCents").asLong()).isEqualTo(11250);
+            assertThat(pace.get("morePerMonthCents").asLong()).isEqualTo(22500);
+        }
+
+        @Test
+        void countsWhatIsAlreadyScheduledForABucketThatExists() throws Exception {
+            JsonNode bucket = giftsWithGoal("\"goalCents\":60000,\"goalDate\":\"2026-12-01\"");
+            long id = bucket.get("id").asLong();
+            long projected = bucket.get("goalProgress").get("projectedCents").asLong();
+
+            // The same goal and date say the same as the bucket itself …
+            JsonNode same = server.get("/api/goal-pace?goalCents=60000&goalDate=2026-12-01&bucketId=" + id, cookie).data();
+            assertThat(same.get("projectedCents").asLong()).isEqualTo(projected);
+            // … and a bigger goal typed into its form is short by that much more.
+            JsonNode bigger = server.get("/api/goal-pace?goalCents=80000&goalDate=2026-12-01&bucketId=" + id, cookie).data();
+            assertThat(bigger.get("shortCents").asLong()).isEqualTo(80000 - projected);
+        }
+
+        @Test
+        void aGoalPaceNeedsASessionAGoalAndADate() throws Exception {
+            assertThat(server.get("/api/goal-pace?goalCents=60000&goalDate=2026-12-01", null).status()).isEqualTo(401);
+            assertThat(server.get("/api/goal-pace?goalDate=2026-12-01", cookie).status()).isEqualTo(400);
+            assertThat(server.get("/api/goal-pace?goalCents=60000", cookie).status()).isEqualTo(400);
+            assertThat(server.get("/api/goal-pace?goalCents=abc&goalDate=2026-12-01", cookie).status()).isEqualTo(400);
+            assertThat(server.get("/api/goal-pace?goalCents=60000&goalDate=2026-12-01&bucketId=9999", cookie).status()).isEqualTo(404);
+        }
+
         private JsonNode giftsWithGoal(String goalAndDate) throws Exception {
             Reply reply = server.post("/api/buckets",
                     "{\"accountId\":%d,\"name\":\"Holiday gifts\",\"color\":\"#b45309\",\"startingCents\":15000,%s}"

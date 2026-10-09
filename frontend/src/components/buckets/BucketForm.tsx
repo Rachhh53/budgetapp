@@ -1,10 +1,10 @@
 import { PiggyBank } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
-import { type Bucket, useDeleteBucket, useMoveBucketMoney, useSaveBucket } from "../../api/buckets";
+import { type Bucket, useDeleteBucket, useGoalPace, useMoveBucketMoney, useSaveBucket } from "../../api/buckets";
 import { usePayPeriods } from "../../api/income";
 import { useItems, useSaveItem } from "../../api/items";
-import { formatDate, todayIso } from "../../lib/dates";
+import { addDays, formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { Modal } from "../Modal";
@@ -56,7 +56,6 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const feeding = bucket
     ? everyItem.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))
     : [];
-  const stillNeeded = bucket?.goalProgress?.morePerPaycheckCents ?? null;
 
   // A new bucket counts from this paycheck's payday unless told otherwise, so a move set up
   // for "every paycheck" includes the paycheck in hand instead of silently waiting for the next.
@@ -71,6 +70,15 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
     const cents = parseDollars(text);
     return cents === null || cents < 0 ? "invalid" : cents;
   };
+
+  // What the goal being typed would take, so the form can say how much to set aside before anything is saved.
+  const goalInMind = optionalCents(goal);
+  const heldInMind = optionalCents(bucket ? held : starting);
+  const pace = useGoalPace(
+    typeof goalInMind === "number" && goalInMind > 0 && goalDate > todayIso() && heldInMind !== "invalid"
+      ? { goalCents: goalInMind, goalDate, bucketId: bucket?.id, heldCents: heldInMind ?? 0 }
+      : undefined,
+  ).data;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -124,14 +132,15 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
           payToAccountId: null,
           autopay: true,
           placement: "due_period",
-          // From today, which counts for the paycheck in hand. It ends on the goal date if asked to, and otherwise runs on.
+          // From the next paycheck: the ones a goal's amount is shared over do not include the one in hand.
+          // It ends on the goal date if asked to, and otherwise runs on.
           schedule: {
             frequency: "every_pay_period",
             interval: null,
             day1: null,
             day2: null,
             month: null,
-            startDate: todayIso(),
+            startDate: addDays(todayIso(), 1),
             endDate: stopAtGoal && canStopAtGoal ? goalDate : null,
             weekendRule: "none",
           },
@@ -213,6 +222,45 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
           )}
         </div>
 
+        {/* The answer to "how much do I need to save?", as soon as there is a goal and a date. */}
+        {pace && typeof goalInMind === "number" && !archived && (
+          <div role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+            {pace.shortCents === 0 ? (
+              <p>
+                <span className="font-semibold">On track.</span> What it holds and what is already scheduled reach{" "}
+                <span data-amount>{formatCents(goalInMind)}</span> by {formatDate(goalDate)}.
+              </p>
+            ) : (
+              <>
+                <p>
+                  To have <span data-amount>{formatCents(goalInMind)}</span> by {formatDate(goalDate)}, set aside{" "}
+                  {pace.morePerPaycheckCents !== null && (
+                    <>
+                      <span data-amount className="font-semibold tabular-nums">
+                        {formatCents(pace.morePerPaycheckCents)}
+                      </span>{" "}
+                      every paycheck ({pace.paydaysLeft} {pace.paydaysLeft === 1 ? "paycheck" : "paychecks"} left), or{" "}
+                    </>
+                  )}
+                  <span data-amount className="font-semibold tabular-nums">
+                    {formatCents(pace.morePerMonthCents ?? pace.shortCents)}
+                  </span>{" "}
+                  a month{feeding.length > 0 ? ", on top of what is already scheduled" : ""}.
+                </p>
+                {pace.morePerPaycheckCents !== null && (
+                  <button
+                    type="button"
+                    onClick={() => setEveryPaycheck(centsToInput(pace.morePerPaycheckCents ?? 0))}
+                    className={`${BUTTON_SECONDARY} mt-2`}
+                  >
+                    Set aside <span data-amount>{formatCents(pace.morePerPaycheckCents)}</span> every paycheck
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {!archived && (
           <div>
             {feeding.length > 0 && (
@@ -241,12 +289,7 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
               label={feeding.length > 0 ? "Set aside more every paycheck (optional)" : "Set aside every paycheck (optional)"}
               value={everyPaycheck}
               onChange={setEveryPaycheck}
-              hint={
-                "Adds a recurring bucket move, starting with this paycheck. Change or stop it under Recurring items." +
-                (stillNeeded !== null && bucket?.goalDate
-                  ? ` Reaching the goal by ${formatDate(bucket.goalDate)} takes ${formatCents(stillNeeded)} more every paycheck.`
-                  : "")
-              }
+              hint="Adds a recurring bucket move, starting with your next paycheck. Change or stop it under Recurring items."
             />
             {canStopAtGoal && everyPaycheck.trim() !== "" && (
               <label className="mt-1 flex min-h-11 items-center gap-3">

@@ -246,6 +246,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   };
 
   const kindChanged = item !== undefined && kind !== item.kind;
+  // A bucket with a goal and a date knows what it is still short of: offer that as the amount.
+  const goalBucket = isBucketMove ? openBuckets.find((bucket) => String(bucket.id) === bucketId) : undefined;
+  const goalNeeds = goalBucket?.goalProgress?.morePerPaycheckCents ?? null;
   const failure = problem ?? save.error?.message ?? replace.error?.message;
 
   return (
@@ -332,6 +335,38 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
                     ? "There are no buckets yet. Add one on a checking or savings account's page first."
                     : "The money stays in its account. It is set aside, so less shows as available."}
                 </p>
+                {goalBucket?.goalDate && goalNeeds !== null && (
+                  <div role="status" className="mt-2 rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+                    <p>
+                      {goalBucket.name} is short of its goal for {formatDate(goalBucket.goalDate)}.{" "}
+                      <span data-amount className="font-semibold tabular-nums">
+                        {formatCents(goalNeeds)}
+                      </span>{" "}
+                      more every paycheck would get there
+                      {goalBucket.goalProgress?.morePerMonthCents != null && (
+                        <>
+                          , or{" "}
+                          <span data-amount className="font-semibold tabular-nums">
+                            {formatCents(goalBucket.goalProgress.morePerMonthCents)}
+                          </span>{" "}
+                          a month
+                        </>
+                      )}
+                      .
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAmount(centsToInput(goalNeeds));
+                        setAmountMode("per_occurrence");
+                        setFrequency("every_pay_period");
+                      }}
+                      className={`${BUTTON_SECONDARY} mt-2`}
+                    >
+                      Use <span data-amount>{formatCents(goalNeeds)}</span> every paycheck
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <Picker
@@ -558,18 +593,21 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
                 </p>
               )}
               <p className={HINT}>
-                A share is set aside every paycheck, so the money is there when it's due.
+                This does not save anything extra. It spreads this {kind === "budget" ? "budget" : "bill"}'s own amount over the
+                paychecks before it is due, and holds each share in the bucket until then.
                 {item?.saveUpPerPaycheckCents != null && chosenSaveUpBucket !== null && (
                   <>
                     {" "}
                     The next paycheck sets aside{" "}
                     <span data-amount className="font-semibold text-ink tabular-nums">
                       {formatCents(item.saveUpPerPaycheckCents)}
-                    </span>
-                    .
+                    </span>{" "}
+                    of the <span data-amount>{formatCents(item.perOccurrenceCents)}</span>
+                    {item.next ? ` due ${formatDate(item.next.dueDate)}` : ""}.
                   </>
                 )}
               </p>
+              <p className={HINT}>To put a set amount in a bucket every paycheck or month instead, choose the type Bucket move.</p>
             </div>
           )}
           </FormSection>
