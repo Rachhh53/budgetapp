@@ -13,7 +13,7 @@ const CHOICE = '[role="option"], [role="group"] button';
  *
  * On a phone it is a sheet that fills the width and rises from the bottom; from `sm` up it
  * is a centered panel. It never has a fixed width, and scrolls inside itself when the form
- * is taller than the screen. Tab stays inside it, and focus goes back to whatever opened it.
+ * is taller than the screen, stopping short of the top and bottom edges. Tab stays inside it, and focus goes back to whatever opened it.
  *
  * It closes on Escape, on the X, and on a click anywhere outside it. If something in it was
  * changed and not saved, those ask first, so a stray click never throws work away. (A form's
@@ -136,7 +136,8 @@ export function Modal({
           changed.current = true;
         }}
         onClickCapture={noteChoice}
-        className="max-h-dvh w-full overflow-y-auto rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
+        // Never the full height: a strip of the page stays in view above and below, so it reads as a dialog over the page.
+        className="max-h-[calc(100dvh-2rem)] w-full overflow-y-auto sm:max-h-[calc(100dvh-6rem)] rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
       >
         <div
           // Reaches the panel's edges through its padding; a light tint, so the title keeps its contrast.
