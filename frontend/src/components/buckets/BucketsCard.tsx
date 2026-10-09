@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { Account } from "../../api/accounts";
-import { type Bucket, useBuckets } from "../../api/buckets";
+import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
+import { todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
-import { BUTTON_LINK, BUTTON_SECONDARY } from "../ui";
+import { EditButton } from "../EditButton";
+import { BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
 import { BucketForm } from "./BucketForm";
-import { BucketMoneyForm } from "./BucketMoneyForm";
 
 /**
  * The buckets of one checking or savings account (design/account-detail.png): what each holds
@@ -16,7 +17,6 @@ export function BucketsCard({ account }: { account: Account }) {
   const [adding, setAdding] = useState(false);
   // Kept as ids, so an open form always shows the bucket as it is now.
   const [editingId, setEditingId] = useState<number>();
-  const [movingId, setMovingId] = useState<number>();
 
   const all = buckets.data ?? [];
   const mine = all.filter((bucket) => bucket.accountId === account.id);
@@ -24,7 +24,8 @@ export function BucketsCard({ account }: { account: Account }) {
   const archived = mine.filter((bucket) => bucket.archived);
   const setAside = open.reduce((sum, bucket) => sum + bucket.balanceCents, 0);
   const editing = mine.find((bucket) => bucket.id === editingId);
-  const moving = mine.find((bucket) => bucket.id === movingId);
+  // What the entered balance has outside every bucket: with the buckets, it always adds up to the balance.
+  const notInABucket = account.latestBalance ? account.latestBalance.amountCents - setAside : null;
 
   return (
     <Card title="Buckets">
@@ -44,19 +45,19 @@ export function BucketsCard({ account }: { account: Account }) {
         <>
           <ul className="divide-y divide-line">
             {open.map((bucket) => (
-              <BucketLine key={bucket.id} bucket={bucket} onEdit={() => setEditingId(bucket.id)} onMove={() => setMovingId(bucket.id)} />
+              <BucketLine key={bucket.id} bucket={bucket} onEdit={() => setEditingId(bucket.id)} />
             ))}
           </ul>
           <dl className="mt-2 space-y-1 border-t border-line pt-3">
-            <Total label="Set aside in buckets" cents={setAside} />
-            {account.latestBalance && (
-              <Total label="Left available, from the balance you entered" cents={account.latestBalance.amountCents - setAside} strong />
-            )}
+            <Total label="In buckets" cents={setAside} />
+            {notInABucket !== null && <Total label="Not in a bucket" cents={notInABucket} />}
+            {account.latestBalance && <Total label="Balance you entered" cents={account.latestBalance.amountCents} strong />}
           </dl>
           {/* It can still happen after the fact: the balance drops, or a schedule keeps filling a bucket. */}
-          {account.latestBalance && setAside > account.latestBalance.amountCents && (
+          {notInABucket !== null && notInABucket > 0 && <PutTheRestIn buckets={open} cents={notInABucket} />}
+          {notInABucket !== null && notInABucket < 0 && (
             <p role="status" className="mt-2 font-semibold text-danger">
-              These buckets hold more than the account does. Take some out of a bucket, or update the balance if it has gone up.
+              These buckets hold more than the account does. Edit a bucket to lower its amount, or update the balance if it has gone up.
             </p>
           )}
         </>
@@ -66,9 +67,7 @@ export function BucketsCard({ account }: { account: Account }) {
           {archived.map((bucket) => (
             <li key={bucket.id} className="flex items-center justify-between gap-3">
               <span className="min-w-0 text-muted wrap-break-word">{bucket.name} · Archived</span>
-              <button type="button" onClick={() => setEditingId(bucket.id)} aria-label={`Edit ${bucket.name}`} className={BUTTON_LINK}>
-                Edit
-              </button>
+              <EditButton name={bucket.name} onClick={() => setEditingId(bucket.id)} labelled />
             </li>
           ))}
         </ul>
@@ -79,12 +78,11 @@ export function BucketsCard({ account }: { account: Account }) {
 
       {adding && <BucketForm account={account} buckets={all} onClose={() => setAdding(false)} />}
       {editing && <BucketForm account={account} bucket={editing} buckets={all} onClose={() => setEditingId(undefined)} />}
-      {moving && <BucketMoneyForm bucket={moving} onClose={() => setMovingId(undefined)} />}
     </Card>
   );
 }
 
-function BucketLine({ bucket, onEdit, onMove }: { bucket: Bucket; onEdit: () => void; onMove: () => void }) {
+function BucketLine({ bucket, onEdit }: { bucket: Bucket; onEdit: () => void }) {
   const goal = bucket.goalCents;
   // Shown as at most full: a bucket can hold more than its goal.
   const reached = goal === null ? null : Math.max(0, Math.min(100, Math.round((bucket.balanceCents * 100) / goal)));
@@ -105,13 +103,9 @@ function BucketLine({ bucket, onEdit, onMove }: { bucket: Bucket; onEdit: () => 
             {formatCents(bucket.balanceCents)}
           </span>
         </div>
-        <div className="flex shrink-0 gap-1 sm:justify-end">
-          <button type="button" onClick={onMove} aria-label={`Move money in or out of ${bucket.name}`} className={BUTTON_LINK}>
-            Move money
-          </button>
-          <button type="button" onClick={onEdit} aria-label={`Edit ${bucket.name}`} className={BUTTON_LINK}>
-            Edit
-          </button>
+        {/* One way in: the amount, the goal and the rest are all changed in the same form. */}
+        <div className="flex shrink-0 sm:justify-end">
+          <EditButton name={bucket.name} onClick={onEdit} labelled />
         </div>
       </div>
       {reached !== null && (
@@ -121,6 +115,51 @@ function BucketLine({ bucket, onEdit, onMove }: { bucket: Bucket; onEdit: () => 
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * For an account where every dollar should have a job: puts whatever is not in a bucket yet
+ * into one of them, in one step.
+ */
+function PutTheRestIn({ buckets, cents }: { buckets: readonly Bucket[]; cents: number }) {
+  const id = useId();
+  const move = useMoveMoneyInto();
+  const [bucketId, setBucketId] = useState(buckets[0]?.id);
+  // The chosen bucket can be archived or deleted while this is on screen.
+  const chosen = buckets.find((bucket) => bucket.id === bucketId) ?? buckets[0];
+  if (chosen === undefined) {
+    return null;
+  }
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        move.mutate({ bucketId: chosen.id, date: todayIso(), amountCents: cents, note: "The rest of the balance" });
+      }}
+      className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"
+    >
+      <div className="sm:flex-1">
+        <label htmlFor={`${id}-rest`} className={LABEL}>
+          Put the rest in a bucket
+        </label>
+        <select id={`${id}-rest`} value={chosen.id} onChange={(event) => setBucketId(Number(event.target.value))} className={INPUT}>
+          {buckets.map((bucket) => (
+            <option key={bucket.id} value={bucket.id}>
+              {bucket.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <button type="submit" disabled={move.isPending} className={BUTTON_SECONDARY}>
+        {move.isPending ? "Saving…" : <>Put <span data-amount>{formatCents(cents)}</span> in</>}
+      </button>
+      {move.isError && (
+        <p role="alert" className="text-danger sm:basis-full">
+          {move.error.message}
+        </p>
+      )}
+    </form>
   );
 }
 

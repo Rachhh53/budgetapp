@@ -446,6 +446,17 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           )}
         </fieldset>
 
+        {/* Always shown on a bill or budget, so it can be found; when it cannot be used yet, it says what is missing. */}
+        {canSaveUp && saveUpBuckets.length === 0 && (
+          <div>
+            <p className={LABEL}>Save up for it in a bucket (optional)</p>
+            <p className={HINT}>
+              {payFrom === null
+                ? "Choose the account it is paid from first. A share can then be set aside in one of that account's buckets every paycheck."
+                : `${accounts.find((account) => String(account.id) === payFrom)?.name ?? "This account"} has no buckets yet. Add one on its page (Accounts, then the account, then Add a bucket) and you can choose it here, to set a share aside every paycheck.`}
+            </p>
+          </div>
+        )}
         {saveUpBuckets.length > 0 && (
           <div>
             <Picker

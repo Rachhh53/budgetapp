@@ -106,6 +106,16 @@ export function useMoveBucketMoney(id: number) {
   });
 }
 
+/** As {@link useMoveBucketMoney}, for a bucket chosen at the moment of moving. */
+export function useMoveMoneyInto() {
+  const refresh = useRefreshBuckets();
+  return useMutation({
+    mutationFn: ({ bucketId, ...input }: BucketChangeInput & { bucketId: number }) =>
+      api.post<BucketDetail>(`/api/buckets/${bucketId}/changes`, input),
+    onSuccess: refresh,
+  });
+}
+
 export function useDeleteBucketChange(id: number) {
   const refresh = useRefreshBuckets();
   return useMutation({

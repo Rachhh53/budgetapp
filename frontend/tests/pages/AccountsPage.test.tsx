@@ -165,6 +165,16 @@ describe("accounts screen", () => {
     expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
   });
 
+  it("has an Edit button on every account, which opens it for changing without leaving the list", async () => {
+    fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
+    renderApp("/accounts");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Everyday Checking" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit account" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Everyday Checking");
+  });
+
   it("starts a new account on a color no other account uses", async () => {
     fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
     renderApp("/accounts");

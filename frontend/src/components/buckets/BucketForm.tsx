@@ -1,13 +1,17 @@
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
-import { type Bucket, useDeleteBucket, useSaveBucket } from "../../api/buckets";
+import { type Bucket, useDeleteBucket, useMoveBucketMoney, useSaveBucket } from "../../api/buckets";
 import { usePayPeriods } from "../../api/income";
 import { todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
+import { BucketHistory } from "./BucketHistory";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+
+/** What the history calls a move made by typing a new amount into the bucket's form. */
+const ADJUSTED_NOTE = "Amount adjusted";
 
 interface BucketFormProps {
   /** The account the bucket sits in. */
@@ -30,6 +34,9 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const [color, setColor] = useState(bucket?.color ?? firstUnusedColor(usedColors));
   const [goal, setGoal] = useState(bucket?.goalCents != null ? centsToInput(bucket.goalCents) : "");
   const [starting, setStarting] = useState("");
+  const [held, setHeld] = useState(bucket ? centsToInput(bucket.balanceCents) : "");
+  // Only used for a bucket that exists; a new one takes its first amount as it is added.
+  const adjust = useMoveBucketMoney(bucket?.id ?? 0);
   const [note, setNote] = useState(bucket?.note ?? "");
   const [archived, setArchived] = useState(bucket?.archived ?? false);
   const [chosenOpenedOn, setChosenOpenedOn] = useState<string | null>(bucket?.openedOn ?? null);
@@ -49,17 +56,19 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
     return cents === null || cents < 0 ? "invalid" : cents;
   };
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     const goalCents = optionalCents(goal);
     const startingCents = optionalCents(starting);
-    if (goalCents === "invalid" || startingCents === "invalid") {
+    // An empty "In this bucket" reads as nothing in it.
+    const heldCents = bucket ? (optionalCents(held) ?? 0) : null;
+    if (goalCents === "invalid" || startingCents === "invalid" || heldCents === "invalid") {
       setProblem(AMOUNT_HELP);
       return;
     }
     setProblem(undefined);
-    save.mutate(
-      {
+    try {
+      await save.mutateAsync({
         accountId: account.id,
         name,
         color,
@@ -68,12 +77,20 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
         archived,
         openedOn,
         ...(bucket ? {} : { startingCents: startingCents ?? 0 }),
-      },
-      { onSuccess: onClose },
-    );
+      });
+      // A bucket's amount is the sum of what moved in and out, so a new amount is recorded
+      // as one more move, for the difference: the history keeps how it got there.
+      if (bucket && heldCents !== null && !archived && heldCents !== bucket.balanceCents) {
+        await adjust.mutateAsync({ date: todayIso(), amountCents: heldCents - bucket.balanceCents, note: ADJUSTED_NOTE });
+      }
+      onClose();
+    } catch {
+      // The failed step's own message is shown below; the form stays open to try again.
+    }
   };
 
-  const failure = problem ?? save.error?.message;
+  const saving = save.isPending || adjust.isPending;
+  const failure = problem ?? save.error?.message ?? adjust.error?.message;
 
   return (
     <Modal title={bucket ? `Edit ${bucket.name}` : `Add a bucket to ${account.name}`} onClose={onClose}>
@@ -104,6 +121,14 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
               value={starting}
               onChange={setStarting}
               hint="What this bucket holds today."
+            />
+          )}
+          {bucket && !bucket.archived && (
+            <MoneyField
+              label="In this bucket"
+              value={held}
+              onChange={setHeld}
+              hint="What it holds today. Change it to set a new amount; the difference is recorded as an adjustment."
             />
           )}
         </div>
@@ -159,12 +184,13 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
           <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
             Cancel
           </button>
-          <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
-            {save.isPending ? "Saving…" : bucket ? "Save changes" : "Add bucket"}
+          <button type="submit" disabled={saving} className={BUTTON_PRIMARY}>
+            {saving ? "Saving…" : bucket ? "Save changes" : "Add bucket"}
           </button>
         </div>
       </form>
 
+      {bucket && <BucketHistory bucket={bucket} />}
       {bucket && <DeleteBucket bucket={bucket} onDeleted={onClose} />}
     </Modal>
   );

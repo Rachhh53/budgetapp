@@ -206,21 +206,34 @@ describe("account detail screen", () => {
   });
 
   describe("buckets", () => {
-    it("lists each bucket with its goal and what is left available", async () => {
-      fakeBackend({
+    it("lists each bucket with its goal, and shows that buckets and the rest add up to the balance", async () => {
+      const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
         "GET /api/buckets": () => ({ status: 200, data: [GIFTS, { ...GIFTS, id: 8, name: "Old trip", archived: true, balanceCents: 0 }] }),
+        "POST /api/buckets/7/changes": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
       });
       renderApp("/accounts/1");
 
       const buckets = await screen.findByRole("region", { name: "Buckets" });
-      const gifts = (await within(buckets).findByText("Holiday gifts")).closest("li")!;
+      const gifts = (await within(buckets).findByRole("button", { name: "Edit Holiday gifts" })).closest("li")!;
       expect(gifts).toHaveTextContent("$200.00");
       expect(gifts).toHaveTextContent("33% of $600.00");
-      expect(within(buckets).getByText("Set aside in buckets").closest("div")).toHaveTextContent("$200.00");
-      // 1,705.10 entered, less 200.00 in buckets.
-      expect(within(buckets).getByText("Left available, from the balance you entered").closest("div")).toHaveTextContent("$1,505.10");
+      // One way in to a bucket: there is no separate button for moving money.
+      expect(within(buckets).queryByRole("button", { name: /move money/i })).not.toBeInTheDocument();
+      // 200.00 in buckets + 1,505.10 not in one = the 1,705.10 entered.
+      expect(within(buckets).getByText("In buckets").closest("div")).toHaveTextContent("$200.00");
+      expect(within(buckets).getByText("Not in a bucket").closest("div")).toHaveTextContent("$1,505.10");
+      expect(within(buckets).getByText("Balance you entered").closest("div")).toHaveTextContent("$1,705.10");
       expect(within(buckets).getByText("Old trip · Archived")).toBeInTheDocument();
+
+      // The rest can be given a job in one step.
+      expect(within(buckets).getByRole("combobox", { name: "Put the rest in a bucket" })).toHaveValue("7");
+      await userEvent.click(within(buckets).getByRole("button", { name: "Put $1,505.10 in" }));
+      await waitFor(() =>
+        expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/changes")).toEqual([
+          { date: todayIso(), amountCents: 150510, note: "The rest of the balance" },
+        ]),
+      );
     });
 
     it("says so when the buckets hold more than the account does", async () => {
@@ -270,7 +283,7 @@ describe("account detail screen", () => {
       ]);
     });
 
-    it("takes money out of a bucket by hand, and removes an earlier move", async () => {
+    it("lists what was changed by hand in the bucket's Edit form, and removes one", async () => {
       const detail = { bucket: GIFTS, changes: [{ id: 3, bucketId: 7, date: "2026-10-01", amountCents: 15000, note: "Starting amount" }] };
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
@@ -281,20 +294,34 @@ describe("account detail screen", () => {
       });
       renderApp("/accounts/1");
 
-      await userEvent.click(await screen.findByRole("button", { name: "Move money in or out of Holiday gifts" }));
-      const dialog = screen.getByRole("dialog", { name: "Holiday gifts — move money" });
-      expect(await within(dialog).findByText("Starting amount")).toBeInTheDocument();
-      await userEvent.click(within(dialog).getByRole("button", { name: "Remove the $150.00 put in on Oct 1, 2026" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      const history = within(dialog).getByRole("region", { name: "Changed by hand" });
+      expect(await within(history).findByText("Starting amount")).toBeInTheDocument();
+      await userEvent.click(within(history).getByRole("button", { name: "Remove the $150.00 put in on Oct 1, 2026" }));
       await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/buckets/7/changes/3"));
+    });
 
-      await userEvent.click(within(dialog).getByRole("radio", { name: "Take money out" }));
-      await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "80");
-      await userEvent.type(within(dialog).getByRole("textbox", { name: "Note (optional)" }), "Gift for Priya");
-      await userEvent.click(within(dialog).getByRole("button", { name: "Take it out" }));
+    it("sets a new amount for a bucket from its Edit form, as an adjustment for the difference", async () => {
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: GIFTS, changes: [] }, changed: true }),
+        "POST /api/buckets/7/changes": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      const held = within(dialog).getByRole("textbox", { name: "In this bucket" });
+      await userEvent.clear(held);
+      await userEvent.type(held, "125");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      // 200.00 before, 125.00 wanted.
       expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/changes")).toEqual([
-        { date: todayIso(), amountCents: -8000, note: "Gift for Priya" },
+        { date: todayIso(), amountCents: -7500, note: "Amount adjusted" },
       ]);
     });
 
@@ -309,13 +336,15 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       let dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
-      // What is already in a bucket is changed by moving money, not here.
       expect(within(dialog).queryByRole("textbox", { name: "Already set aside (optional)" })).not.toBeInTheDocument();
+      // What it holds is shown, and left alone it moves no money.
+      expect(within(dialog).getByRole("textbox", { name: "In this bucket" })).toHaveValue("200.00");
       const goal = within(dialog).getByRole("textbox", { name: "Goal (optional)" });
       await userEvent.clear(goal);
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
       await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")).toHaveLength(1));
       expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[0]).toMatchObject({ name: "Holiday gifts", goalCents: null, archived: false });
+      expect(calls(fetchMock)).not.toContain("POST /api/buckets/7/changes");
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
