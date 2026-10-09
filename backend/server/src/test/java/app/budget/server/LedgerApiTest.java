@@ -53,6 +53,22 @@ class LedgerApiTest extends ApiTestBase {
     }
 
     @Nested
+    class ATransferDueOnPayday {
+        @Test
+        void arrivesInTheOtherAccountWhoseBalanceWasEnteredTheDayBefore() throws Exception {
+            enterBalance(checking, "2026-09-30", 500000);
+            enterBalance(savings, "2026-09-30", 1000000);
+            item("To savings", "transfer", 45000, monthly(1), "\"autopay\":true,\"payToAccountId\":" + savings);
+
+            JsonNode period = period("2026-10-01");
+            assertThat(period.get("occurrences").findValuesAsText("name")).contains("To savings");
+            assertThat(account(period, checking).get("outCents").asLong()).isEqualTo(45000);
+            assertThat(account(period, savings).get("inCents").asLong()).isEqualTo(45000);
+            assertThat(account(period("2026-10-15"), savings).get("startingCents").asLong()).isEqualTo(1045000);
+        }
+    }
+
+    @Nested
     class Auth {
         @Test
         void bothRoutesRequireASession() throws Exception {
