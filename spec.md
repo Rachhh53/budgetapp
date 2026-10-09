@@ -505,6 +505,8 @@ Saying how much to save (decided 2026-10-09): the bucket form answers it as soon
 
 Savings goals streamlined (decided 2026-10-09; replaces the bucket-form and bucket-move notes above where they differ): **the bucket form is the one place a savings goal is set up**, in three questions: what it is for; how much by when (goal, goal date); how much each time (one amount, every paycheck or every month, pre-filled from the goal by a button). That recurring amount is the bucket's own bucket move: the form adds it (from the next paycheck), changes it from today, and ends it when emptied. "Bucket move" is no longer a type offered in the recurring item form; the move is still listed under Recurring items, and editing it from anywhere opens its bucket. **Stop when the goal is reached** (`buckets.stop_at_goal`, migration V7; ticked by default on a bucket with a goal): recurring bucket moves put in only what the bucket still has room for; the one that reaches the goal is cut down to fit, later ones are not listed, and money put in by hand, transfers and save-ups are never capped. The bucket row no longer has a "Start saving" button. "Already set aside" / "In this bucket", Counts from, note and archive sit under a closed **More options**; so does "Save up for it in a bucket" in the recurring item form (open when in use).
 
+Account tabs on the pay period screen (decided 2026-10-09): every account that is not archived has a tab. One with no balance entered on or before the period's end says so and links to its page, instead of having no tab (Rachel read the missing tab as a bug).
+
 ### Carried forward into later phases
 
 | Feature | Notes |

@@ -937,14 +937,16 @@ function AccountsPanel({
   primaryAccountId: number | null;
 }) {
   const id = useId();
-  const known = balances.flatMap((balance) => {
-    const account = accounts.find((candidate) => candidate.id === balance.accountId);
-    return account ? [{ account, balance }] : [];
-  });
+  // Every account gets a tab, so one never seems to have gone missing: an account with no balance
+  // entered by the end of this period has nothing to show yet, and its tab says so.
+  const known = accounts
+    .map((account) => ({ account, balance: balances.find((candidate) => candidate.accountId === account.id) }))
+    .filter((tab) => tab.balance !== undefined || !tab.account.archived);
   const [chosen, setChosen] = useState<number | null>(null);
-  const shown = known.find((tab) => tab.account.id === (chosen ?? primaryAccountId)) ?? known[0];
+  const shown =
+    known.find((tab) => tab.account.id === (chosen ?? primaryAccountId)) ?? known.find((tab) => tab.balance !== undefined) ?? known[0];
 
-  if (shown === undefined) {
+  if (shown === undefined || known.every((tab) => tab.balance === undefined)) {
     return (
       <Panel title="Accounts & buckets" aside="at period end">
         <Empty>
@@ -958,8 +960,46 @@ function AccountsPanel({
     );
   }
 
+  const tabs = (
+    <div role="tablist" aria-label="Accounts" className="mb-2 flex gap-1 overflow-x-auto rounded-lg bg-bg p-1">
+      {known.map(({ account }) => (
+        <button
+          key={account.id}
+          type="button"
+          role="tab"
+          id={`${id}-tab-${account.id}`}
+          aria-selected={account.id === shown.account.id}
+          aria-controls={`${id}-panel`}
+          onClick={() => setChosen(account.id)}
+          className={`min-h-11 shrink-0 rounded-md px-3 text-sm lg:min-h-9 ${
+            account.id === shown.account.id ? "bg-surface font-semibold shadow-sm" : "text-muted"
+          }`}
+        >
+          {account.name}
+        </button>
+      ))}
+    </div>
+  );
+
   const owed = OWED.includes(shown.account.type);
   const { balance } = shown;
+  if (balance === undefined) {
+    return (
+      <Panel title="Accounts & buckets" aside="at period end">
+        {tabs}
+        <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`}>
+          <Empty>
+            No balance was entered for {shown.account.name} on or before {formatDay(periodEnd)}, so there is nothing to show for it in
+            this pay period.{" "}
+            <Link to={`/accounts/${shown.account.id}`} className="font-semibold text-accent-ink underline">
+              Enter a balance
+            </Link>{" "}
+            dated then or earlier and it will appear here.
+          </Empty>
+        </div>
+      </Panel>
+    );
+  }
   // Only when it differs from the period itself; otherwise the lines mean the whole period, as they read.
   const since = balance.entered && balance.startingOn > periodStart ? ` since ${formatDay(balance.startingOn)}` : "";
   const held = bucketPeriods.flatMap((period) => {
@@ -968,24 +1008,7 @@ function AccountsPanel({
   });
   return (
     <Panel title="Accounts & buckets" aside="at period end">
-      <div role="tablist" aria-label="Accounts" className="mb-2 flex gap-1 overflow-x-auto rounded-lg bg-bg p-1">
-        {known.map(({ account }) => (
-          <button
-            key={account.id}
-            type="button"
-            role="tab"
-            id={`${id}-tab-${account.id}`}
-            aria-selected={account.id === shown.account.id}
-            aria-controls={`${id}-panel`}
-            onClick={() => setChosen(account.id)}
-            className={`min-h-11 shrink-0 rounded-md px-3 text-sm lg:min-h-9 ${
-              account.id === shown.account.id ? "bg-surface font-semibold shadow-sm" : "text-muted"
-            }`}
-          >
-            {account.name}
-          </button>
-        ))}
-      </div>
+      {tabs}
       <dl id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`} className="divide-y divide-line">
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />
         <AccountLine

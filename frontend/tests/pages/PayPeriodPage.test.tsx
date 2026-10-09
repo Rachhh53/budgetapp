@@ -343,15 +343,19 @@ describe("pay period screen", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" })).toBeInTheDocument();
   });
 
-  it("shows each account with a balance on its own tab, in a card's own words", async () => {
+  it("shows each account on its own tab, in a card's own words", async () => {
     withPeriod();
     renderApp();
 
     const accounts = await panel("Accounts & buckets");
     expect(within(accounts).getByRole("tab", { name: "Everyday Checking" })).toHaveAttribute("aria-selected", "true");
     expect(within(accounts).getByText("Ending balance").closest("div")).toHaveTextContent("$3,096.10");
-    // Savings has no balance entered, so it has no tab.
-    expect(within(accounts).queryByRole("tab", { name: "Rainy Day Savings" })).not.toBeInTheDocument();
+    // Savings has no balance entered yet: it still has a tab, which says so instead of going missing.
+    await userEvent.click(within(accounts).getByRole("tab", { name: "Rainy Day Savings" }));
+    expect(within(accounts).getByRole("tabpanel")).toHaveTextContent(
+      "No balance was entered for Rainy Day Savings on or before Oct 14, so there is nothing to show for it in this pay period.",
+    );
+    expect(within(accounts).getByRole("link", { name: "Enter a balance" })).toHaveAttribute("href", "/accounts/2");
 
     await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
 
