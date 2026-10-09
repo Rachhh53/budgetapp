@@ -911,6 +911,73 @@ class BucketsLedgerApiTest extends ApiTestBase {
     }
 
     @Nested
+    class ARecurringItemPaidOutOfABucket {
+        long gifts;
+
+        @BeforeEach
+        void addABucket() throws Exception {
+            gifts = bucket(checking, "Holiday gifts", 15000);
+        }
+
+        private String bill(long cents, String extra) {
+            return """
+                    {"name":"Streaming","kind":"bill","amountCents":%d,"payFromAccountId":%d,"autopay":true,
+                     "schedule":{"frequency":"monthly","day1":3,"startDate":"2026-10-01"}%s}""".formatted(cents, checking, extra);
+        }
+
+        @Test
+        void theBucketAndTheAccountGoDownTogetherEachTime() throws Exception {
+            JsonNode before = account(period("2026-10-01"), checking);
+
+            Reply reply = server.post("/api/items", bill(6000, ",\"fromBucketId\":" + gifts), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            assertThat(reply.data().get("fromBucketId").asLong()).isEqualTo(gifts);
+            JsonNode period = period("2026-10-01");
+            JsonNode after = account(period, checking);
+            assertThat(after.get("endingCents").asLong()).isEqualTo(before.get("endingCents").asLong() - 6000);
+            assertThat(after.get("bucketsCents").asLong()).isEqualTo(9000);
+            // What is outside the buckets has not moved: the bucket paid for it.
+            assertThat(after.get("availableCents").asLong()).isEqualTo(before.get("availableCents").asLong());
+            assertThat(moves(period, "spent")).containsExactly("2026-10-03 -6000");
+            assertThat(period.get("occurrences").get(0).get("fromBucketId").asLong()).isEqualTo(gifts);
+        }
+
+        @Test
+        void aBucketIsNeverOverdrawnByASchedule() throws Exception {
+            created("/api/items", bill(10000, ",\"fromBucketId\":" + gifts));
+
+            // 150.00 in the bucket: October takes 100.00, November only the 50.00 that is left, December nothing.
+            assertThat(account(period("2026-10-01"), checking).get("bucketsCents").asLong()).isEqualTo(5000);
+            JsonNode november = period("2026-11-01");
+            assertThat(account(november, checking).get("bucketsCents").asLong()).isZero();
+            assertThat(moves(november, "spent")).containsExactly("2026-11-03 -5000");
+            JsonNode december = period("2026-12-01");
+            assertThat(account(december, checking).get("bucketsCents").asLong()).isZero();
+            assertThat(moves(december, "spent")).isEmpty();
+        }
+
+        @Test
+        void explainsWhatIsWrong() throws Exception {
+            long emergency = bucket(savings, "Emergency fund", 0);
+
+            assertError(server.post("/api/items", bill(6000, ",\"fromBucketId\":" + emergency), cookie),
+                    "Please choose a bucket in the account this is paid from.");
+            assertError(server.post("/api/items", bill(6000, ",\"fromBucketId\":999"), cookie),
+                    "Please choose the bucket from the list.");
+            assertError(server.post("/api/items", bill(6000, ",\"fromBucketId\":%d,\"saveUpBucketId\":%d".formatted(gifts, gifts)), cookie),
+                    "This is already paid out of the bucket it is saved up in. Please choose one or the other.");
+        }
+
+        @Test
+        void aBucketAnItemIsPaidFromCannotBeDeleted() throws Exception {
+            created("/api/items", bill(6000, ",\"fromBucketId\":" + gifts));
+
+            assertThat(server.delete("/api/buckets/" + gifts, cookie).status()).isEqualTo(409);
+        }
+    }
+
+    @Nested
     class AccountBalancesToday {
         @Test
         void requiresASession() throws Exception {

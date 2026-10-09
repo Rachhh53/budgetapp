@@ -58,6 +58,8 @@ export interface ItemTerms {
   bucketId: number | null;
   /** The bucket a share of a bill is set aside in every paycheck; `null` when it is not saved up for. */
   saveUpBucketId: number | null;
+  /** The bucket of the paying account this comes out of; `null` for money that is not in a bucket. */
+  fromBucketId: number | null;
 }
 
 /** The next occurrence still to pay. */
@@ -194,6 +196,7 @@ export function itemAsInput(item: Item): ItemInput {
     daysAfterPayday: item.daysAfterPayday,
     bucketId: item.bucketId,
     saveUpBucketId: item.saveUpBucketId,
+    fromBucketId: item.fromBucketId,
   };
 }
 

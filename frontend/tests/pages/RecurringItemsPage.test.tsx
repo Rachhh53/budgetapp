@@ -63,6 +63,7 @@ const RENT: Item = {
   history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 }],
   paused: false,
   pausedUntil: null,
+  fromBucketId: null,
 };
 const ELECTRIC: Item = {
   ...RENT,
@@ -245,6 +246,54 @@ describe("recurring items screen", () => {
     expect(names()).toEqual(byName);
   });
 
+  it("asks which bucket a bill comes out of when its account has buckets", async () => {
+    const fetchMock = withItems([], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
+      "POST /api/items": () => ({ status: 201, data: ELECTRIC }),
+    });
+    renderApp("/recurring");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "+ Add item" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Streaming");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "15");
+    // Nothing to ask until an account with buckets is chosen.
+    expect(within(dialog).queryByRole("combobox", { name: "Comes out of" })).not.toBeInTheDocument();
+    await pick(dialog, "Paid from", "Every");
+    const from = within(dialog).getByRole("combobox", { name: "Comes out of" });
+    // Only that account's buckets are offered.
+    expect(within(from).queryByRole("option", { name: /Emergency fund/ })).not.toBeInTheDocument();
+
+    // It has to be said: nothing is sent until it is.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+    expect(calls(fetchMock)).not.toContain("POST /api/items");
+
+    await userEvent.selectOptions(from, within(from).getByRole("option", { name: /Holiday gifts/ }));
+    expect(within(dialog).getByText(/Each time, the bucket and the account both go down/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/items")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({ name: "Streaming", payFromAccountId: 1, fromBucketId: 7 });
+  });
+
+  it("keeps where an existing item comes out of, and sends none for money not in a bucket", async () => {
+    const fetchMock = withItems([RENT], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "PUT /api/items/1": () => ({ status: 200, data: RENT }),
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
+    // It was set up before buckets were asked about, so it stands as not from a bucket.
+    expect(await within(dialog).findByRole("combobox", { name: "Comes out of" })).toHaveValue("none");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")[0]).toMatchObject({ fromBucketId: null });
+  });
+
   it("pauses an item until a date or until it is turned back on, and resumes it", async () => {
     let rent: Item = RENT;
     const fetchMock = withItems([RENT], {
@@ -387,6 +436,7 @@ describe("recurring items screen", () => {
         daysAfterPayday: 0,
         bucketId: null,
         saveUpBucketId: null,
+        fromBucketId: null,
       },
     ]);
   });

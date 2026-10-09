@@ -230,6 +230,7 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
           daysAfterPayday: 0,
           bucketId,
           saveUpBucketId: null,
+          fromBucketId: null,
         });
       }
       onClose();

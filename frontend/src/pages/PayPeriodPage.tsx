@@ -724,11 +724,14 @@ function IncomePanel({
 }
 
 /**
- * "Checking", "Checking → Savings", "Checking → Savings · Emergency fund bucket": the account
- * an occurrence is paid from, and where its money ends up when it stays the user's.
+ * "Checking", "Checking · Gifts bucket", "Checking → Savings · Emergency fund bucket": the
+ * account (and bucket) an occurrence is paid from, and where its money ends up when it stays the user's.
  */
 function whereItGoes(occurrence: Occurrence, context: RowContext): string {
-  const from = context.accountName(occurrence.payFromAccountId);
+  const account = context.accountName(occurrence.payFromAccountId);
+  const paidFrom = context.bucketName(occurrence.fromBucketId);
+  // Paid out of a bucket: say which, since the bucket goes down with the account.
+  const from = paidFrom === undefined ? account : `${account} · ${paidFrom} bucket`;
   const bucket = context.bucketName(occurrence.bucketId);
   if (occurrence.kind === "bucket_move") {
     return `${from} → ${bucket ?? "a bucket"} bucket`;

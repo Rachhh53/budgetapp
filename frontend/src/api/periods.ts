@@ -35,6 +35,8 @@ export interface Occurrence {
   bucketId: number | null;
   /** The bucket this bill is saved up for in. */
   saveUpBucketId: number | null;
+  /** The bucket of the paying account it comes out of; `null` for money not in a bucket. */
+  fromBucketId: number | null;
 }
 
 /**

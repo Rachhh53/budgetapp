@@ -91,6 +91,9 @@ export function ItemForm(props: ItemFormProps) {
   );
 }
 
+/** The choice that takes nothing out of any bucket. Not a number, so it can never be mistaken for a bucket's id. */
+const NOT_IN_A_BUCKET = "none";
+
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
 export function ItemFormBody({ item, accounts, categories, tags, onClose }: ItemFormProps) {
   const id = useId();
@@ -123,6 +126,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const [saveUpBucketId, setSaveUpBucketId] = useState<string | null>(
     item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
   );
+  // Where the money comes out of: a bucket's id, NOT_IN_A_BUCKET, or "" until it is chosen.
+  const [chosenFrom, setChosenFrom] = useState<string>();
   const [problem, setProblem] = useState<string>();
   const addBucket = useSaveBucket();
   const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
@@ -130,7 +135,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   // Archived buckets are left out, unless this item already points at one.
   const everyBucket = useBuckets().data ?? [];
   const openBuckets = everyBucket.filter(
-    (bucket) => !bucket.archived || [bucketId, saveUpBucketId].includes(String(bucket.id)),
+    (bucket) => !bucket.archived || [bucketId, saveUpBucketId, String(item?.fromBucketId)].includes(String(bucket.id)),
   );
   const bucketOptionsIn = (accountId: string | null) =>
     openBuckets
@@ -152,6 +157,15 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   // A bucket chosen for another account, or another kind of item, no longer applies.
   const chosenTransferBucket = transferBuckets.some((option) => option.id === bucketId) ? bucketId : null;
   const chosenSaveUpBucket = saveUpBuckets.some((option) => option.id === saveUpBucketId) ? saveUpBucketId : null;
+  // Money leaving an account that has buckets comes out of one of them, or out of what is in none.
+  // A bill being saved up for is already paid out of its save-up bucket, so it is not asked.
+  const payingBuckets = isBucketMove || chosenSaveUpBucket !== null ? [] : everyBucket.filter(
+    (bucket) => String(bucket.accountId) === payFrom && (!bucket.archived || bucket.id === item?.fromBucketId),
+  );
+  // An item being changed already says where it comes from; a new one has to be told.
+  const askedFrom = chosenFrom ?? (item ? String(item.fromBucketId ?? NOT_IN_A_BUCKET) : "");
+  // A bucket chosen before the account was changed no longer applies.
+  const comesFrom = askedFrom === NOT_IN_A_BUCKET || payingBuckets.some((bucket) => String(bucket.id) === askedFrom) ? askedFrom : "";
 
   const changeKind = (next: ItemKind) => {
     setKind(next);
@@ -199,6 +213,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
     if (amountCents === null || amountCents < 0) {
       return AMOUNT_HELP;
     }
+    if (payingBuckets.length > 0 && comesFrom === "") {
+      return "Please say where this comes out of: one of the buckets, or money that is not in a bucket.";
+    }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months";
     return {
       name,
@@ -229,6 +246,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
       daysAfterPayday: everyPaycheck ? daysAfterPayday : 0,
       bucketId: moveInto !== undefined ? moveInto.id : chosenTransferBucket !== null ? Number(chosenTransferBucket) : null,
       saveUpBucketId: chosenSaveUpBucket !== null ? Number(chosenSaveUpBucket) : null,
+      fromBucketId: payingBuckets.length > 0 && comesFrom !== NOT_IN_A_BUCKET ? Number(comesFrom) : null,
       // A change is dated the day it is made; the backend reaches further back only for an earlier start.
       ...(item ? { effectiveFrom: todayIso() } : {}),
     };
@@ -372,6 +390,33 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
             )}
             {kind === "card_payment" && (
               <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
+            )}
+            {payingBuckets.length > 0 && (
+              <div>
+                <label htmlFor={`${id}-from-bucket`} className={LABEL}>
+                  Comes out of
+                </label>
+                <select
+                  id={`${id}-from-bucket`}
+                  value={comesFrom}
+                  onChange={(event) => setChosenFrom(event.target.value)}
+                  required
+                  className={INPUT}
+                >
+                  <option value="">Choose where this comes from</option>
+                  <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
+                  {payingBuckets.map((bucket) => (
+                    <option key={bucket.id} value={bucket.id}>
+                      {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
+                    </option>
+                  ))}
+                </select>
+                <p className={HINT}>
+                  {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
+                    ? "Each time, the bucket and the account both go down. If the bucket runs out, the rest comes from money that is not in a bucket."
+                    : "This account has buckets, so say whether this is paid out of one of them."}
+                </p>
+              </div>
             )}
           </div>
         </FormSection>

@@ -47,7 +47,7 @@ public final class BucketMoves {
         TRANSFER,
         /** Part of a one-off set aside here. */
         SPLIT,
-        /** A one-off paid out of this bucket: the money leaves the bucket and the account together. */
+        /** A one-off or recurring item paid out of this bucket: the money leaves the bucket and the account together. */
         SPENT,
         /** A paycheck's share of a bill being saved up for. */
         SAVE_UP,
@@ -146,6 +146,12 @@ public final class BucketMoves {
                 Kind kind = occurrence.kind() == ItemKind.BUCKET_MOVE ? Kind.BUCKET_MOVE : Kind.TRANSFER;
                 moves.add(new Move(into.id(), occurrence.payBy(), occurrence.amountCents(), kind, occurrence.name(), occurrence.itemId()));
             }
+            // Paid out of a bucket: the money leaves the bucket on the day it leaves the account.
+            Bucket paidFrom = occurrence.fromBucketId() == null ? null : open.get(occurrence.fromBucketId());
+            if (paidFrom != null && !occurrence.payBy().isBefore(paidFrom.openedOn())) {
+                moves.add(new Move(
+                        paidFrom.id(), occurrence.payBy(), -occurrence.amountCents(), Kind.SPENT, occurrence.name(), occurrence.itemId()));
+            }
             if (occurrence.saveUpBucketId() != null) {
                 savedUpFor.computeIfAbsent(occurrence.itemId(), id -> new ArrayList<>()).add(occurrence);
             }
@@ -157,6 +163,32 @@ public final class BucketMoves {
 
         moves.sort(Comparator.comparing(Move::date));
         return moves;
+    }
+
+    /**
+     * A bucket is never overdrawn. A one-off is refused when its bucket does not hold enough,
+     * but a schedule runs on by itself: going through the moves in date order, a recurring
+     * item takes from its bucket only what is in it, and the rest of what it costs comes out
+     * of the account's money that is not in a bucket.
+     *
+     * @param moves earliest first
+     */
+    static List<Move> neverOverdrawn(List<Move> moves) {
+        Map<Long, Long> held = new HashMap<>();
+        List<Move> kept = new ArrayList<>();
+        for (Move move : moves) {
+            long amount = move.amountCents();
+            if (move.kind() == Kind.SPENT && move.itemId() != null) {
+                amount = -Math.min(-amount, Math.max(0, held.getOrDefault(move.bucketId(), 0L)));
+            }
+            if (amount == move.amountCents()) {
+                kept.add(move);
+            } else if (amount != 0) {
+                kept.add(new Move(move.bucketId(), move.date(), amount, move.kind(), move.label(), move.itemId()));
+            }
+            held.merge(move.bucketId(), amount, Long::sum);
+        }
+        return kept;
     }
 
     /** One recurring move, as an occurrence and the move derived from it both know it. */

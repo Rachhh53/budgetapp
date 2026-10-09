@@ -590,7 +590,7 @@ public final class Ledger {
                         ? List.<Move>of()
                         : BucketMoves.derive(open, buckets.allChanges(), entries.withBucketSplits(), active, occurrences, expansion.periods()),
                 stopAt);
-        List<Move> bucketMoves = new ArrayList<>(capped.moves());
+        List<Move> bucketMoves = new ArrayList<>(BucketMoves.neverOverdrawn(capped.moves()));
         List<Occurrence> listed = occurrences.stream()
                 .map(occurrence -> {
                     Long room = occurrence.kind() == ItemKind.BUCKET_MOVE && !occurrence.skipped()

@@ -62,6 +62,7 @@ const ELECTRIC: Occurrence = {
   skipped: false,
   bucketId: null,
   saveUpBucketId: null,
+  fromBucketId: null,
 };
 const VISA_PAYMENT: Occurrence = {
   ...ELECTRIC,
@@ -181,6 +182,7 @@ const ELECTRIC_ITEM: Item = {
   history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000 }],
   paused: false,
   pausedUntil: null,
+  fromBucketId: null,
 };
 
 const OCTOBER: PeriodDetail = {
@@ -775,6 +777,16 @@ describe("+ Add item", () => {
       accountId: 1,
       bucketSplits: [{ bucketId: 7, amountCents: 50000 }],
     });
+  });
+
+  it("says which bucket a recurring item is paid out of", async () => {
+    withPeriod(
+      { ...OCTOBER, occurrences: [{ ...ELECTRIC, fromBucketId: 7 }] },
+      { "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }) },
+    );
+    renderApp();
+
+    expect(await screen.findByText(/Everyday Checking · Holiday gifts bucket/)).toBeInTheDocument();
   });
 
   it("asks where money going out comes from when the account has buckets", async () => {

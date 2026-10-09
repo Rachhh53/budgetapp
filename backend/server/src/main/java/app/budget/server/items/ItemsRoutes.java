@@ -111,7 +111,8 @@ public final class ItemsRoutes {
             Integer daysAfterPayday,
             LocalDate effectiveFrom,
             Long bucketId,
-            Long saveUpBucketId) {}
+            Long saveUpBucketId,
+            Long fromBucketId) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -160,6 +161,7 @@ public final class ItemsRoutes {
             int daysAfterPayday,
             Long bucketId,
             Long saveUpBucketId,
+            Long fromBucketId,
             Long saveUpPerPaycheckCents,
             long perOccurrenceCents,
             long perYearCents,
@@ -375,6 +377,7 @@ public final class ItemsRoutes {
                 terms.daysAfterPayday(),
                 terms.bucketId(),
                 terms.saveUpBucketId(),
+                terms.fromBucketId(),
                 saveUpPerPaycheckCents,
                 amounts.perOccurrenceCents(),
                 amounts.perYearCents(),
@@ -483,6 +486,19 @@ public final class ItemsRoutes {
             }
             saveUpBucketId = saveUp.id();
         }
+        // Money leaving an account that has buckets comes out of one of them, or out of what is in none.
+        Long fromBucketId = null;
+        if (kind != ItemKind.BUCKET_MOVE && input.fromBucketId() != null) {
+            Bucket paidFrom = bucket(input.fromBucketId(), "Please choose the bucket from the list.");
+            if (paidFrom.accountId() != from.id()) {
+                throw ApiException.badRequest("Please choose a bucket in the account this is paid from.");
+            }
+            if (saveUpBucketId != null) {
+                throw ApiException.badRequest(
+                        "This is already paid out of the bucket it is saved up in. Please choose one or the other.");
+            }
+            fromBucketId = paidFrom.id();
+        }
 
         if (input.schedule() == null) {
             throw ApiException.badRequest("Please choose how often it repeats.");
@@ -506,7 +522,8 @@ public final class ItemsRoutes {
                 // Only "every pay period" is dated from payday; any other schedule names its own day.
                 schedule.frequency() == Frequency.EVERY_PAY_PERIOD ? daysAfterPayday : 0,
                 bucketId,
-                saveUpBucketId);
+                saveUpBucketId,
+                fromBucketId);
     }
 
     /** One of the user's open buckets, or {@code message} when it is missing, unknown or archived. */

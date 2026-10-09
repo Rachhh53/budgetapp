@@ -149,10 +149,10 @@ public final class BucketsRepository {
                 .execute());
     }
 
-    /** True when a recurring item moves money into this bucket or saves up in it. */
+    /** True when a recurring item moves money into this bucket, saves up in it or is paid out of it. */
     public boolean isUsedByItems(long id) {
         return jdbi.withHandle(handle -> handle
-                .createQuery("SELECT EXISTS (SELECT 1 FROM item_versions WHERE bucket_id = :id OR save_up_bucket_id = :id)")
+                .createQuery("SELECT EXISTS (SELECT 1 FROM item_versions WHERE bucket_id = :id OR save_up_bucket_id = :id OR from_bucket_id = :id)")
                 .bind("id", id)
                 .mapTo(Boolean.class)
                 .one());

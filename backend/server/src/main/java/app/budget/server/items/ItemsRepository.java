@@ -65,6 +65,7 @@ public final class ItemsRepository {
      *
      * @param bucketId       the bucket a bucket move, or a transfer, puts its money in; {@code null} otherwise
      * @param saveUpBucketId the bucket a share of the bill is set aside in every paycheck; {@code null} when it is not saved up for
+     * @param fromBucketId   the bucket of the paying account this comes out of; {@code null} for money that is not in a bucket
      */
     public record Terms(
             long amountCents,
@@ -78,11 +79,12 @@ public final class ItemsRepository {
             ScheduleRule schedule,
             int daysAfterPayday,
             Long bucketId,
-            Long saveUpBucketId) {
+            Long saveUpBucketId,
+            Long fromBucketId) {
 
         Terms withSchedule(ScheduleRule rule) {
             return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
-                    autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId);
+                    autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId);
         }
     }
 
@@ -176,7 +178,8 @@ public final class ItemsRepository {
                 handle.createUpdate("""
                                 UPDATE item_versions
                                 SET pay_from_account_id = :payFrom, pay_to_account_id = :payTo, autopay = :autopay,
-                                    placement = :placement, bucket_id = :bucketId, save_up_bucket_id = :saveUpBucketId
+                                    placement = :placement, bucket_id = :bucketId, save_up_bucket_id = :saveUpBucketId,
+                                    from_bucket_id = :fromBucketId
                                 WHERE item_id = :id AND effective_from < :effectiveFrom
                                 """)
                         .bind("id", id)
@@ -187,6 +190,7 @@ public final class ItemsRepository {
                         .bind("placement", Inputs.code(terms.placement()))
                         .bind("bucketId", terms.bucketId())
                         .bind("saveUpBucketId", terms.saveUpBucketId())
+                        .bind("fromBucketId", terms.fromBucketId())
                         .execute();
             }
             handle.createUpdate("UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived WHERE id = :id")
@@ -396,7 +400,8 @@ public final class ItemsRepository {
                                 null,
                                 rs.getInt("days_after_payday"),
                                 nullableLong(rs, "bucket_id"),
-                                nullableLong(rs, "save_up_bucket_id"))))
+                                nullableLong(rs, "save_up_bucket_id"),
+                                nullableLong(rs, "from_bucket_id"))))
                 .list();
         List<Version> versions = new ArrayList<>();
         for (VersionRow row : rows) {
@@ -412,9 +417,10 @@ public final class ItemsRepository {
                         INSERT INTO item_versions
                             (item_id, effective_from, amount, amount_mode, is_estimate, category_id, pay_from_account_id,
                              pay_to_account_id, autopay, placement, schedule_rule_id, days_after_payday,
-                             bucket_id, save_up_bucket_id)
+                             bucket_id, save_up_bucket_id, from_bucket_id)
                         VALUES (:itemId, :effectiveFrom, :amount, :amountMode, :estimate, :categoryId, :payFrom,
-                                :payTo, :autopay, :placement, :ruleId, :daysAfterPayday, :bucketId, :saveUpBucketId)
+                                :payTo, :autopay, :placement, :ruleId, :daysAfterPayday, :bucketId, :saveUpBucketId,
+                                :fromBucketId)
                         """)
                 .bind("itemId", itemId)
                 .bind("effectiveFrom", effectiveFrom.toString())
@@ -430,6 +436,7 @@ public final class ItemsRepository {
                 .bind("daysAfterPayday", terms.daysAfterPayday())
                 .bind("bucketId", terms.bucketId())
                 .bind("saveUpBucketId", terms.saveUpBucketId())
+                .bind("fromBucketId", terms.fromBucketId())
                 .execute();
     }
 

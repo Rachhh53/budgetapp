@@ -58,6 +58,7 @@ export function BucketsCard({ account }: { account: Account }) {
                 key={bucket.id}
                 bucket={bucket}
                 feeding={items.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))}
+                paying={items.filter((item) => !item.archived && item.fromBucketId === bucket.id)}
                 onEdit={() => setEditingId(bucket.id)}
               />
             ))}
@@ -103,11 +104,14 @@ export function BucketsCard({ account }: { account: Account }) {
 function BucketLine({
   bucket,
   feeding,
+  paying,
   onEdit,
 }: {
   bucket: Bucket;
   /** The recurring items that put money in this bucket. */
   feeding: readonly Item[];
+  /** The recurring items that are paid out of this bucket. */
+  paying: readonly Item[];
   onEdit: () => void;
 }) {
   const goal = bucket.goalCents;
@@ -172,6 +176,19 @@ function BucketLine({
                   {describeItemSchedule(item.schedule).toLowerCase()}
                 </>
               )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {paying.length > 0 && (
+        <ul aria-label={`Paid out of ${bucket.name}`} className="mt-1 text-sm text-muted">
+          {paying.map((item) => (
+            <li key={item.id}>
+              Pays for {item.name} ·{" "}
+              <span data-amount className="tabular-nums">
+                {formatCents(item.perOccurrenceCents)}
+              </span>{" "}
+              {describeItemSchedule(item.schedule).toLowerCase()}
             </li>
           ))}
         </ul>
