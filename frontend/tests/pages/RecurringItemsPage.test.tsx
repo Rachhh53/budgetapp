@@ -61,6 +61,8 @@ const RENT: Item = {
   // Due on payday and paid by hand, so the paycheck before pays for it.
   next: { scheduledDate: "2026-11-01", dueDate: "2026-11-01", periodStart: "2026-10-15", early: true },
   history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 }],
+  paused: false,
+  pausedUntil: null,
 };
 const ELECTRIC: Item = {
   ...RENT,
@@ -241,6 +243,40 @@ describe("recurring items screen", () => {
 
     await userEvent.click(within(table).getByRole("button", { name: "Name" }));
     expect(names()).toEqual(byName);
+  });
+
+  it("pauses an item until a date or until it is turned back on, and resumes it", async () => {
+    let rent: Item = RENT;
+    const fetchMock = withItems([RENT], {
+      "GET /api/items": () => ({ status: 200, data: [rent] }),
+      "PUT /api/items/1/pause": (body) => {
+        rent = { ...RENT, paused: true, pausedUntil: (body as { until?: string }).until ?? null, next: null };
+        return { status: 200, data: rent, changed: true };
+      },
+      "DELETE /api/items/1/pause": () => {
+        rent = RENT;
+        return { status: 200, data: rent, changed: true };
+      },
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Pause until I turn it back on" }));
+
+    expect(await within(dialog).findByText("Paused until you turn it back on.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")).toEqual([{}]);
+    // The list says so in words.
+    expect(await rowFor("Rent")).toHaveTextContent("Paused");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Resume now" }));
+    const until = await within(dialog).findByLabelText("Start again on (optional)");
+    await userEvent.type(until, "2999-12-01");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Pause until then" }));
+
+    expect(await within(dialog).findByText("Paused. It starts again on Dec 1, 2999.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")[1]).toEqual({ until: "2999-12-01" });
+    expect(await rowFor("Rent")).toHaveTextContent("Paused until Dec 1");
   });
 
   it("filters by kind and counts each kind on its chip", async () => {

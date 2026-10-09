@@ -11,6 +11,7 @@ import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Override;
+import app.budget.server.items.ItemsRepository.Pause;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.items.ItemsRepository.Version;
 import java.time.LocalDate;
@@ -166,13 +167,19 @@ public final class ItemCalendar {
             edits.computeIfAbsent(edit.itemId(), id -> new HashMap<>()).put(edit.originalDueDate(), edit);
         }
 
+        Map<Long, List<Pause>> pauses = items.pauses();
         List<Occurrence> occurrences = new ArrayList<>();
         for (Item item : chosen) {
+            List<Pause> paused = pauses.getOrDefault(item.id(), List.of());
             List<OccurrencePlanner.Version<Terms>> versions = item.versions().stream()
                     .map(ItemCalendar::planned)
                     .toList();
             Map<LocalDate, Override> edited = edits.getOrDefault(item.id(), Map.of());
             for (Planned<Terms> planned : planner.occurrences(versions, lo, hi)) {
+                // While an item is paused, what its schedule names simply does not happen.
+                if (paused.stream().anyMatch(pause -> pause.covers(planned.scheduled()))) {
+                    continue;
+                }
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
                 occurrences.add(occurrence(item, planned, edit, assigner, payRule));
             }

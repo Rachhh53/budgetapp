@@ -19,6 +19,7 @@ import app.budget.server.items.ItemCalendar.Occurrence;
 import app.budget.server.items.ItemsRepository.Identity;
 import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Override;
+import app.budget.server.items.ItemsRepository.Pause;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.items.ItemsRepository.Version;
 import app.budget.server.ledger.Ledger;
@@ -77,6 +78,8 @@ public final class ItemsRoutes {
         routes.put("/api/items/{id}", this::update);
         routes.delete("/api/items/{id}", this::delete);
         routes.post("/api/items/{id}/replacement", this::replace);
+        routes.put("/api/items/{id}/pause", this::pause);
+        routes.delete("/api/items/{id}/pause", this::resume);
         routes.put("/api/items/{id}/occurrences/{scheduledDate}", this::editOccurrence);
     }
 
@@ -134,6 +137,8 @@ public final class ItemsRoutes {
      *                    not saved up for, or nothing more needs setting aside
      * @param next        the next occurrence still to pay; {@code null} when there is none in the coming year
      * @param history     every version, oldest first: the item's price history
+     * @param paused      true while it is paused today, so nothing it is scheduled for happens
+     * @param pausedUntil the first day it runs again; {@code null} when not paused, or paused until turned back on
      */
     public record ItemView(
             long id,
@@ -159,7 +164,12 @@ public final class ItemsRoutes {
             long perOccurrenceCents,
             long perYearCents,
             Next next,
-            List<PricePoint> history) {}
+            List<PricePoint> history,
+            boolean paused,
+            LocalDate pausedUntil) {}
+
+    /** @param until the first day it runs again; left out to pause until it is turned back on */
+    public record PauseInput(LocalDate until) {}
 
     /** @param early true when it is paid from a period before the one it falls due in */
     public record Next(LocalDate scheduledDate, LocalDate dueDate, LocalDate periodStart, boolean early) {}
@@ -246,6 +256,31 @@ public final class ItemsRoutes {
         ApiResponse.send(ctx, 201, view(created));
     }
 
+    /** Pauses an item from today, until a date or until it is resumed. */
+    private void pause(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        PauseInput input = Inputs.body(ctx, PauseInput.class);
+        LocalDate today = pay.today();
+        if (input.until() != null && (!input.until().isAfter(today) || !Inputs.inSupportedYears(input.until()))) {
+            throw ApiException.badRequest("Please choose a later day for it to start again, or leave the date empty.");
+        }
+        if (items.find(id).isEmpty()) {
+            throw ApiException.notFound();
+        }
+        items.pause(id, today, input.until());
+        ApiResponse.ok(ctx, view(id));
+    }
+
+    /** Lets a paused item run again from today. */
+    private void resume(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        if (items.find(id).isEmpty()) {
+            throw ApiException.notFound();
+        }
+        items.resume(id, pay.today());
+        ApiResponse.ok(ctx, view(id));
+    }
+
     private void delete(Context ctx) {
         long id = Inputs.id(ctx, "id");
         if (items.find(id).isEmpty()) {
@@ -307,12 +342,17 @@ public final class ItemsRoutes {
         boolean anySavedUpFor = chosen.stream()
                 .anyMatch(item -> !item.archived() && item.versionOn(pay.today()).terms().saveUpBucketId() != null);
         Map<Long, Long> saveUps = anySavedUpFor ? ledger.nextSaveUps() : Map.of();
+        Map<Long, List<Pause>> pauses = items.pauses();
         return chosen.stream()
-                .map(item -> view(item, Optional.ofNullable(next.get(item.id())), saveUps.get(item.id())))
+                .map(item -> view(
+                        item,
+                        Optional.ofNullable(next.get(item.id())),
+                        saveUps.get(item.id()),
+                        pauses.getOrDefault(item.id(), List.of()).stream().filter(pause -> pause.covers(pay.today())).findFirst()))
                 .toList();
     }
 
-    private ItemView view(Item item, Optional<Occurrence> next, Long saveUpPerPaycheckCents) {
+    private ItemView view(Item item, Optional<Occurrence> next, Long saveUpPerPaycheckCents, Optional<Pause> pause) {
         Terms terms = item.versionOn(pay.today()).terms();
         Amounts amounts = calendar.amounts(terms);
         return new ItemView(
@@ -341,7 +381,9 @@ public final class ItemsRoutes {
                 next.map(occurrence -> new Next(
                                 occurrence.scheduledDate(), occurrence.dueDate(), occurrence.periodStart(), occurrence.early()))
                         .orElse(null),
-                item.versions().stream().map(this::pricePoint).toList());
+                item.versions().stream().map(this::pricePoint).toList(),
+                pause.isPresent(),
+                pause.map(Pause::until).orElse(null));
     }
 
     /**

@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import app.budget.server.TestServer.Reply;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -254,6 +257,76 @@ class ItemsApiTest extends ApiTestBase {
             Reply reply = server.post("/api/items", body, cookie);
             assertThat(reply.status()).isEqualTo(400);
             assertThat(reply.error()).isEqualTo(message);
+        }
+    }
+
+    @Nested
+    class Pausing {
+        private List<String> carLoanDates(String from, String to) throws Exception {
+            List<String> dates = new ArrayList<>();
+            for (JsonNode period : server.get("/api/pay-periods?from=" + from + "&to=" + to, cookie).data().get("periods")) {
+                JsonNode detail = server.get("/api/pay-periods/" + period.get("start").asText(), cookie).data();
+                for (JsonNode occurrence : detail.get("occurrences")) {
+                    if (occurrence.get("name").asText().equals("Car loan")) {
+                        dates.add(occurrence.get("scheduledDate").asText());
+                    }
+                }
+            }
+            return dates;
+        }
+
+        @Test
+        void requiresASession() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            assertThat(server.put("/api/items/" + id + "/pause", "{}", null).status()).isEqualTo(401);
+            assertThat(server.delete("/api/items/" + id + "/pause", null).status()).isEqualTo(401);
+            assertThat(server.get("/api/items/" + id, cookie).data().get("paused").asBoolean()).isFalse();
+        }
+
+        @Test
+        void pausedUntilADateItSkipsThoseDatesAndPicksUpAgain() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply reply = server.put("/api/items/" + id + "/pause", "{\"until\":\"2026-12-01\"}", cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.data().get("paused").asBoolean()).isTrue();
+            assertThat(reply.data().get("pausedUntil").asText()).isEqualTo("2026-12-01");
+            // Today is Oct 1: October and November are paused, September already happened, December runs.
+            assertThat(carLoanDates("2026-09-01", "2026-12-31")).containsExactly("2026-09-05", "2026-12-05");
+            assertThat(reply.data().get("next").get("scheduledDate").asText()).isEqualTo("2026-12-05");
+        }
+
+        @Test
+        void pausedUntilTurnedBackOnItStaysPausedAndResumingKeepsWhatWasPaused() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply paused = server.put("/api/items/" + id + "/pause", "{}", cookie);
+            assertThat(paused.data().get("paused").asBoolean()).isTrue();
+            assertThat(paused.data().get("pausedUntil").isNull()).isTrue();
+            assertThat(paused.data().get("next").isNull()).isTrue();
+            assertThat(carLoanDates("2026-10-01", "2027-01-31")).isEmpty();
+
+            // Two months on it is turned back on: the months it was paused stay paused.
+            server.clock.advance(Duration.ofDays(61));
+            // The session locked itself long ago.
+            cookie = server.unlock();
+            Reply resumed = server.delete("/api/items/" + id + "/pause", cookie);
+            assertThat(resumed.status()).isEqualTo(200);
+            assertThat(resumed.data().get("paused").asBoolean()).isFalse();
+            assertThat(carLoanDates("2026-10-01", "2027-01-31")).containsExactly("2026-12-05", "2027-01-05");
+        }
+
+        @Test
+        void explainsWhatIsWrong() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply today = server.put("/api/items/" + id + "/pause", "{\"until\":\"2026-10-01\"}", cookie);
+            assertThat(today.status()).isEqualTo(400);
+            assertThat(today.error()).isEqualTo("Please choose a later day for it to start again, or leave the date empty.");
+            assertThat(server.put("/api/items/999/pause", "{}", cookie).status()).isEqualTo(404);
+            assertThat(server.delete("/api/items/999/pause", cookie).status()).isEqualTo(404);
         }
     }
 

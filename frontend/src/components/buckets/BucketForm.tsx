@@ -12,6 +12,7 @@ import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { describeItemSchedule } from "../items/labels";
+import { PauseItem } from "../items/PauseItem";
 import { BucketHistory } from "./BucketHistory";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
@@ -396,6 +397,8 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
             )}
           </FormSection>
         )}
+        {/* The bucket's own recurring amount can be stopped for a while without ending it. */}
+        {!archived && own && <PauseItem item={own} />}
 
         {/* Everything a savings goal does not need to ask, kept out of the way until wanted. */}
         <details className="rounded-lg border border-line px-4 py-1">

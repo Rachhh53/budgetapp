@@ -12,7 +12,9 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
@@ -244,6 +246,64 @@ public final class ItemsRepository {
             }
             handle.createUpdate("DELETE FROM items WHERE id = :id").bind("id", id).execute();
         });
+    }
+
+    /**
+     * A stretch during which an item does nothing.
+     *
+     * @param until the first day it runs again; {@code null} while paused until turned back on
+     */
+    public record Pause(long itemId, LocalDate from, LocalDate until) {
+
+        public boolean covers(LocalDate date) {
+            return !date.isBefore(from) && (until == null || date.isBefore(until));
+        }
+    }
+
+    /** Every pause of every item, by item. */
+    public Map<Long, List<Pause>> pauses() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT item_id, from_date, until_date FROM item_pauses ORDER BY from_date")
+                .map((rs, ctx) -> new Pause(
+                        rs.getLong("item_id"),
+                        LocalDate.parse(rs.getString("from_date")),
+                        rs.getString("until_date") == null ? null : LocalDate.parse(rs.getString("until_date"))))
+                .stream()
+                .collect(Collectors.groupingBy(Pause::itemId)));
+    }
+
+    /**
+     * Pauses an item from {@code from} until {@code until} ({@code null}: until it is resumed).
+     * Whatever pause was running or still to come is replaced; the days already paused stay paused.
+     */
+    public void pause(long itemId, LocalDate from, LocalDate until) {
+        jdbi.useTransaction(handle -> {
+            endPauses(handle, itemId, from);
+            handle.createUpdate("INSERT INTO item_pauses (item_id, from_date, until_date) VALUES (:itemId, :from, :until)")
+                    .bind("itemId", itemId)
+                    .bind("from", from.toString())
+                    .bind("until", until == null ? null : until.toString())
+                    .execute();
+        });
+    }
+
+    /** Lets an item run again from {@code on}. The days it was paused before that stay paused. */
+    public void resume(long itemId, LocalDate on) {
+        jdbi.useTransaction(handle -> endPauses(handle, itemId, on));
+    }
+
+    private static void endPauses(Handle handle, long itemId, LocalDate on) {
+        handle.createUpdate("DELETE FROM item_pauses WHERE item_id = :itemId AND from_date >= :on")
+                .bind("itemId", itemId)
+                .bind("on", on.toString())
+                .execute();
+        handle.createUpdate("""
+                        UPDATE item_pauses SET until_date = :on
+                        WHERE item_id = :itemId AND from_date < :on AND (until_date IS NULL OR until_date > :on)
+                        """)
+                .bind("itemId", itemId)
+                .bind("on", on.toString())
+                .execute();
     }
 
     /** Single-occurrence edits whose scheduled date falls within {@code from}–{@code to}. */

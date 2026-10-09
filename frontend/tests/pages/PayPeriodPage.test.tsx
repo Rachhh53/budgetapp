@@ -179,6 +179,8 @@ const ELECTRIC_ITEM: Item = {
   perYearCents: 168000,
   next: { scheduledDate: "2026-10-16", dueDate: "2026-10-16", periodStart: "2026-10-01", early: true },
   history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000 }],
+  paused: false,
+  pausedUntil: null,
 };
 
 const OCTOBER: PeriodDetail = {

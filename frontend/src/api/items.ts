@@ -95,6 +95,10 @@ export interface Item extends ItemTerms {
   next: NextOccurrence | null;
   /** Every version, oldest first. */
   history: PricePoint[];
+  /** True while it is paused today: nothing it is scheduled for happens. */
+  paused: boolean;
+  /** The first day it runs again; `null` when not paused, or paused until turned back on. */
+  pausedUntil: string | null;
 }
 
 export interface ItemInput extends ItemTerms {
@@ -148,6 +152,24 @@ export function useReplaceItem(id: number | undefined) {
   const refresh = useRefreshItems();
   return useMutation({
     mutationFn: (input: ItemInput) => api.post<Item>(`/api/items/${id}/replacement`, input),
+    onSuccess: refresh,
+  });
+}
+
+/** Pauses the item with `id` from today: until `until`, or until it is resumed when that is `null`. */
+export function usePauseItem(id: number) {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: (until: string | null) => api.put<Item>(`/api/items/${id}/pause`, until === null ? {} : { until }),
+    onSuccess: refresh,
+  });
+}
+
+/** Lets the paused item with `id` run again from today. */
+export function useResumeItem(id: number) {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: () => api.delete<Item>(`/api/items/${id}/pause`),
     onSuccess: refresh,
   });
 }

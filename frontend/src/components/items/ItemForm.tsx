@@ -22,6 +22,7 @@ import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { firstUnusedColor } from "../ColorPicker";
 import { BucketForm } from "../buckets/BucketForm";
+import { PauseItem } from "./PauseItem";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { FormSection } from "../FormSection";
@@ -609,6 +610,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
             <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
           </div>
         </FormSection>
+
+        {item && !item.archived && <PauseItem item={item} />}
 
         {item && (
           <FormSection title="About this item">

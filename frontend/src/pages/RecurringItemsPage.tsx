@@ -361,6 +361,11 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
       <span role="cell" className="min-w-0">
         <span className="block max-w-full truncate font-semibold">{item.name}</span>
         {item.archived && <span className="ml-2 rounded-md border border-line px-1.5 py-0.5 text-xs font-semibold">Archived</span>}
+        {item.paused && !item.archived && (
+          <span className="rounded-md border border-line px-1.5 py-0.5 text-xs font-semibold">
+            {item.pausedUntil ? `Paused until ${formatDay(item.pausedUntil)}` : "Paused"}
+          </span>
+        )}
       </span>
       <Cell className="text-sm md:text-base">{describeKind(item)}</Cell>
       <Cell className="text-sm md:text-base">{describeItemSchedule(item.schedule)}</Cell>

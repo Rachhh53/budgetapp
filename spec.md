@@ -527,6 +527,8 @@ A bucket can never be overdrawn; an account can (decided 2026-10-09 with Rachel)
 - **Removing a balance** is refused when it would leave the buckets holding more than the account.
 - Not yet built: the same "Comes out of" choice on **recurring** items (bills, budgets, transfers out, card payments), which needs a new column on item versions.
 
+Pausing a recurring item (decided 2026-10-09; Rachel: "sometimes I pause my emergency fund transfers for a couple months and then pick them back up again"): any recurring item can be paused from today, until a date or until it is turned back on. While paused, nothing its schedule names happens (no occurrence is listed or counted, and nothing is set aside); it then carries on with its usual schedule. Resuming never brings back the dates that were paused, and an item can be paused again later: each pause is a row in `item_pauses` (migration `V9`). `PUT /api/items/{id}/pause` `{ until? }`, `DELETE /api/items/{id}/pause`; items carry `paused` and `pausedUntil`. The edit form has a **Pause** section (also on a bucket's own recurring amount) and the Recurring items list shows "Paused" or "Paused until {date}".
+
 ### Carried forward into later phases
 
 | Feature | Notes |
