@@ -407,8 +407,16 @@ public final class Ledger {
         // back-fills it. Before that day a transfer still happens, into no bucket; a bucket
         // move has nothing to do at all, so it is not listed.
         Map<Long, LocalDate> openedOn = open.stream().collect(Collectors.toMap(Bucket::id, Bucket::openedOn));
+        // A transfer into a bucket also has to arrive in the bucket's account. The account only
+        // adds up from the first balance entered for it, so the bucket takes the transfer from that
+        // day too: otherwise a backdated transfer would fill the bucket with money the account's
+        // balance never shows, and the buckets would hold more than the account does.
+        Map<Long, LocalDate> firstBalance = new HashMap<>();
+        entered.forEach((accountId, forAccount) -> firstBalance.put(accountId, forAccount.getFirst().date()));
         List<Occurrence> occurrences = expansion.occurrences().stream()
-                .map(occurrence -> reachesItsBucket(occurrence, openedOn) ? occurrence : occurrence.withoutBucket())
+                .map(occurrence -> reachesItsBucket(occurrence, openedOn) && arrivesWithItsAccount(occurrence, firstBalance)
+                        ? occurrence
+                        : occurrence.withoutBucket())
                 .filter(occurrence -> occurrence.kind() != ItemKind.BUCKET_MOVE || occurrence.bucketId() != null)
                 .toList();
         List<Carried> carried = new ArrayList<>();
@@ -502,6 +510,19 @@ public final class Ledger {
         }
         LocalDate opened = openedOn.get(occurrence.bucketId());
         return opened != null && !occurrence.payBy().isBefore(opened);
+    }
+
+    /**
+     * True unless this is a transfer into a bucket dated before its account had any balance to
+     * add it to. Money set aside inside an account (a bucket move) moves nothing between
+     * accounts, so it is never held back by this.
+     */
+    private static boolean arrivesWithItsAccount(Occurrence occurrence, Map<Long, LocalDate> firstBalance) {
+        if (occurrence.bucketId() == null || occurrence.payToAccountId() == null) {
+            return true;
+        }
+        LocalDate first = firstBalance.get(occurrence.payToAccountId());
+        return first != null && !occurrence.payBy().isBefore(first);
     }
 
     /**

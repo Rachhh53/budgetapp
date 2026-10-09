@@ -509,6 +509,8 @@ Account tabs on the pay period screen (decided 2026-10-09): every account that i
 
 Building a balance from an earlier day (decided 2026-10-09; Rachel: "I should always be able to build it"): the bucket's recurring amount has a **Starting** date (today by default; any day, and an earlier one fills in what it would have set aside since, moving the bucket's counts-from day back with it). The amount typed for a bucket ("Already set aside" / "In this bucket") has an **As of** date, today by default. Account balances already take a date on Update balance. Archive is a button beside Delete in the bucket form ("Archive this bucket" / "Bring this bucket back"), no longer a tick among the fields.
 
+A bucket never holds what its account was not given (decided 2026-10-09; Rachel: "you must keep the total balance of the account in line with the buckets"): a transfer into a bucket counts in the bucket only from the first balance entered for the account it arrives in, the same day the account itself starts counting it; with no balance entered it does not count in the bucket at all. To build both from an earlier day, enter a balance for the account dated that day. Moves between buckets inside one account are unaffected. Migration `V8` repairs items whose kind was changed to a transfer before earlier versions followed the change: versions that named no destination account take the accounts and buckets of the item's newest version, keeping their own dates, amounts and schedules.
+
 ### Carried forward into later phases
 
 | Feature | Notes |
