@@ -411,6 +411,19 @@ describe("pay period screen", () => {
     );
   });
 
+  it("says which day an account counts from when its balance was entered part-way through", async () => {
+    withPeriod({
+      ...OCTOBER,
+      accounts: [{ ...OCTOBER.accounts[0]!, startingOn: "2026-10-09", inCents: 0 }, OCTOBER.accounts[1]!],
+    });
+    renderApp();
+
+    // What moved before that day is already in the balance that was typed in.
+    const accounts = await panel("Accounts & buckets");
+    expect(within(accounts).getByText("Coming in since Oct 9").closest("div")).toHaveTextContent("+$0.00");
+    expect(within(accounts).getByText("Going out since Oct 9")).toBeInTheDocument();
+  });
+
   it("shows what is set aside in buckets and what that leaves available", async () => {
     const withBuckets: PeriodDetail = {
       ...OCTOBER,

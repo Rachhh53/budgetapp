@@ -190,6 +190,7 @@ export function PayPeriodPage() {
             buckets={buckets.data}
             bucketPeriods={detail.buckets}
             items={items.data}
+            periodStart={detail.start}
             periodEnd={detail.end}
             primaryAccountId={detail.primaryAccountId}
           />
@@ -922,6 +923,7 @@ function AccountsPanel({
   buckets,
   bucketPeriods,
   items,
+  periodStart,
   periodEnd,
   primaryAccountId,
 }: {
@@ -930,6 +932,7 @@ function AccountsPanel({
   buckets: readonly Bucket[];
   bucketPeriods: readonly BucketPeriod[];
   items: readonly Item[];
+  periodStart: string;
   periodEnd: string;
   primaryAccountId: number | null;
 }) {
@@ -957,6 +960,8 @@ function AccountsPanel({
 
   const owed = OWED.includes(shown.account.type);
   const { balance } = shown;
+  // Only when it differs from the period itself; otherwise the lines mean the whole period, as they read.
+  const since = balance.entered && balance.startingOn > periodStart ? ` since ${formatDay(balance.startingOn)}` : "";
   const held = bucketPeriods.flatMap((period) => {
     const bucket = buckets.find((candidate) => candidate.id === period.bucketId);
     return bucket && period.accountId === shown.account.id ? [{ bucket, period }] : [];
@@ -987,8 +992,9 @@ function AccountsPanel({
           label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
           cents={balance.startingCents}
         />
-        <AccountLine label={owed ? "Charged" : "Coming in"} cents={balance.inCents} sign="+" />
-        <AccountLine label={owed ? "Paid off" : "Going out"} cents={balance.outCents} sign="−" />
+        {/* A balance entered part-way through already holds what moved before it, so only later days are counted: say so. */}
+        <AccountLine label={`${owed ? "Charged" : "Coming in"}${since}`} cents={balance.inCents} sign="+" />
+        <AccountLine label={`${owed ? "Paid off" : "Going out"}${since}`} cents={balance.outCents} sign="−" />
         <AccountLine
           label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
           cents={balance.lowestCents}
