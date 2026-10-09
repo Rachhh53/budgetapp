@@ -13,7 +13,8 @@ import java.time.LocalDate;
 /**
  * Pay periods with their balances: {@code /api/pay-periods} lists them with each one's
  * projected ending, and {@code /api/pay-periods/{start}} is everything in one of them.
- * {@code /api/accounts/{id}/projection} follows one account through them.
+ * {@code /api/accounts/{id}/projection} follows one account through them, and
+ * {@code /api/account-balances} is what every account holds today.
  */
 public final class LedgerRoutes {
 
@@ -31,6 +32,7 @@ public final class LedgerRoutes {
         routes.get("/api/pay-periods", this::list);
         routes.get("/api/pay-periods/{start}", this::one);
         routes.get("/api/accounts/{id}/projection", this::accountProjection);
+        routes.get("/api/account-balances", ctx -> ApiResponse.ok(ctx, ledger.balancesOn(calendar.today())));
     }
 
     /** One account at the end of each pay period, from the current one through the horizon: its chart. */

@@ -63,8 +63,32 @@ describe("accounts screen", () => {
     expect(within(cash).getByRole("link", { name: /Rainy Day/ })).toHaveTextContent("High-yield · Sunrise Bank");
 
     const cards = screen.getByRole("region", { name: "Credit cards" });
-    expect(within(cards).getByRole("link", { name: /Travel Card/ })).toHaveTextContent("No balance entered · built from $0");
+    expect(within(cards).getByRole("link", { name: /Travel Card/ })).toHaveTextContent("No balance yet");
     expect(screen.queryByRole("region", { name: "Loans" })).not.toBeInTheDocument();
+  });
+
+  it("shows what each account holds today once that is known", async () => {
+    fakeBackend({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, CARD] }),
+      "GET /api/account-balances": () => ({
+        status: 200,
+        data: [
+          { accountId: CHECKING.id, date: "2026-10-09", balanceCents: 309610, availableCents: 289610 },
+          { accountId: SAVINGS.id, date: "2026-10-09", balanceCents: 887000, availableCents: 887000 },
+          { accountId: CARD.id, date: "2026-10-09", balanceCents: 0, availableCents: 0 },
+        ],
+      }),
+    });
+    renderApp("/accounts");
+
+    const cash = await screen.findByRole("region", { name: "Checking & savings" });
+    const checking = within(cash).getByRole("link", { name: /Everyday Checking/ });
+    // Not the $1,705.10 typed in a week ago: that plus everything since.
+    await waitFor(() => expect(checking).toHaveTextContent("$3,096.10"));
+    expect(checking).toHaveTextContent("today");
+    expect(within(cash).getByText("$11,966.10")).toBeInTheDocument();
+    // No balance was entered for the card; it is added up from nothing like any other account.
+    expect(within(screen.getByRole("region", { name: "Credit cards" })).getByRole("link", { name: /Travel Card/ })).toHaveTextContent("$0.00");
   });
 
   it("tucks archived accounts away from the groups", async () => {

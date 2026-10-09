@@ -128,6 +128,25 @@ export interface OccurrenceEdit {
   confirmationCode?: string;
 }
 
+/** What one account holds (or owes) at the end of today, and what of that is outside its buckets. */
+export interface AccountBalance {
+  accountId: number;
+  date: string;
+  balanceCents: number;
+  availableCents: number;
+}
+
+/**
+ * What every account holds today: the last balance entered plus everything since. It moves
+ * with anything that moves a pay period, so it lives under the same key.
+ */
+export function useAccountBalances() {
+  return useQuery({
+    queryKey: [...PAY_KEY, "account-balances"],
+    queryFn: () => api.get<AccountBalance[]>("/api/account-balances"),
+  });
+}
+
 /** Everything in the pay period that opens on `start`. */
 export function usePeriod(start: string | undefined) {
   return useQuery({

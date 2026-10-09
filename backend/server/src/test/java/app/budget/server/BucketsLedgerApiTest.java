@@ -878,6 +878,32 @@ class BucketsLedgerApiTest extends ApiTestBase {
     }
 
     @Nested
+    class AccountBalancesToday {
+        @Test
+        void requiresASession() throws Exception {
+            assertThat(server.get("/api/account-balances", null).status()).isEqualTo(401);
+        }
+
+        @Test
+        void addsUpEverythingSinceTheBalanceThatWasEntered() throws Exception {
+            bucket(checking, "Holiday gifts", 15000);
+
+            JsonNode balances = server.get("/api/account-balances", cookie).data();
+
+            // Today is Oct 1: the balance entered that morning plus the paycheck that lands that day.
+            JsonNode forChecking = StreamSupport.stream(balances.spliterator(), false)
+                    .filter(balance -> balance.get("accountId").asLong() == checking)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(forChecking.get("date").asText()).isEqualTo("2026-10-01");
+            assertThat(forChecking.get("balanceCents").asLong()).isEqualTo(121438 + 248620);
+            assertThat(forChecking.get("availableCents").asLong()).isEqualTo(121438 + 248620 - 15000);
+            // The card has no balance entered and nothing has touched it: it stands at nothing.
+            assertThat(balances.findValues("accountId")).extracting(JsonNode::asLong).contains(savings, visa);
+        }
+    }
+
+    @Nested
     class AccountProjection {
         @Test
         void requiresASession() throws Exception {

@@ -258,6 +258,25 @@ public final class Ledger {
                 workings.bucketMoves().stream().filter(move -> within(move.date(), period.start(), period.end())).toList()));
     }
 
+    /** What one account holds (or owes) at the end of a day, and what of that is outside its buckets. */
+    public record AccountBalance(long accountId, LocalDate date, long balanceCents, long availableCents) {}
+
+    /**
+     * Every account at the end of {@code day}: the balance last entered with everything since
+     * added up, the same figure its pay period works from. An archived account nobody entered
+     * a balance for is left out, as it is everywhere else.
+     */
+    public List<AccountBalance> balancesOn(LocalDate day) {
+        Workings workings = workings(List.of(new PayPeriod(day, day, day)));
+        List<AccountBalance> held = new ArrayList<>();
+        for (Account account : accounts.all()) {
+            for (AccountPeriod figures : accountPeriods(workings, account)) {
+                held.add(new AccountBalance(account.id(), day, figures.endingCents(), figures.availableCents()));
+            }
+        }
+        return held;
+    }
+
     /** What every open bucket holds at the end of {@code day}, by bucket id. */
     public Map<Long, Long> bucketBalances(LocalDate day) {
         Map<Long, Long> held = new HashMap<>();

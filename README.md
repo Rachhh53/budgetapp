@@ -106,6 +106,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
 | GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel?, lowBalanceThresholdCents? }` (the threshold is for checking and savings) |
 | GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances, interest settings and rate history; change; delete (refused while income, an item or an entry uses it) |
+| GET | `/api/account-balances` | what every account holds at the end of today (`balanceCents`) and what of it is outside buckets (`availableCents`): the last balance entered plus everything since, or built up from nothing when none was entered |
 | GET | `/api/accounts/{id}/projection` | the balance, and what is available after buckets, at each pay period's end; optional `from`, `to` |
 | PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
 | POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |

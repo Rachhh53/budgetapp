@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type BalanceEntry, holdsCash, useAccount, useAccountProjection, useAccounts, useDeleteBalance } from "../api/accounts";
+import { useAccountBalances } from "../api/periods";
 import { useBuckets } from "../api/buckets";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { BalanceForm } from "../components/accounts/BalanceForm";
@@ -29,6 +30,7 @@ export function AccountDetailPage() {
   const detail = useAccount(id);
   const accounts = useAccounts();
   const projection = useAccountProjection(id);
+  const balancesToday = useAccountBalances();
   const buckets = useBuckets();
   const [editing, setEditing] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -54,6 +56,7 @@ export function AccountDetailPage() {
 
   const { account, balances } = detail.data;
   const latest = account.latestBalance;
+  const today = balancesToday.data?.find((balance) => balance.accountId === account.id);
   const cash = holdsCash(account.type);
   const points = projection.data ?? [];
   const thisPeriod = points[0];
@@ -94,16 +97,21 @@ export function AccountDetailPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <p className="text-muted">Balance</p>
-              {latest ? (
+              {today ? (
+                <>
+                  <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(today.balanceCents)}</p>
+                  <p className="text-muted">
+                    today
+                    {latest ? ` · you entered ${formatCents(latest.amountCents)} on ${formatDate(latest.date)}` : " · no balance entered yet"}
+                  </p>
+                </>
+              ) : latest ? (
                 <>
                   <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(latest.amountCents)}</p>
                   <p className="text-muted">entered by you {formatDate(latest.date)}</p>
                 </>
               ) : (
-                <>
-                  <p className="mt-1 font-medium">No balance entered yet.</p>
-                  <p className="text-muted">Until one is, this account is added up from $0 using everything set up for it.</p>
-                </>
+                <p className="mt-1 font-medium">No balance entered yet.</p>
               )}
             </div>
             {thisPeriod && (

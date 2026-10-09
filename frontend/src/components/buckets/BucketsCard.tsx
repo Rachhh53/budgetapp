@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
 import { type Item, useItems } from "../../api/items";
+import { useAccountBalances } from "../../api/periods";
 import { formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
@@ -29,8 +30,11 @@ export function BucketsCard({ account }: { account: Account }) {
   const archived = mine.filter((bucket) => bucket.archived);
   const setAside = open.reduce((sum, bucket) => sum + bucket.balanceCents, 0);
   const editing = mine.find((bucket) => bucket.id === editingId);
-  // What the entered balance has outside every bucket: with the buckets, it always adds up to the balance.
-  const notInABucket = account.latestBalance ? account.latestBalance.amountCents - setAside : null;
+  // What the account holds today, the same day the buckets are counted to; until that is known, the balance last entered.
+  const today = useAccountBalances().data?.find((balance) => balance.accountId === account.id);
+  const balanceCents = today?.balanceCents ?? account.latestBalance?.amountCents ?? null;
+  // What that balance has outside every bucket: with the buckets, it always adds up to the balance.
+  const notInABucket = balanceCents === null ? null : balanceCents - setAside;
 
   return (
     <Card title="Buckets">
@@ -61,7 +65,7 @@ export function BucketsCard({ account }: { account: Account }) {
           <dl className="mt-2 space-y-1 border-t border-line pt-3">
             <Total label="In buckets" cents={setAside} />
             {notInABucket !== null && <Total label="Not in a bucket" cents={notInABucket} />}
-            {account.latestBalance && <Total label="Balance you entered" cents={account.latestBalance.amountCents} strong />}
+            {balanceCents !== null && <Total label={today ? "Balance today" : "Balance you entered"} cents={balanceCents} strong />}
           </dl>
           {/* It can still happen after the fact: the balance drops, or a schedule keeps filling a bucket. */}
           {notInABucket !== null && notInABucket > 0 && <PutTheRestIn buckets={open} cents={notInABucket} />}

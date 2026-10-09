@@ -513,6 +513,8 @@ A bucket never holds what its account was not given (decided 2026-10-09; Rachel:
 
 An account with no balance entered is built from $0 (decided 2026-10-09; Rachel: "that's how most accounts work"): it starts at nothing on the first day money moves in or out of it and adds up everything set up since — paychecks, recurring items, transfers, one-off entries, interest — so it shows in every pay period, on its chart and in its buckets (which take every transfer into them). `builtFromZero` on a period's account figures marks it; the pay period screen shows it like any other account, with no label (Rachel, 2026-10-09: "that is how accounts work, so it's assumed"); the Accounts screens say no balance is entered. Entering a balance takes over from that day as before. Archived accounts are not built up, and a built-up balance is never used to refuse setting money aside in a bucket. This supersedes "Only an account with no balance at all has a tab that says so" above.
 
+Accounts show today's balance (decided 2026-10-09; Rachel: "that accounts list should show the current balance"): the Accounts list, its group totals, the account page headline and the Buckets card's "Balance today" use `GET /api/account-balances` — the last balance entered plus everything since, at the end of today — instead of the figure last typed in. The account page still says what was entered and when beside it. Until today's figure has loaded, the entered balance shows as before.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

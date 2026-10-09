@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
+import { type AccountBalance, useAccountBalances } from "../api/periods";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { ACCOUNT_GROUPS, accountSubtitle } from "../components/accounts/labels";
 import { Amount } from "../components/Amount";
@@ -78,7 +79,7 @@ export function AccountsPage() {
           </summary>
           <ul className="mt-2 divide-y divide-line">
             {archived.map((account) => (
-              <AccountRow key={account.id} account={account} onEdit={setEditingId} />
+              <AccountRow key={account.id} account={account} today={undefined} onEdit={setEditingId} />
             ))}
           </ul>
         </details>
@@ -102,8 +103,11 @@ function AccountGroup({
   wide: boolean;
 }) {
   const headingId = `group-${title.replace(/\W+/g, "-").toLowerCase()}`;
-  // Only accounts with a balance count; adding in cents keeps the total exact.
-  const total = accounts.reduce((sum, account) => sum + (account.latestBalance?.amountCents ?? 0), 0);
+  const today = useAccountBalances().data;
+  // What each account holds today; until that is known, the balance last entered for it.
+  const held = (account: Account) => today?.find((balance) => balance.accountId === account.id);
+  // Adding in cents keeps the total exact.
+  const total = accounts.reduce((sum, account) => sum + (held(account)?.balanceCents ?? account.latestBalance?.amountCents ?? 0), 0);
   return (
     <section aria-labelledby={headingId} className={`rounded-card border border-line bg-surface p-5 md:p-6 ${wide ? "lg:col-span-2" : ""}`}>
       <div className="flex items-baseline justify-between gap-3 border-b border-line pb-3">
@@ -114,14 +118,14 @@ function AccountGroup({
       </div>
       <ul className="divide-y divide-line">
         {accounts.map((account) => (
-          <AccountRow key={account.id} account={account} onEdit={onEdit} />
+          <AccountRow key={account.id} account={account} today={held(account)} onEdit={onEdit} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AccountRow({ account, onEdit }: { account: Account; onEdit: (id: number) => void }) {
+function AccountRow({ account, today, onEdit }: { account: Account; today: AccountBalance | undefined; onEdit: (id: number) => void }) {
   return (
     <li className="flex items-center gap-2">
       <Link to={`/accounts/${account.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
@@ -131,13 +135,18 @@ function AccountRow({ account, onEdit }: { account: Account; onEdit: (id: number
           <span className="block truncate text-sm text-muted">{accountSubtitle(account)}</span>
         </span>
         <span className="shrink-0 text-right">
-          {account.latestBalance ? (
+          {today ? (
+            <>
+              <Amount cents={today.balanceCents} className="font-semibold" />
+              <span className="block pr-2 text-sm text-muted">today</span>
+            </>
+          ) : account.latestBalance ? (
             <>
               <Amount cents={account.latestBalance.amountCents} className="font-semibold" />
               <span className="block pr-2 text-sm text-muted">entered {formatDay(account.latestBalance.date)}</span>
             </>
           ) : (
-            <span className="text-sm text-muted">No balance entered · built from $0</span>
+            <span className="text-sm text-muted">No balance yet</span>
           )}
         </span>
       </Link>
