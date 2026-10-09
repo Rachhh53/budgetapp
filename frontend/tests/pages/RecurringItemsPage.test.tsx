@@ -315,13 +315,10 @@ describe("recurring items screen", () => {
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "It's an estimate" }));
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Day of the month" }), "16th");
     await userEvent.click(within(dialog).getByRole("radio", { name: "One period early" }));
-    // The form is laid out as named groups, and says the whole item back in a sentence before it is saved.
+    // The form is laid out as named groups.
     for (const section of ["Amount", "What it is", "Where it's paid from", "Schedule", "Saving up", "Tags and notes"]) {
       expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
     }
-    expect(within(dialog).getByTestId("item-summary")).toHaveTextContent(
-      "$140.00 from Everyday Checking, monthly on the 16th, starting Jan 1.",
-    );
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

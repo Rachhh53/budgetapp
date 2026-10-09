@@ -12,12 +12,11 @@ import {
   type ItemFrequency,
   type ItemInput,
   type ItemKind,
-  type ItemSchedule,
   type Placement,
   useDeleteItem,
   useSaveItem,
 } from "../../api/items";
-import { formatDate, formatDay, todayIso } from "../../lib/dates";
+import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { firstUnusedColor } from "../ColorPicker";
@@ -29,7 +28,7 @@ import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { Segmented } from "../Segmented";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
-import { describeItemSchedule, ITEM_FREQUENCY_LABELS, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
+import { ITEM_FREQUENCY_LABELS, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
 
 const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind], icon: KIND_ICONS[kind] }));
 
@@ -232,28 +231,6 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   };
 
   const failure = problem ?? save.error?.message;
-
-  // The whole item in one sentence, so a slip is seen before it is saved rather than after.
-  const summaryCents = parseDollars(amount);
-  const nameOf = (accountId: string | null) => accounts.find((account) => String(account.id) === accountId)?.name;
-  const intoBucket = openBuckets.find((bucket) => String(bucket.id) === bucketId)?.name;
-  const summaryWhere = isBucketMove
-    ? intoBucket && ` into ${intoBucket}`
-    : nameOf(payFrom) && ` from ${nameOf(payFrom)}${movesMoney && nameOf(payTo) ? ` to ${nameOf(payTo)}` : ""}`;
-  const endsOn = schedule?.endDate ?? null;
-  const summaryWhen =
-    startsOn === ""
-      ? ITEM_FREQUENCY_LABELS[frequency].toLowerCase()
-      : scheduleInWords({
-          frequency,
-          interval: frequency === "every_n_months" ? monthsApart : null,
-          day1,
-          day2,
-          month,
-          startDate: startsOn,
-          endDate: endsOn,
-          weekendRule: "none",
-        });
 
   return (
     <>
@@ -601,21 +578,6 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           </FormSection>
         )}
 
-        {summaryCents !== null && summaryCents >= 0 && (
-          <div className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
-            <p className="text-xs font-bold tracking-wider text-muted uppercase">In short</p>
-            <p data-testid="item-summary">
-              <span data-amount className="font-semibold tabular-nums">
-                {formatCents(summaryCents)}
-              </span>
-              {amountMode === "annual" && " a year"}
-              {summaryWhere}, {summaryWhen}
-              {frequency !== "one_time" && startsOn !== "" && `, starting ${formatDay(startsOn)}`}
-              {endsOn !== null && `, until ${formatDay(endsOn)}`}.
-            </p>
-          </div>
-        )}
-
         {failure && (
           <p role="alert" className="text-danger">
             {failure}
@@ -642,17 +604,6 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
       )}
     </>
   );
-}
-
-/** A schedule as it reads in a sentence: "monthly on the 16th", "every week on Fridays", "one time on Oct 21". */
-function scheduleInWords(schedule: ItemSchedule): string {
-  if (schedule.frequency === "one_time") {
-    return `one time on ${formatDay(schedule.startDate)}`;
-  }
-  // A weekday or a month's date takes "on"; a day of the month takes "on the".
-  const on = ["weekly", "biweekly", "yearly"].includes(schedule.frequency) ? " on " : " on the ";
-  const [how = "", when] = describeItemSchedule(schedule).split(" · ");
-  return how.toLowerCase() + (when === undefined ? "" : on + when);
 }
 
 /** What the item has been set to, version by version. "Amount", not "price": a budget or a bucket move has no price. */
