@@ -951,10 +951,11 @@ class BucketsLedgerApiTest extends ApiTestBase {
             created("/api/entries",
                     "{\"kind\":\"money_out\",\"date\":\"2026-10-03\",\"amountCents\":4500,\"description\":\"Vet\",\"accountId\":%d}".formatted(checking));
 
-            JsonNode lines = server.get("/api/accounts/" + checking + "/transactions?from=2026-09-01&to=2026-10-14", cookie).data();
+            JsonNode lines = server.get("/api/accounts/" + checking + "/transactions?from=2026-09-14&to=2026-10-14", cookie).data();
 
-            // Nothing from September: the account only counts from the balance entered on Oct 1.
-            assertThat(lines.findValuesAsText("date")).containsExactly("2026-10-03", "2026-10-02", "2026-10-01", "2026-10-01");
+            // The Sep 15 paycheck is listed although the balance was only entered on Oct 1: it still happened.
+            assertThat(lines.findValuesAsText("date"))
+                    .containsExactly("2026-10-03", "2026-10-02", "2026-10-01", "2026-10-01", "2026-09-15");
             assertThat(lines.get(0).get("label").asText()).isEqualTo("Vet");
             assertThat(lines.get(0).get("kind").asText()).isEqualTo("money_out");
             assertThat(lines.get(0).get("amountCents").asLong()).isEqualTo(-4500);

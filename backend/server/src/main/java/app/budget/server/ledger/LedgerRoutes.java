@@ -37,10 +37,10 @@ public final class LedgerRoutes {
         routes.get("/api/accounts/{id}/transactions", this::accountTransactions);
     }
 
-    /** What moved one account within {@code from}–{@code to}; by default the last three months through the next one. */
+    /** What moved one account within {@code from}–{@code to}; by default this year so far and the month ahead. */
     private void accountTransactions(Context ctx) {
         Account account = accounts.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound);
-        LocalDate from = Inputs.dateParam(ctx, "from", calendar.today().minusMonths(3));
+        LocalDate from = Inputs.dateParam(ctx, "from", calendar.today().withDayOfYear(1));
         LocalDate to = Inputs.dateParam(ctx, "to", calendar.today().plusMonths(1));
         Inputs.requireSensibleRange(from, to);
         ApiResponse.ok(ctx, ledger.transactions(account, from, to));

@@ -89,6 +89,37 @@ describe("account detail screen", () => {
     expect(rows.getByText("Balance you entered").closest("li")).toHaveTextContent(/^Balance you enteredOct 2, 2026 · Balance\$1,705\.10$/);
   });
 
+  it("shows a year of transactions a page at a time", async () => {
+    const paychecks = Array.from({ length: 19 }, (_, index) => ({
+      date: `2026-${String(10 - Math.floor(index / 2)).padStart(2, "0")}-${index % 2 === 0 ? "15" : "01"}`,
+      label: `Paycheck ${19 - index}`,
+      kind: "paycheck",
+      amountCents: 248620,
+      unpaid: false,
+    }));
+    fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+      "GET /api/accounts/1/transactions": () => ({ status: 200, data: paychecks }),
+    });
+    renderApp("/accounts/1");
+
+    const card = await screen.findByRole("region", { name: "Transactions" });
+    expect(await within(card).findByText("1–8 of 19, newest first · page 1 of 3")).toBeInTheDocument();
+    expect(within(card).getAllByRole("listitem")).toHaveLength(8);
+    expect(within(card).getByRole("button", { name: "Newer" })).toBeDisabled();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Older" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Older" }));
+    expect(within(card).getByText("17–19 of 19, newest first · page 3 of 3")).toBeInTheDocument();
+    expect(within(card).getByText("Paycheck 1")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Older" })).toBeDisabled();
+
+    // Other dates start again from the newest.
+    await userEvent.clear(within(card).getByLabelText("From"));
+    await userEvent.type(within(card).getByLabelText("From"), "2026-06-01");
+    expect(await within(card).findByText(/page 1 of 3/)).toBeInTheDocument();
+  });
+
   it("says so kindly when nothing moved between the dates, and when the dates are backwards", async () => {
     fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }) });
     renderApp("/accounts/1");

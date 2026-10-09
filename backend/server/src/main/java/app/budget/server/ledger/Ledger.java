@@ -292,24 +292,19 @@ public final class Ledger {
     /**
      * Everything that moved {@code account} within {@code from}–{@code to}, newest first:
      * paychecks, recurring items, one-off entries, transfers arriving, estimated interest, and
-     * the balances entered along the way. Nothing dated before the account starts counting
-     * (its first entered balance) is listed, because none of it is in the balance.
+     * the balances entered along the way. What is dated before the first balance entered is
+     * listed too: it happened, even though that balance already takes it into account.
      */
     public List<Transaction> transactions(Account account, LocalDate from, LocalDate to) {
         Workings workings = workings(List.of(new PayPeriod(from, to, from)));
-        LocalDate countedFrom = workings.countedFrom().get(account.id());
-        if (countedFrom == null) {
-            return List.of();
-        }
-        LocalDate since = countedFrom.isAfter(from) ? countedFrom : from;
         List<Transaction> found = new ArrayList<>();
         for (Transaction line : workings.lines().getOrDefault(account.id(), List.of())) {
-            if (within(line.date(), since, to)) {
+            if (within(line.date(), from, to)) {
                 found.add(line);
             }
         }
         for (InterestCredit credit : workings.projection(account.id()).interest()) {
-            if (within(credit.date(), since, to)) {
+            if (within(credit.date(), from, to)) {
                 found.add(new Transaction(credit.date(), INTEREST_LABEL, "interest", credit.amount().cents(), false));
             }
         }
@@ -394,12 +389,11 @@ public final class Ledger {
             Map<Long, Projection> projections,
             Set<Long> builtFromZero,
             Map<Long, List<Transaction>> lines,
-            Map<Long, LocalDate> countedFrom,
             Map<Long, List<PeriodBuckets>> buckets,
             List<Move> bucketMoves) {
 
         static final Workings NONE =
-                new Workings(List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), Map.of(), Map.of(), List.of());
+                new Workings(List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), Map.of(), List.of());
 
         Projection projection(long accountId) {
             return projections.getOrDefault(accountId, Projection.NONE);
@@ -567,7 +561,6 @@ public final class Ledger {
         Map<Long, Settings> interestSettings = interest.allSettings();
         Map<Long, List<Rate>> apys = interest.allRates(RateKind.APY);
         Map<Long, Projection> projections = new HashMap<>();
-        Map<Long, LocalDate> countedFrom = new HashMap<>(firstBalance);
         entered.forEach((accountId, forAccount) -> {
             List<BalanceAnchor> anchors = forAccount.stream()
                     .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents())))
@@ -580,7 +573,6 @@ public final class Ledger {
         for (long accountId : builtFromZero) {
             List<Movement> counted = movements.getOrDefault(accountId, List.of());
             LocalDate since = counted.stream().map(Movement::date).min(Comparator.naturalOrder()).orElse(first);
-            countedFrom.put(accountId, since);
             InterestTerms terms = cash.contains(accountId)
                     ? interestTerms(interestSettings.get(accountId), apys.get(accountId))
                     : null;
@@ -627,7 +619,7 @@ public final class Ledger {
             }
         });
         bucketMoves.sort(Comparator.comparing(Move::date));
-        return new Workings(listed, carried, oneOffs, projections, builtFromZero, lines, countedFrom, bucketsByAccount, bucketMoves);
+        return new Workings(listed, carried, oneOffs, projections, builtFromZero, lines, bucketsByAccount, bucketMoves);
     }
 
     /** True unless the occurrence names a bucket that is archived, or was not open yet on the day it counts. */
