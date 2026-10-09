@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { Link } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
@@ -17,6 +18,23 @@ import { formatCents } from "../lib/money";
 type FormState = { item?: Item } | null;
 
 type Filter = "all" | ItemKind | "archived";
+
+/** The columns the list can be put in order by, in the order they appear. */
+const SORTS = [
+  { key: "name", label: "Name" },
+  { key: "type", label: "Type" },
+  { key: "schedule", label: "Schedule" },
+  { key: "amount", label: "Amount", numeric: true },
+  { key: "perYear", label: "Per year", numeric: true },
+  { key: "paidFrom", label: "Paid from" },
+  { key: "landsIn", label: "Lands in" },
+  { key: "next", label: "Next" },
+] as const;
+type SortKey = (typeof SORTS)[number]["key"];
+interface Sort {
+  key: SortKey;
+  descending: boolean;
+}
 
 /**
  * Column widths from `md` up. Below that each row becomes a card instead: the same cells in
@@ -39,6 +57,9 @@ export function RecurringItemsPage() {
   const [form, setForm] = useState<FormState>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<Sort>({ key: "name", descending: false });
+  // The same header again turns the order round; a different one starts from the top.
+  const sortBy = (key: SortKey) => setSort((current) => ({ key, descending: current.key === key ? !current.descending : false }));
 
   const all = items.data ?? [];
   // Archived items are out of the way until asked for: they have their own chip, and count nowhere else.
@@ -60,7 +81,42 @@ export function RecurringItemsPage() {
         [item.name, accountName(item.payFromAccountId), accountName(item.payToAccountId), categoryName(item.categoryId)].some((text) =>
           text.toLowerCase().includes(typed),
         ),
-    );
+    )
+    .sort((a, b) => {
+      const [first, second] = [sortValue(a), sortValue(b)];
+      // Something with no next date goes last whichever way the dates run.
+      if (first === null || second === null) {
+        return first === second ? 0 : first === null ? 1 : -1;
+      }
+      const order =
+        typeof first === "number" && typeof second === "number"
+          ? first - second
+          : String(first).localeCompare(String(second), undefined, { sensitivity: "base", numeric: true });
+      // Ties keep the order the list arrived in, which is by name.
+      return sort.descending ? -order : order;
+    });
+
+  /** What a row is ordered by in the chosen column: the words or the number it shows there. */
+  function sortValue(item: Item): string | number | null {
+    switch (sort.key) {
+      case "name":
+        return item.name;
+      case "type":
+        return describeKind(item);
+      case "schedule":
+        return describeItemSchedule(item.schedule);
+      case "amount":
+        return item.perOccurrenceCents;
+      case "perYear":
+        return item.perYearCents;
+      case "paidFrom":
+        return accountName(item.payFromAccountId);
+      case "landsIn":
+        return describeLandsIn(item);
+      case "next":
+        return item.next?.dueDate ?? null;
+    }
+  }
 
   return (
     <>
@@ -144,6 +200,33 @@ export function RecurringItemsPage() {
             </div>
           </div>
 
+          {/* A phone has no header row to press, so the same choice is offered as a list. */}
+          <div className="mb-3 flex items-center gap-2 md:hidden">
+            <label htmlFor={`${searchId}-sort`} className="font-medium">
+              Sort by
+            </label>
+            <select
+              id={`${searchId}-sort`}
+              value={sort.key}
+              onChange={(event) => setSort({ key: event.target.value as SortKey, descending: false })}
+              className={`${INPUT} min-w-0 flex-1`}
+            >
+              {SORTS.map((column) => (
+                <option key={column.key} value={column.key}>
+                  {column.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => sortBy(sort.key)}
+              aria-label={sort.descending ? "Sorted last to first. Switch to first to last" : "Sorted first to last. Switch to last to first"}
+              className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-line bg-surface"
+            >
+              {sort.descending ? <ArrowDown aria-hidden className="size-5" /> : <ArrowUp aria-hidden className="size-5" />}
+            </button>
+          </div>
+
           {shown.length === 0 ? (
             <Card>
               {typed === "" && filter === "archived" ? (
@@ -170,18 +253,17 @@ export function RecurringItemsPage() {
             <div role="table" aria-label="Recurring items" className="rounded-card border border-line bg-surface">
               <div role="rowgroup" className="hidden md:block">
                 <div role="row" className={`grid border-b border-line px-5 py-3 text-sm font-semibold text-muted ${COLUMNS}`}>
-                  <span role="columnheader">Name</span>
-                  <span role="columnheader">Type</span>
-                  <span role="columnheader">Schedule</span>
-                  <span role="columnheader" className="pr-2 text-right">
-                    Amount
-                  </span>
-                  <span role="columnheader" className="text-right">
-                    Per year
-                  </span>
-                  <span role="columnheader">Paid from</span>
-                  <span role="columnheader">Lands in</span>
-                  <span role="columnheader">Next</span>
+                  {SORTS.map((column) => (
+                    <SortHeader
+                      key={column.key}
+                      label={column.label}
+                      right={"numeric" in column}
+                      // The amount's own column is inset to line up with the boxed estimates beneath it.
+                      className={column.key === "amount" ? "pr-2" : ""}
+                      direction={sort.key === column.key ? (sort.descending ? "descending" : "ascending") : undefined}
+                      onSort={() => sortBy(column.key)}
+                    />
+                  ))}
                   <span role="columnheader" className="sr-only">
                     Edit
                   </span>
@@ -207,6 +289,44 @@ export function RecurringItemsPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * A column heading that puts the list in order by that column when pressed, and turns the
+ * order round when pressed again. The arrow shows which column and which way; `aria-sort`
+ * says the same to a screen reader.
+ */
+function SortHeader({
+  label,
+  right,
+  className = "",
+  direction,
+  onSort,
+}: {
+  label: string;
+  /** Number columns keep their heading over the digits. */
+  right: boolean;
+  className?: string;
+  direction: "ascending" | "descending" | undefined;
+  onSort: () => void;
+}) {
+  const Arrow = direction === "descending" ? ArrowDown : ArrowUp;
+  return (
+    <span role="columnheader" aria-sort={direction ?? "none"} className={`min-w-0 ${right ? "text-right" : ""} ${className}`}>
+      <button
+        type="button"
+        onClick={onSort}
+        title={`Sort by ${label.toLowerCase()}`}
+        className={`group inline-flex max-w-full items-center gap-1 rounded-md font-semibold ${direction ? "text-ink" : ""} ${
+          right ? "flex-row-reverse" : ""
+        }`}
+      >
+        {label}
+        {/* Faint until hovered on the other columns, so every heading is seen to be pressable. */}
+        <Arrow aria-hidden className={`size-3.5 shrink-0 ${direction ? "" : "opacity-0 group-hover:opacity-60 group-focus-visible:opacity-60"}`} />
+      </button>
+    </span>
   );
 }
 

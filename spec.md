@@ -497,6 +497,8 @@ Pay period screen (decided 2026-10-09): hovering, focusing or tapping **Coming i
 
 Goals on the pay period screen (decided 2026-10-09): each bucket in the Accounts & buckets panel says how its goal is going at the end of that period, on its existing row (no new panel): "Goal reached", or against a goal date "On track" / "Short $X a paycheck". A bucket that has reached its goal offers **Stop saving**, which ends the recurring bucket moves into it after that pay period (their end date is set; Undo brings them back); otherwise a move does whatever it was set up to do. The bucket form's recurring move has a "Stop on the goal date" tick (on by default) when the goal has a date still ahead.
 
+Recurring items sort (decided 2026-10-09): pressing a column heading orders the list by that column, pressing it again reverses it (an arrow and `aria-sort` show which); items with no next date go last. On a phone, where there is no header row, a "Sort by" list and a direction button do the same.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

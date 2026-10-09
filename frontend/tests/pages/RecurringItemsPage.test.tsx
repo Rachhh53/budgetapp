@@ -215,6 +215,33 @@ describe("recurring items screen", () => {
     expect(within(table).getAllByRole("row")).toHaveLength(5);
   });
 
+  it("sorts by a column when its heading is pressed, and the other way when pressed again", async () => {
+    withItems();
+    renderApp("/recurring");
+
+    const table = await screen.findByRole("table", { name: "Recurring items" });
+    const names = () =>
+      within(table)
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getAllByRole("cell")[0]!.textContent);
+    const byName = names();
+    expect(within(table).getByRole("columnheader", { name: "Name" })).toHaveAttribute("aria-sort", "ascending");
+
+    await userEvent.click(within(table).getByRole("button", { name: "Amount" }));
+    const amounts = [ELECTRIC, GROCERIES, RENT, TO_SAVINGS].sort((a, b) => a.perOccurrenceCents - b.perOccurrenceCents).map((item) => item.name);
+    expect(names()).toEqual(amounts);
+    expect(within(table).getByRole("columnheader", { name: "Amount" })).toHaveAttribute("aria-sort", "ascending");
+    expect(within(table).getByRole("columnheader", { name: "Name" })).toHaveAttribute("aria-sort", "none");
+
+    await userEvent.click(within(table).getByRole("button", { name: "Amount" }));
+    expect(names()).toEqual([...amounts].reverse());
+    expect(within(table).getByRole("columnheader", { name: "Amount" })).toHaveAttribute("aria-sort", "descending");
+
+    await userEvent.click(within(table).getByRole("button", { name: "Name" }));
+    expect(names()).toEqual(byName);
+  });
+
   it("filters by kind and counts each kind on its chip", async () => {
     withItems();
     renderApp("/recurring");
