@@ -493,6 +493,8 @@ Archived recurring items (decided 2026-10-09): hidden from the Recurring items l
 
 Buckets card tidy-up (decided 2026-10-09): a recurring move is set up inside the bucket's own Add/Edit form ("Set aside every paycheck (optional)", which adds an every-paycheck bucket move from the paycheck in hand; the form also lists what already feeds the bucket) instead of from a button on its row; archived buckets sit in a closed "Archived buckets (n)" section like archived accounts; "Put the rest in a bucket" is closed until opened.
 
+Pay period screen (decided 2026-10-09): hovering, focusing or tapping **Coming in** lists what it is made of for that account (each paycheck, one-off money in, transfers arriving, estimated interest); any difference from the backend's total is listed as its own line, so the list always adds up to the figure.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

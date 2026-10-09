@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info } from "lucide-react";
 import { EditButton } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
@@ -153,7 +153,7 @@ export function PayPeriodPage() {
       <PeriodStrip periods={stripAround(nearby, at)} selected={detail.start} />
 
       {primary && primaryAccount ? (
-        <Figures balance={primary} account={primaryAccount} />
+        <Figures balance={primary} account={primaryAccount} detail={detail} />
       ) : (
         <Card>
           <p className="font-medium">No balance to start from yet.</p>
@@ -360,7 +360,7 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
 }
 
 /** The five numbers along the top, for the account the paycheck lands in. */
-function Figures({ balance, account }: { balance: AccountPeriod; account: Account }) {
+function Figures({ balance, account, detail }: { balance: AccountPeriod; account: Account; detail: PeriodDetail }) {
   // Whole numbers without the $, as the mockup writes the sum under the ending balance.
   const plain = (cents: number) => formatCents(cents).replace("$", "");
   return (
@@ -376,6 +376,8 @@ function Figures({ balance, account }: { balance: AccountPeriod; account: Accoun
         cents={balance.inCents}
         sign="+"
         note="Paychecks and money in"
+        breakdown={comingInto(balance, detail)}
+        breakdownLabel="What is coming in"
         className="order-3 lg:order-2"
       />
       <Figure
@@ -407,11 +409,46 @@ function Figures({ balance, account }: { balance: AccountPeriod; account: Accoun
   );
 }
 
+/** One thing that makes up a figure. */
+interface Part {
+  label: string;
+  cents: number;
+}
+
+/**
+ * What "Coming in" is made of for one account: its paychecks, one-off money in, transfers
+ * arriving and interest. The total itself comes from the backend; if these do not add up to
+ * it, the difference is listed too, so the list always sums to the figure above it.
+ */
+function comingInto(balance: AccountPeriod, detail: PeriodDetail): Part[] {
+  const here = balance.accountId;
+  const parts: Part[] = [
+    ...detail.paychecks
+      .filter((paycheck) => paycheck.depositAccountId === here)
+      .map((paycheck) => ({ label: `${paycheck.sourceName} paycheck`, cents: paycheck.netCents })),
+    ...detail.entries
+      .filter((entry) => (entry.kind === "money_in" ? entry.accountId === here : entry.kind === "transfer" && entry.toAccountId === here))
+      .map((entry) => ({ label: entry.kind === "transfer" ? `${entry.description} (transfer)` : entry.description, cents: entry.amountCents })),
+    ...[...detail.carriedOver, ...detail.occurrences]
+      .filter((occurrence) => !occurrence.skipped && occurrence.payToAccountId === here)
+      .map((occurrence) => ({ label: `${occurrence.name} (transfer)`, cents: occurrence.amountCents })),
+    ...detail.interest.filter((line) => line.accountId === here).map((line) => ({ label: "Interest (estimate)", cents: line.amountCents })),
+  ];
+  const rest = balance.inCents - parts.reduce((sum, part) => sum + part.cents, 0);
+  if (rest !== 0) {
+    // Less than the list: a balance entered part-way through already includes what arrived before it.
+    parts.push({ label: rest < 0 ? "Already in the balance you entered" : "Other", cents: rest });
+  }
+  return parts;
+}
+
 function Figure({
   label,
   cents,
   sign = "",
   note,
+  breakdown,
+  breakdownLabel,
   highlight = false,
   warn = false,
   className = "",
@@ -420,6 +457,9 @@ function Figure({
   cents: number;
   sign?: string;
   note: string;
+  /** What the number is made of, shown when the figure is hovered, focused or tapped. */
+  breakdown?: readonly Part[];
+  breakdownLabel?: string;
   /** The number the screen is about: outlined, and largest on a phone. */
   highlight?: boolean;
   /** The note is a warning (it says so in words too): shown in the warning color. */
@@ -427,8 +467,17 @@ function Figure({
   className?: string;
 }) {
   return (
-    <div className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${className}`}>
-      <dt className="text-sm text-muted">{label}</dt>
+    <div
+      // Focusable when it has more to show, so the keyboard and a tap reach what a hover does.
+      tabIndex={breakdown ? 0 : undefined}
+      className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${
+        breakdown ? "group relative cursor-help focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink" : ""
+      } ${className}`}
+    >
+      <dt className="flex items-center gap-1 text-sm text-muted">
+        {label}
+        {breakdown && <Info aria-hidden className="size-3.5" />}
+      </dt>
       <dd>
         <span data-amount className={`block font-bold tabular-nums ${highlight ? "text-3xl lg:text-2xl" : "text-xl lg:text-2xl"} lg:short:text-xl`}>
           {sign}
@@ -437,6 +486,30 @@ function Figure({
         <span data-amount title={note} className={`block text-sm tabular-nums lg:truncate ${warn ? "font-semibold text-danger" : "text-muted"}`}>
           {note}
         </span>
+        {breakdown && (
+          <div
+            role="group"
+            aria-label={breakdownLabel}
+            // Opens towards the middle of the screen: on a phone this figure sits in the right-hand column.
+            className="invisible absolute top-full right-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface p-3 text-sm opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 lg:right-auto lg:left-0"
+          >
+            {breakdown.length === 0 ? (
+              <p className="text-muted">Nothing in this pay period.</p>
+            ) : (
+              <ul className="space-y-1">
+                {breakdown.map((part, index) => (
+                  <li key={index} className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 break-words">{part.label}</span>
+                    <span data-amount className="shrink-0 font-semibold tabular-nums">
+                      {part.cents < 0 ? "−" : ""}
+                      {formatCents(Math.abs(part.cents))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </dd>
     </div>
   );

@@ -268,6 +268,10 @@ describe("pay period screen", () => {
     expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("$1,214.38");
     expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("Everyday Checking · Oct 1 · set by you");
     expect(within(figures).getByText("Coming in").closest("div")).toHaveTextContent("+$3,986.20");
+    // Hovering, focusing or tapping the figure lists what it is made of.
+    const comingIn = within(figures).getByRole("group", { name: "What is coming in" });
+    expect(comingIn).toHaveTextContent(/paycheck\$2,486\.20/);
+    expect(comingIn.closest("[tabindex]")).toHaveAttribute("tabindex", "0");
     expect(within(figures).getByText("Going out").closest("div")).toHaveTextContent("−$2,104.48");
     expect(within(figures).getByText("Projected ending").closest("div")).toHaveTextContent("$3,096.10");
     expect(within(figures).getByText("Projected ending").closest("div")).toHaveTextContent("1,214.38 + 3,986.20 − 2,104.48");
