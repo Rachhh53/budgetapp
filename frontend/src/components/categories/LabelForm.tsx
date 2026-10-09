@@ -1,3 +1,4 @@
+import { Tag } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { ColorPicker } from "../ColorPicker";
 import { Modal } from "../Modal";
@@ -51,7 +52,7 @@ export function LabelForm({ noun, initial, usedColors, parents, saving, onSave, 
   };
 
   return (
-    <Modal title={existing ? `Edit ${initial.name}` : `Add a ${noun}`} onClose={onClose}>
+    <Modal title={existing ? `Edit ${initial.name}` : `Add a ${noun}`} icon={Tag} tone={existing ? initial.color : undefined} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor={`${id}-name`} className={LABEL}>

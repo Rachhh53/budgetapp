@@ -12,12 +12,14 @@ interface MoneyFieldProps {
   required?: boolean;
   /** Start here when the form opens, so an amount can be typed straight away. */
   autoFocus?: boolean;
+  /** The form's main figure: shown large, so it is the first thing read. */
+  hero?: boolean;
 }
 
 export const AMOUNT_HELP = "Please enter an amount like 1,250.00.";
 
 /** A dollar amount field: right-aligned tabular digits, with the numeric keypad on a phone. */
-export function MoneyField({ label, value, onChange, hint, error, required, autoFocus }: MoneyFieldProps) {
+export function MoneyField({ label, value, onChange, hint, error, required, autoFocus, hero }: MoneyFieldProps) {
   const id = useId();
   return (
     <div>
@@ -25,7 +27,7 @@ export function MoneyField({ label, value, onChange, hint, error, required, auto
         {label}
       </label>
       <div className="relative">
-        <span aria-hidden className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted">
+        <span aria-hidden className={`pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted ${hero ? "text-2xl" : ""}`}>
           $
         </span>
         <input
@@ -40,7 +42,7 @@ export function MoneyField({ label, value, onChange, hint, error, required, auto
           data-autofocus={autoFocus ? true : undefined}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
-          className={`${INPUT} pl-7 text-right tabular-nums`}
+          className={`${INPUT} text-right tabular-nums ${hero ? "min-h-14 pl-9 text-2xl font-semibold" : "pl-7"}`}
         />
       </div>
       {error ? (

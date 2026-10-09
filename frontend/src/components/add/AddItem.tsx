@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, Minus, Plus, RotateCw } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, type LucideIcon, Minus, Plus, RotateCw } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -47,11 +47,11 @@ export function useAddItem(): AddItemContext {
   return context;
 }
 
-const KIND_CHOICES: readonly { value: AddKind; label: string }[] = [
-  { value: "money_out", label: "Money out" },
-  { value: "money_in", label: "Money in" },
-  { value: "transfer", label: "Transfer" },
-  { value: "recurring", label: "Recurring" },
+const KIND_CHOICES: readonly { value: AddKind; label: string; icon: LucideIcon }[] = [
+  { value: "money_out", label: "Money out", icon: Minus },
+  { value: "money_in", label: "Money in", icon: Plus },
+  { value: "transfer", label: "Transfer", icon: ArrowLeftRight },
+  { value: "recurring", label: "Recurring", icon: RotateCw },
 ];
 
 const EDITABLE = "input, textarea, select, [contenteditable='true']";
@@ -146,7 +146,7 @@ function AddItemForm({
   const failure = accounts.error ?? categories.error ?? tags.error;
 
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} icon={KIND_CHOICES.find((choice) => choice.value === kind)?.icon} onClose={onClose}>
       <div className="mb-4">
         <Segmented legend="What are you adding?" options={choices} value={kind} onChange={setKind} />
       </div>

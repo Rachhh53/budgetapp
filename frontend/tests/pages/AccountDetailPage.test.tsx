@@ -323,6 +323,23 @@ describe("account detail screen", () => {
       expect(feeding).toHaveTextContent("Gift fund · $50.00 every paycheck");
     });
 
+    it("says so when a bucket has reached its goal, and not before", async () => {
+      fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({
+          status: 200,
+          data: [GIFTS, { ...GIFTS, id: 8, name: "New bike", balanceCents: 60000 }],
+        }),
+      });
+      renderApp("/accounts/1");
+
+      const bike = (await screen.findByRole("button", { name: "Edit New bike" })).closest("li")!;
+      expect(bike).toHaveTextContent("Goal reached");
+      expect(bike).toHaveTextContent("100% of $600.00");
+      const gifts = screen.getByRole("button", { name: "Edit Holiday gifts" }).closest("li")!;
+      expect(gifts).not.toHaveTextContent("Goal reached");
+    });
+
     it("says a bucket is on track when what is scheduled reaches its goal in time", async () => {
       const onTrack = {
         ...GIFTS,

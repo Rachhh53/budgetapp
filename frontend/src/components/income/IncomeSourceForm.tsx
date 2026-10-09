@@ -1,4 +1,4 @@
-import { Trash2 } from "lucide-react";
+import { Banknote, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import {
@@ -144,7 +144,7 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
   };
 
   return (
-    <Modal title={source ? "Edit income source" : "Add an income source"} onClose={onClose}>
+    <Modal title={source ? "Edit income source" : "Add an income source"} icon={Banknote} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor={`${id}-name`} className={LABEL}>

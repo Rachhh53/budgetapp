@@ -1,3 +1,4 @@
+import { PartyPopper } from "lucide-react";
 import { useId, useState } from "react";
 import { type Account, useAccounts } from "../../api/accounts";
 import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
@@ -140,13 +141,23 @@ function BucketLine({
   const goal = bucket.goalCents;
   // Shown as at most full: a bucket can hold more than its goal.
   const reached = goal === null ? null : Math.max(0, Math.min(100, Math.round((bucket.balanceCents * 100) / goal)));
+  const goalReached = goal !== null && goal > 0 && bucket.balanceCents >= goal;
   return (
     <li onClick={clickRowToEdit} className={`py-3 ${ROW_OPENS}`}>
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <span aria-hidden className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: bucket.color }} />
           <div className="min-w-0 flex-1">
-            <p className="font-medium wrap-break-word">{bucket.name}</p>
+            <p className="font-medium wrap-break-word">
+              {bucket.name}
+              {goalReached && (
+                // A small cheer for getting there. Said in words and an icon, never by color alone.
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 align-middle text-xs font-semibold text-on-accent">
+                  <PartyPopper aria-hidden className="size-3.5" />
+                  Goal reached
+                </span>
+              )}
+            </p>
             {(goal !== null || bucket.note) && (
               <p data-amount className="text-sm text-muted tabular-nums">
                 {[

@@ -1,10 +1,12 @@
+import type { LucideIcon } from "lucide-react";
 import { useId } from "react";
 import { LABEL } from "./ui";
 
 interface SegmentedProps<T extends string> {
   /** What is being chosen, e.g. "Type". */
   legend: string;
-  options: readonly { value: T; label: string }[];
+  /** With an `icon`, a segment shows it above its label, so the choices are told apart at a glance. */
+  options: readonly { value: T; label: string; icon?: LucideIcon }[];
   value: T;
   onChange: (value: T) => void;
 }
@@ -24,7 +26,7 @@ export function Segmented<T extends string>({ legend, options, value, onChange }
         {options.map((option) => (
           <label
             key={option.value}
-            className="flex min-h-11 cursor-pointer items-center justify-center rounded-md px-2 text-center text-sm font-medium text-muted has-checked:bg-surface has-checked:font-semibold has-checked:text-ink has-checked:shadow-sm has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent-ink"
+            className="group flex min-h-11 cursor-pointer flex-col items-center justify-center gap-1 rounded-md px-2 py-1.5 text-center text-sm font-medium text-muted has-checked:bg-surface has-checked:font-semibold has-checked:text-ink has-checked:shadow-sm has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent-ink"
           >
             <input
               type="radio"
@@ -34,6 +36,7 @@ export function Segmented<T extends string>({ legend, options, value, onChange }
               onChange={() => onChange(option.value)}
               className="sr-only"
             />
+            {option.icon && <option.icon aria-hidden className="size-5 group-has-checked:text-accent-ink" />}
             {option.label}
           </label>
         ))}

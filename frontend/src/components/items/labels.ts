@@ -1,3 +1,4 @@
+import { ArrowLeftRight, CreditCard, type LucideIcon, PiggyBank, Receipt, ShoppingBasket } from "lucide-react";
 import { LAST_DAY } from "../../api/income";
 import type { Item, ItemFrequency, ItemKind, ItemSchedule } from "../../api/items";
 import { ordinal, weekdayName } from "../../lib/dates";
@@ -11,6 +12,15 @@ export const KIND_LABELS: Record<ItemKind, string> = {
 };
 
 /** Plural, for the filter chips. */
+/** A picture for each kind, used wherever the kinds are chosen between or a form is about one. */
+export const KIND_ICONS: Record<ItemKind, LucideIcon> = {
+  bill: Receipt,
+  transfer: ArrowLeftRight,
+  budget: ShoppingBasket,
+  card_payment: CreditCard,
+  bucket_move: PiggyBank,
+};
+
 export const KIND_PLURALS: Record<ItemKind, string> = {
   bill: "Bills",
   transfer: "Transfers",

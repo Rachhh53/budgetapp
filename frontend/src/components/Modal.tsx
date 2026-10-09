@@ -1,5 +1,6 @@
-import { X } from "lucide-react";
+import { type LucideIcon, X } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, type ReactNode, type SyntheticEvent, useEffect, useId, useRef, useState } from "react";
+import { isHexColor, readableTextOn } from "../lib/color";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY } from "./ui";
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])';
@@ -20,16 +21,27 @@ const CHOICE = '[role="option"], [role="group"] button';
  *
  * With `drawer`, wide screens get a full-height panel on the right instead (the edit drawer
  * in design/recurring.png), so the list behind it stays in view.
+ *
+ * The header is a tinted strip with an icon for what the form is about, so one form is told
+ * from another at a glance. `tone` gives the strip the color of the account or bucket being
+ * edited; without it the strip takes the accent color. The title itself stays in the normal
+ * text color on a light tint, so it is readable whatever color someone picked.
  */
 export function Modal({
   title,
   onClose,
   drawer = false,
+  icon: Icon,
+  tone,
   children,
 }: {
   title: string;
   onClose: () => void;
   drawer?: boolean;
+  /** A picture of what this form adds or changes. */
+  icon?: LucideIcon;
+  /** A hex color for the header, e.g. the color of the account being edited. */
+  tone?: string;
   children: ReactNode;
 }) {
   const titleId = useId();
@@ -40,6 +52,8 @@ export function Modal({
   // A press that starts inside (selecting text, say) and ends outside is not a click outside.
   const pressedOutside = useRef(false);
   const [asking, setAsking] = useState(false);
+  const color = tone !== undefined && isHexColor(tone) ? tone : "var(--accent)";
+  const onColor = tone !== undefined && isHexColor(tone) ? readableTextOn(tone) : "var(--on-accent)";
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -133,15 +147,30 @@ export function Modal({
           drawer ? "lg:max-w-lg lg:rounded-none" : ""
         }`}
       >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 id={titleId} className="text-xl font-bold">
-            {title}
-          </h2>
+        <div
+          // Reaches the panel's edges through its padding; a light tint, so the title keeps its contrast.
+          className="-mx-5 -mt-5 mb-4 flex items-center justify-between gap-3 border-t-4 px-5 py-3 sm:-mx-6 sm:-mt-6 sm:px-6"
+          style={{ borderTopColor: color, backgroundColor: `color-mix(in srgb, ${color} 12%, var(--surface))` }}
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            {Icon && (
+              <span
+                aria-hidden
+                className="flex size-10 shrink-0 items-center justify-center rounded-full"
+                style={{ backgroundColor: color, color: onColor }}
+              >
+                <Icon className="size-5" />
+              </span>
+            )}
+            <h2 id={titleId} className="min-w-0 text-xl font-bold break-words">
+              {title}
+            </h2>
+          </div>
           <button
             type="button"
             onClick={requestClose}
             aria-label="Close"
-            className="-mt-2 -mr-2 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted"
+            className="-mr-2 flex size-11 shrink-0 items-center justify-center rounded-lg text-ink"
           >
             <X aria-hidden className="size-5" />
           </button>

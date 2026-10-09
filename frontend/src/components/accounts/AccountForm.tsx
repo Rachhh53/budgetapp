@@ -1,3 +1,4 @@
+import { Landmark } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import {
   type Account,
@@ -106,7 +107,7 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
     (addedWithoutRate ? "The account was added, but its interest rate could not be saved. You can add the rate on the account's page." : undefined);
 
   return (
-    <Modal title={account ? "Edit account" : "Add an account"} onClose={onClose}>
+    <Modal title={account ? "Edit account" : "Add an account"} icon={Landmark} tone={account?.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor={`${id}-name`} className={LABEL}>

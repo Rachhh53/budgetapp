@@ -1,3 +1,4 @@
+import { PiggyBank } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Bucket, useDeleteBucket, useMoveBucketMoney, useSaveBucket } from "../../api/buckets";
@@ -96,7 +97,12 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const failure = problem ?? save.error?.message ?? adjust.error?.message;
 
   return (
-    <Modal title={bucket ? `Edit ${bucket.name}` : `Add a bucket to ${account.name}`} onClose={onClose}>
+    <Modal
+      title={bucket ? `Edit ${bucket.name}` : `Add a bucket to ${account.name}`}
+      icon={PiggyBank}
+      tone={bucket?.color}
+      onClose={onClose}
+    >
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor={`${id}-name`} className={LABEL}>

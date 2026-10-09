@@ -1,3 +1,4 @@
+import { Percent } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import {
   type AccountDetail,
@@ -196,7 +197,7 @@ function InterestForm({ detail, onClose }: { detail: AccountDetail; onClose: () 
   const failure = problem ?? saveRate.error?.message ?? removeRate.error?.message ?? saveSettings.error?.message;
 
   return (
-    <Modal title={`Edit interest — ${account.name}`} onClose={onClose}>
+    <Modal title={`Edit interest — ${account.name}`} icon={Percent} tone={account.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
