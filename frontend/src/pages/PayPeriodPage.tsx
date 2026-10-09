@@ -1047,6 +1047,22 @@ function AccountsPanel({
           </>
         )}
       </dl>
+      {/* Said in words and set apart, not just coloured: an overdrawn account is the thing to see first. */}
+      {!owed && balance.lowestCents < 0 && (
+        <p role="alert" className="mt-2 rounded-lg border-2 border-danger p-3 font-semibold text-danger">
+          Overdrawn: {shown.account.name} drops to {formatCents(balance.lowestCents)} on {formatDay(balance.lowestOn)}
+          {balance.endingCents < 0 ? ` and ends this pay period at ${formatCents(balance.endingCents)}` : ""}.
+        </p>
+      )}
+      {!owed && balance.lowestCents >= 0 && balance.availableCents < 0 && (
+        <p role="alert" className="mt-2 rounded-lg border-2 border-danger p-3 font-semibold text-danger">
+          The buckets hold {formatCents(-balance.availableCents)} more than {shown.account.name} does. Take that much out of a bucket on the{" "}
+          <Link to={`/accounts/${shown.account.id}`} className="underline">
+            account's page
+          </Link>
+          , or update its balance.
+        </p>
+      )}
       {beforeFirst && !balance.builtFromZero && (
         <p className="mt-1 text-sm text-muted">
           Nothing is counted for {shown.account.name} before the first balance you entered, so this pay period shows that balance as it is.

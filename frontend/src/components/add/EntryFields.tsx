@@ -9,7 +9,7 @@ import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
-import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
+import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /** Accounts whose balance is what is owed: spending raises it and money in pays it down. */
 const OWED: readonly Account["type"][] = ["credit_card", "loan"];
@@ -32,7 +32,8 @@ interface EntryFieldsProps {
  * balance becomes, before anything is saved.
  *
  * Money coming in (or a transfer arriving) can be partly set aside in the buckets of the
- * account it lands in. "Pays back an expense" and uploads arrive with expenses and pay
+ * account it lands in. Money leaving an account that has buckets has to say where it comes
+ * out of — one of them, or what is not in any — so a bucket and its account go down together. "Pays back an expense" and uploads arrive with expenses and pay
  * stubs (Phases 8 and 9).
  */
 export function EntryFields({ kind, entry, period, accounts, categories, tags, onClose }: EntryFieldsProps) {
@@ -56,11 +57,23 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
   const [aside, setAside] = useState<Record<number, string>>(
     Object.fromEntries((entry?.bucketSplits ?? []).map((split) => [split.bucketId, centsToInput(split.amountCents)])),
   );
+  // Where money going out comes from: a bucket's id, NOT_IN_A_BUCKET, or "" until it is chosen.
+  const [chosenFrom, setChosenFrom] = useState<string>();
   const [problem, setProblem] = useState<string>();
 
   // Only money arriving can be set aside, and only in the buckets of the account it arrives in.
   const arrivesIn = kind === "money_in" ? accountId : kind === "transfer" ? toAccountId : null;
-  const buckets = (useBuckets().data ?? []).filter((bucket) => !bucket.archived && String(bucket.accountId) === arrivesIn);
+  const openBuckets = (useBuckets().data ?? []).filter((bucket) => !bucket.archived);
+  const buckets = openBuckets.filter((bucket) => String(bucket.accountId) === arrivesIn);
+  // Money leaving comes out of a bucket of the account it leaves, or out of what is in none.
+  const payingBuckets = kind === "money_in" ? [] : openBuckets.filter((bucket) => String(bucket.accountId) === accountId);
+  // An entry being changed already says where it came from; a new one has to be told.
+  const savedFrom = entry
+    ? String(entry.bucketSplits.find((split) => payingBuckets.some((bucket) => bucket.id === split.bucketId))?.bucketId ?? NOT_IN_A_BUCKET)
+    : "";
+  const asked = chosenFrom ?? savedFrom;
+  // A bucket chosen before the account was changed no longer applies.
+  const comesFrom = asked === NOT_IN_A_BUCKET || payingBuckets.some((bucket) => String(bucket.id) === asked) ? asked : "";
 
   // Archived accounts are left out, unless this entry already points at one.
   const accountOptions = accounts
@@ -99,6 +112,14 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
     }
     if (bucketSplits.reduce((sum, split) => sum + split.amountCents, 0) > amountCents) {
       return "That sets aside more than the amount itself. Please lower one of the buckets.";
+    }
+    if (payingBuckets.length > 0) {
+      if (comesFrom === "") {
+        return "Please say where this comes out of: one of the buckets, or money that is not in a bucket.";
+      }
+      if (comesFrom !== NOT_IN_A_BUCKET && amountCents > 0) {
+        bucketSplits.push({ bucketId: Number(comesFrom), amountCents });
+      }
     }
     return {
       kind,
@@ -206,6 +227,34 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
           <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
         </div>
 
+        {payingBuckets.length > 0 && (
+          <div>
+            <label htmlFor={`${id}-from-bucket`} className={LABEL}>
+              Comes out of
+            </label>
+            <select
+              id={`${id}-from-bucket`}
+              value={comesFrom}
+              onChange={(event) => setChosenFrom(event.target.value)}
+              required
+              className={INPUT}
+            >
+              <option value="">Choose where this comes from</option>
+              <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
+              {payingBuckets.map((bucket) => (
+                <option key={bucket.id} value={bucket.id}>
+                  {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
+                </option>
+              ))}
+            </select>
+            <p className={HINT}>
+              {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
+                ? "The bucket and the account both go down by this amount."
+                : "This account has buckets, so say whether this is paid out of one of them."}
+            </p>
+          </div>
+        )}
+
         <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
 
         {buckets.length > 0 && (
@@ -277,6 +326,9 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
     </>
   );
 }
+
+/** The choice that takes nothing out of any bucket. Not a number, so it can never be mistaken for a bucket's id. */
+const NOT_IN_A_BUCKET = "none";
 
 const ACCOUNT_LABELS: Record<EntryKind, string> = { money_out: "Paid from", money_in: "Into", transfer: "From" };
 

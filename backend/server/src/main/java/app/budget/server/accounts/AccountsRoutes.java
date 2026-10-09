@@ -9,6 +9,7 @@ import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
+import app.budget.server.ledger.Ledger;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
@@ -29,12 +30,15 @@ public final class AccountsRoutes {
     private final AccountsRepository accounts;
     private final InterestRepository interest;
     private final BucketsRepository buckets;
+    private final Ledger ledger;
     private final Clock clock;
 
-    public AccountsRoutes(AccountsRepository accounts, InterestRepository interest, BucketsRepository buckets, Clock clock) {
+    public AccountsRoutes(
+            AccountsRepository accounts, InterestRepository interest, BucketsRepository buckets, Ledger ledger, Clock clock) {
         this.accounts = accounts;
         this.interest = interest;
         this.buckets = buckets;
+        this.ledger = ledger;
         this.clock = clock;
     }
 
@@ -128,7 +132,16 @@ public final class AccountsRoutes {
 
     private void deleteBalance(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        if (!accounts.deleteBalance(id, Inputs.id(ctx, "entryId"))) {
+        long entryId = Inputs.id(ctx, "entryId");
+        Account account = accounts.find(id).orElseThrow(ApiException::notFound);
+        // Removing a balance must not leave the buckets holding more than the account does without it.
+        LocalDate today = LocalDate.now(clock);
+        boolean coveredNow = ledger.availableOn(account, today).orElse(0L) >= 0;
+        if (coveredNow && ledger.availableOn(account, today, entryId).orElse(0L) < 0) {
+            throw ApiException.conflict(
+                    "Without this balance, this account's buckets would hold more than the account does. Please lower a bucket first.");
+        }
+        if (!accounts.deleteBalance(id, entryId)) {
             throw ApiException.notFound();
         }
         ApiResponse.ok(ctx, detail(id));

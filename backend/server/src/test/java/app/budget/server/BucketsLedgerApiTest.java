@@ -611,9 +611,42 @@ class BucketsLedgerApiTest extends ApiTestBase {
             assertError(server.post("/api/entries",
                             bonus("[{\"bucketId\":%d,\"amountCents\":100},{\"bucketId\":%d,\"amountCents\":100}]".formatted(gifts, gifts)), cookie),
                     "Please choose each bucket once, from the list.");
+        }
+
+        @Test
+        void moneyPaidOutOfABucketLowersTheBucketAndTheAccountTogether() throws Exception {
+            server.post("/api/buckets/" + gifts + "/changes", "{\"date\":\"2026-10-01\",\"amountCents\":15000}", cookie);
+            String present = "{\"kind\":\"money_out\",\"date\":\"2026-10-03\",\"amountCents\":%d,\"description\":\"Present\","
+                    + "\"accountId\":%d,\"bucketSplits\":[{\"bucketId\":%d,\"amountCents\":%d}]}";
+
+            JsonNode before = account(period("2026-10-01"), checking);
+            long entry = created("/api/entries", present.formatted(6000, checking, gifts, 6000));
+            JsonNode after = account(period("2026-10-01"), checking);
+
+            // 60.00 less in the account and 60.00 less in its buckets: what is outside them has not moved.
+            assertThat(after.get("endingCents").asLong()).isEqualTo(before.get("endingCents").asLong() - 6000);
+            assertThat(after.get("bucketsCents").asLong()).isEqualTo(before.get("bucketsCents").asLong() - 6000);
+            assertThat(after.get("availableCents").asLong()).isEqualTo(before.get("availableCents").asLong());
+            assertThat(period("2026-10-01").get("bucketMoves").findValuesAsText("kind")).contains("spent");
+
+            // A bucket cannot be overdrawn: only what it holds can come out of it.
+            Reply tooMuch = server.post("/api/entries", present.formatted(20000, checking, gifts, 9001), cookie);
+            assertThat(tooMuch.status()).isEqualTo(409);
+            assertThat(tooMuch.error()).startsWith("That is more than that bucket holds on that day.");
+            // Changing the entry counts what it already took as still there.
+            assertThat(server.put("/api/entries/" + entry, present.formatted(15000, checking, gifts, 15000), cookie).status()).isEqualTo(200);
+            assertThat(server.put("/api/entries/" + entry, present.formatted(15001, checking, gifts, 15001), cookie).status()).isEqualTo(409);
+            // The account itself may run short; that is warned about, not refused.
+            assertThat(server.post("/api/entries",
+                    "{\"kind\":\"money_out\",\"date\":\"2026-10-03\",\"amountCents\":99999900,\"description\":\"Roof\",\"accountId\":%d}"
+                            .formatted(checking), cookie).status()).isEqualTo(201);
+        }
+
+        @Test
+        void aBucketInAnotherAccountCannotPayForIt() throws Exception {
             assertError(server.post("/api/entries",
-                            bonus("[{\"bucketId\":%d,\"amountCents\":100}]".formatted(gifts)).replace("money_in", "money_out"), cookie),
-                    "Only money coming in can be set aside in a bucket.");
+                            bonus("[{\"bucketId\":%d,\"amountCents\":100}]".formatted(emergency)).replace("money_in", "money_out"), cookie),
+                    "Please choose a bucket in the account this comes out of.");
         }
     }
 

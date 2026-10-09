@@ -8,6 +8,7 @@ import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.buckets.BucketsRepository.Change;
 import app.budget.server.entries.EntriesRepository.Entry;
 import app.budget.server.entries.EntriesRepository.Split;
+import app.budget.server.entries.EntryKind;
 import app.budget.server.items.ItemCalendar.Occurrence;
 import app.budget.server.items.ItemKind;
 import app.budget.server.items.ItemsRepository.Item;
@@ -46,6 +47,8 @@ public final class BucketMoves {
         TRANSFER,
         /** Part of a one-off set aside here. */
         SPLIT,
+        /** A one-off paid out of this bucket: the money leaves the bucket and the account together. */
+        SPENT,
         /** A paycheck's share of a bill being saved up for. */
         SAVE_UP,
         /** The bill that was saved up for is paid, so the money leaves the bucket with it. */
@@ -118,9 +121,17 @@ public final class BucketMoves {
         }
         for (Entry entry : entriesWithSplits) {
             for (Split split : entry.bucketSplits()) {
-                if (open.containsKey(split.bucketId())) {
-                    moves.add(new Move(split.bucketId(), entry.date(), split.amountCents(), Kind.SPLIT, entry.description(), null));
+                Bucket bucket = open.get(split.bucketId());
+                if (bucket == null) {
+                    continue;
                 }
+                // A bucket in the account the money leaves is where it came from; one in the
+                // account it arrives in is where part of it is set aside.
+                boolean leaves = entry.kind() == EntryKind.MONEY_OUT
+                        || (entry.kind() == EntryKind.TRANSFER && bucket.accountId() == entry.accountId());
+                moves.add(new Move(
+                        bucket.id(), entry.date(), leaves ? -split.amountCents() : split.amountCents(),
+                        leaves ? Kind.SPENT : Kind.SPLIT, entry.description(), null));
             }
         }
 

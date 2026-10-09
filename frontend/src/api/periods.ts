@@ -73,7 +73,7 @@ export interface BucketPeriod {
 }
 
 /** Why a bucket's balance moved. */
-export type BucketMoveKind = "manual" | "bucket_move" | "transfer" | "split" | "save_up" | "save_up_paid" | "interest";
+export type BucketMoveKind = "manual" | "bucket_move" | "transfer" | "split" | "spent" | "save_up" | "save_up_paid" | "interest";
 
 /** Money going into (+) or out of (−) a bucket on a day. */
 export interface BucketMove {

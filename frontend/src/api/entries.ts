@@ -23,11 +23,14 @@ export interface EntryInput {
   toAccountId: number | null;
   note: string | null;
   tagIds: number[];
-  /** How much of money coming in goes into which buckets; the rest stays unassigned. */
+  /**
+   * The buckets this touches. A bucket in the account the money leaves is where it comes out
+   * of; a bucket in the account it arrives in is where part of it is set aside.
+   */
   bucketSplits: BucketSplit[];
 }
 
-/** Part of an entry set aside in one bucket. */
+/** Part of an entry set aside in, or paid out of, one bucket. */
 export interface BucketSplit {
   bucketId: number;
   amountCents: number;

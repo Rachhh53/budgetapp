@@ -94,6 +94,11 @@ export function AccountDetailPage() {
       </div>
 
       <div className="space-y-4">
+        {cash && today && today.balanceCents < 0 && (
+          <p role="alert" className="rounded-card border-2 border-danger bg-surface p-4 text-lg font-semibold text-danger">
+            Overdrawn: {account.name} is at {formatCents(today.balanceCents)} today.
+          </p>
+        )}
         <Card>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>

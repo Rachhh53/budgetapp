@@ -20,6 +20,9 @@ class BucketsApiTest extends ApiTestBase {
         checking = createAccount("Everyday Checking", "checking");
         savings = createAccount("Rainy Day Savings", "savings");
         visa = createAccount("Visa", "credit_card");
+        // Buckets set aside money the account holds, so there has to be some.
+        enterBalance(checking, "2026-09-01", 1000000);
+        enterBalance(savings, "2026-09-01", 1000000);
     }
 
     private static String bucketJson(long accountId, String name, String extra) {

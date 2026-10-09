@@ -335,14 +335,17 @@ public final class Ledger {
 
     /**
      * What an account has left outside its buckets at the end of {@code day}: the most that can
-     * still be set aside. Empty until a balance has been entered for it: a balance added up from
-     * nothing is only as complete as what has been set up so far, too little to refuse anything on.
+     * still be set aside, or spent without touching a bucket. Empty only for an archived account
+     * nobody entered a balance for, which is not added up at all.
      */
     public Optional<Long> availableOn(Account account, LocalDate day) {
-        List<AccountPeriod> figures = accountPeriods(workings(List.of(new PayPeriod(day, day, day))), account);
-        return figures.isEmpty() || figures.getFirst().builtFromZero()
-                ? Optional.empty()
-                : Optional.of(figures.getFirst().availableCents());
+        return availableOn(account, day, null);
+    }
+
+    /** As {@link #availableOn(Account, LocalDate)}, as if the balance entry {@code withoutBalanceId} had never been entered. */
+    public Optional<Long> availableOn(Account account, LocalDate day, Long withoutBalanceId) {
+        List<AccountPeriod> figures = accountPeriods(workings(List.of(new PayPeriod(day, day, day)), withoutBalanceId), account);
+        return figures.isEmpty() ? Optional.empty() : Optional.of(figures.getFirst().availableCents());
     }
 
     /** How many paydays fall within {@code from}–{@code through}, both inclusive. */
@@ -430,10 +433,23 @@ public final class Ledger {
     }
 
     private Workings workings(List<PayPeriod> periods) {
+        return workings(periods, null);
+    }
+
+    /** @param withoutBalanceId a balance entry to leave out, to see what removing it would do; {@code null} for none */
+    private Workings workings(List<PayPeriod> periods, Long withoutBalanceId) {
         if (periods.isEmpty()) {
             return Workings.NONE;
         }
-        Map<Long, List<BalanceEntry>> entered = accounts.allBalances();
+        Map<Long, List<BalanceEntry>> entered = new HashMap<>();
+        accounts.allBalances().forEach((accountId, forAccount) -> {
+            List<BalanceEntry> kept = forAccount.stream()
+                    .filter(entry -> withoutBalanceId == null || entry.id() != withoutBalanceId)
+                    .toList();
+            if (!kept.isEmpty()) {
+                entered.put(accountId, kept);
+            }
+        });
         LocalDate first = periods.getFirst().start();
         LocalDate last = periods.getLast().end();
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { type Account, useAccounts } from "../api/accounts";
+import { type Account, holdsCash, useAccounts } from "../api/accounts";
 import { type AccountBalance, useAccountBalances } from "../api/periods";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { ACCOUNT_GROUPS, accountSubtitle } from "../components/accounts/labels";
@@ -138,7 +138,11 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
           {today ? (
             <>
               <Amount cents={today.balanceCents} className="font-semibold" />
-              <span className="block pr-2 text-sm text-muted">today</span>
+              {today.balanceCents < 0 && holdsCash(account.type) ? (
+                <span className="block pr-2 text-sm font-semibold text-danger">Overdrawn today</span>
+              ) : (
+                <span className="block pr-2 text-sm text-muted">today</span>
+              )}
             </>
           ) : account.latestBalance ? (
             <>

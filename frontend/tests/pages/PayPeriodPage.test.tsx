@@ -434,6 +434,19 @@ describe("pay period screen", () => {
     expect(within(accounts).queryByText(/^Paid off/)).not.toBeInTheDocument();
   });
 
+  it("warns loudly when an account goes overdrawn, and when its buckets hold more than it does", async () => {
+    withPeriod({
+      ...OCTOBER,
+      accounts: [{ ...OCTOBER.accounts[0]!, lowestCents: -4200, endingCents: -1000 }, OCTOBER.accounts[1]!],
+    });
+    renderApp();
+
+    const accounts = await panel("Accounts & buckets");
+    expect(await within(accounts).findByRole("alert")).toHaveTextContent(
+      "Overdrawn: Everyday Checking drops to -$42.00 on Oct 8 and ends this pay period at -$10.00.",
+    );
+  });
+
   it("shows an account with no balance entered like any other, with no extra label", async () => {
     withPeriod({
       ...OCTOBER,
@@ -762,14 +775,52 @@ describe("+ Add item", () => {
     });
   });
 
-  it("offers no buckets for money going out", async () => {
-    withPeriod(OCTOBER, { "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }) });
+  it("asks where money going out comes from when the account has buckets", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "POST /api/entries": () => ({ status: 201, data: VET, changed: true }),
+    });
     renderApp();
 
     await userEvent.keyboard("{Control>}e{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
-
+    // Setting aside is for money arriving; money leaving says where it comes from instead.
     expect(within(dialog).queryByRole("checkbox", { name: "Set some aside in a bucket" })).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Birthday gift for Mom");
+    const from = await within(dialog).findByRole("combobox", { name: "Comes out of" });
+
+    // Nothing is assumed: it has to be said, and nothing is sent until it is.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(calls(fetchMock)).not.toContain("POST /api/entries");
+
+    await userEvent.selectOptions(from, "Holiday gifts (holds $200.00 today)");
+    expect(within(dialog).getByText("The bucket and the account both go down by this amount.")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({
+      kind: "money_out",
+      amountCents: 8500,
+      bucketSplits: [{ bucketId: 7, amountCents: 8500 }],
+    });
+  });
+
+  it("takes nothing out of a bucket when the money is not in one", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "POST /api/entries": () => ({ status: 201, data: VET, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.keyboard("{Control>}e{/Control}");
+    const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Vet");
+    await userEvent.selectOptions(await within(dialog).findByRole("combobox", { name: "Comes out of" }), "Money that is not in a bucket");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({ kind: "money_out", bucketSplits: [] });
   });
 
   it("switches kind inside the one form: money in is an estimate, a transfer needs two accounts", async () => {

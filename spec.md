@@ -520,6 +520,13 @@ Transactions on the account page (decided 2026-10-09; Rachel: "a way to see all 
 
 No "built from $0" wording anywhere (Rachel, 2026-10-09: "It's assumed. If no account adjustment has ever been made, that's the happy path").
 
+A bucket can never be overdrawn; an account can (decided 2026-10-09 with Rachel):
+- **Typed into a bucket**: an amount beyond what the account has outside its buckets is refused, for every account, including one with no balance entered.
+- **Spending from an account with buckets**: a one-off Money out or Transfer has a required **Comes out of** choice — "Money that is not in a bucket" or one of the account's buckets. Out of a bucket, the bucket and the account go down together (`bucketSplits` naming a bucket of the paying account; bucket move kind `spent`), and more than the bucket holds that day is refused.
+- **The account itself** is never refused: it may go overdrawn, and says so loudly — an alert on the pay period's account panel and the account page, "Overdrawn today" in the Accounts list. Buckets holding more than their account get the same kind of alert.
+- **Removing a balance** is refused when it would leave the buckets holding more than the account.
+- Not yet built: the same "Comes out of" choice on **recurring** items (bills, budgets, transfers out, card payments), which needs a new column on item versions.
+
 ### Carried forward into later phases
 
 | Feature | Notes |
