@@ -19,9 +19,6 @@ const CHOICE = '[role="option"], [role="group"] button';
  * changed and not saved, those ask first, so a stray click never throws work away. (A form's
  * own Cancel button is a deliberate "discard" and does not ask.)
  *
- * With `drawer`, wide screens get a full-height panel on the right instead (the edit drawer
- * in design/recurring.png), so the list behind it stays in view.
- *
  * The header is a tinted strip with an icon for what the form is about, so one form is told
  * from another at a glance. `tone` gives the strip the color of the account or bucket being
  * edited; without it the strip takes the accent color. The title itself stays in the normal
@@ -30,14 +27,12 @@ const CHOICE = '[role="option"], [role="group"] button';
 export function Modal({
   title,
   onClose,
-  drawer = false,
   icon: Icon,
   tone,
   children,
 }: {
   title: string;
   onClose: () => void;
-  drawer?: boolean;
   /** A picture of what this form adds or changes. */
   icon?: LucideIcon;
   /** A hex color for the header, e.g. the color of the account being edited. */
@@ -128,9 +123,7 @@ export function Modal({
         pressedOutside.current = event.target === event.currentTarget;
       }}
       onClick={onBackdropClick}
-      className={`fixed inset-0 z-30 flex items-end justify-center bg-black/50 sm:items-center sm:p-4 ${
-        drawer ? "lg:items-stretch lg:justify-end lg:p-0" : ""
-      }`}
+      className="fixed inset-0 z-30 flex items-end justify-center bg-black/50 sm:items-center sm:p-4"
     >
       <div
         ref={panel}
@@ -143,9 +136,7 @@ export function Modal({
           changed.current = true;
         }}
         onClickCapture={noteChoice}
-        className={`max-h-dvh w-full overflow-y-auto rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6 ${
-          drawer ? "lg:max-w-lg lg:rounded-none" : ""
-        }`}
+        className="max-h-dvh w-full overflow-y-auto rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
       >
         <div
           // Reaches the panel's edges through its padding; a light tint, so the title keeps its contrast.

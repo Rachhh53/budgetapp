@@ -1,4 +1,4 @@
-import { RotateCw } from "lucide-react";
+import { CalendarClock } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { type Account, holdsCash } from "../../api/accounts";
 import { useBuckets, useSaveBucket } from "../../api/buckets";
@@ -74,7 +74,7 @@ interface ItemFormProps {
 }
 
 /**
- * Add or change a recurring item (the edit drawer in design/recurring.png). Everything chosen
+ * Add or change a recurring item, in the same centered dialog as every other form. Everything chosen
  * from a list is a dropdown or a type-to-filter picker; a category or tag that does not
  * exist yet can be added from its picker without leaving the form.
  *
@@ -85,9 +85,8 @@ export function ItemForm(props: ItemFormProps) {
   return (
     <Modal
       title={props.title ?? (props.item ? `Edit ${props.item.name}` : "Add a recurring item")}
-      icon={props.item ? KIND_ICONS[props.item.kind] : props.preset ? KIND_ICONS.bucket_move : RotateCw}
+      icon={props.item ? KIND_ICONS[props.item.kind] : props.preset ? KIND_ICONS.bucket_move : CalendarClock}
       onClose={props.onClose}
-      drawer
     >
       <ItemFormBody {...props} />
     </Modal>

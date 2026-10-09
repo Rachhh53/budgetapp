@@ -28,7 +28,7 @@ const COLUMNS =
 /**
  * Recurring items (design/recurring.png): every bill, transfer, budget and card payment,
  * filterable by kind and by search, with what each costs a year, which paycheck pays for it
- * and when it is next due. Choosing one opens the edit drawer.
+ * and when it is next due. Choosing one opens it for editing.
  */
 export function RecurringItemsPage() {
   const searchId = useId();

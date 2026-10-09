@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, type LucideIcon, Minus, Plus, RotateCw } from "lucide-react";
+import { ArrowLeftRight, CalendarClock, ChevronDown, type LucideIcon, Minus, Plus } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -51,7 +51,7 @@ const KIND_CHOICES: readonly { value: AddKind; label: string; icon: LucideIcon }
   { value: "money_out", label: "Money out", icon: Minus },
   { value: "money_in", label: "Money in", icon: Plus },
   { value: "transfer", label: "Transfer", icon: ArrowLeftRight },
-  { value: "recurring", label: "Recurring", icon: RotateCw },
+  { value: "recurring", label: "Recurring", icon: CalendarClock },
 ];
 
 const EDITABLE = "input, textarea, select, [contenteditable='true']";
@@ -181,7 +181,7 @@ const MENU: readonly { kind: AddKind; label: string; about: string; shortcut?: s
   { kind: "money_out", label: "Money out", about: "One-time purchase, gift, donation, emergency", shortcut: "Ctrl+E", icon: Minus },
   { kind: "money_in", label: "Money in", about: "Bonus, refund, gift, reimbursement, side cash", shortcut: "Ctrl+I", icon: Plus },
   { kind: "transfer", label: "Transfer", about: "Between two of your accounts", icon: ArrowLeftRight },
-  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer, bucket move or card payment that repeats", icon: RotateCw },
+  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer, bucket move or card payment that repeats", icon: CalendarClock },
 ];
 
 /**
