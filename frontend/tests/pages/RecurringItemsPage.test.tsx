@@ -32,6 +32,7 @@ const RENT: Item = {
   kind: "bill",
   note: null,
   archived: false,
+  createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 155000,
   amountMode: "per_occurrence",
@@ -534,9 +535,9 @@ describe("recurring items screen", () => {
     expect(amount).toHaveValue("1550.00");
     await userEvent.clear(amount);
     await userEvent.type(amount, "1600");
-    // The change is dated today and that is stated, not asked: earlier pay periods keep the old rent.
-    expect(within(dialog).getByText("Changes apply from")).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText(/apply.* from/i)).not.toBeInTheDocument();
+    // The day it was added is stated, not asked; the change itself is dated today.
+    expect(within(dialog).getByText("Date added").nextElementSibling).toHaveTextContent("Jan 5, 2026");
+    expect(within(dialog).queryByLabelText(/apply.* from|date added/i)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

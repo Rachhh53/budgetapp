@@ -228,6 +228,24 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
+        void aStartStillToComeWaitsForTheFirstPaydayOnOrAfterIt() throws Exception {
+            long travel = bucket(checking, "Travel", 0);
+
+            // Oct 21 is part-way through the Oct 15 pay period, whose payday will have gone by.
+            Reply reply = server.post("/api/items", """
+                    {"name":"Travel fund","kind":"bucket_move","amountCents":2500,"bucketId":%d,
+                     "schedule":{"frequency":"every_pay_period","startDate":"2026-10-21"}}""".formatted(travel), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            assertThat(reply.data().get("schedule").get("startDate").asText()).isEqualTo("2026-11-01");
+            assertThat(reply.data().get("createdOn").asText()).isEqualTo("2026-10-08");
+            JsonNode october = period("2026-10-15");
+            assertThat(october.get("occurrences").findValuesAsText("name")).doesNotContain("Travel fund");
+            assertThat(bucketIn(october, travel).get("endingCents").asLong()).isZero();
+            assertThat(bucketIn(period("2026-11-01"), travel).get("endingCents").asLong()).isEqualTo(2500);
+        }
+
+        @Test
         void aTransferNeverMovesTheDayItsBucketCountsFrom() throws Exception {
             assertThat(server.get("/api/buckets/" + emergency, cookie).data().get("bucket").get("openedOn").asText())
                     .isEqualTo("2026-10-08");

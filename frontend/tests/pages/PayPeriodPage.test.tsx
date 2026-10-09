@@ -157,6 +157,7 @@ const ELECTRIC_ITEM: Item = {
   kind: "bill",
   note: null,
   archived: false,
+  createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 14000,
   amountMode: "per_occurrence",

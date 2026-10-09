@@ -140,6 +140,7 @@ public final class ItemsRoutes {
             ItemKind kind,
             String note,
             boolean archived,
+            LocalDate createdOn,
             List<Long> tagIds,
             long amountCents,
             AmountMode amountMode,
@@ -296,6 +297,7 @@ public final class ItemsRoutes {
                 item.kind(),
                 item.note(),
                 item.archived(),
+                item.createdOn(),
                 item.tagIds(),
                 terms.amountCents(),
                 terms.amountMode(),
@@ -316,6 +318,27 @@ public final class ItemsRoutes {
                                 occurrence.scheduledDate(), occurrence.dueDate(), occurrence.periodStart(), occurrence.early()))
                         .orElse(null),
                 item.versions().stream().map(this::pricePoint).toList());
+    }
+
+    /**
+     * An "every paycheck" item counts for the whole pay period its start falls in: one added
+     * today belongs to the paycheck already being spent. A start that is still to come means
+     * something else, "not before this day", so it is moved on to the first payday on or after
+     * it. It is saved as that payday, which is then what the form shows.
+     */
+    private ScheduleRule fromThePaydayItStartsOn(ScheduleRule rule) {
+        LocalDate start = rule.startDate();
+        if (rule.frequency() != Frequency.EVERY_PAY_PERIOD || !start.isAfter(pay.today())) {
+            return rule;
+        }
+        return pay.payPeriods(start, start).stream()
+                // Part-way through a period: its payday has already gone by on the start day.
+                .filter(period -> period.start().isBefore(start) && !period.end().isBefore(start))
+                .findFirst()
+                .map(period -> new ScheduleRule(
+                        rule.frequency(), rule.interval(), rule.day1(), rule.day2(), rule.month(),
+                        period.end().plusDays(1), rule.endDate(), rule.weekendRule(), rule.manualDates()))
+                .orElse(rule);
     }
 
     private PricePoint pricePoint(Version version) {
@@ -398,7 +421,7 @@ public final class ItemsRoutes {
         if (input.schedule() == null) {
             throw ApiException.badRequest("Please choose how often it repeats.");
         }
-        ScheduleRule schedule = input.schedule().toRule();
+        ScheduleRule schedule = fromThePaydayItStartsOn(input.schedule().toRule());
         int daysAfterPayday = input.daysAfterPayday() == null ? 0 : input.daysAfterPayday();
         if (daysAfterPayday < 0 || daysAfterPayday > MAX_DAYS_AFTER_PAYDAY) {
             throw ApiException.badRequest("Please choose how many days after payday, from 0 to " + MAX_DAYS_AFTER_PAYDAY + ".");

@@ -84,6 +84,8 @@ export interface Item extends ItemTerms {
   kind: ItemKind;
   note: string | null;
   archived: boolean;
+  /** The day it was added. Shown, never changed. */
+  createdOn: string;
   tagIds: number[];
   perOccurrenceCents: number;
   perYearCents: number;

@@ -426,7 +426,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
               />
               <p className={HINT}>
                 {everyPaycheck
-                  ? "It begins with the paycheck for the pay period this day falls in. Choose an earlier day to include earlier paychecks."
+                  ? "Today or earlier: it begins with the paycheck for the pay period that day falls in. A later day: it begins with the first paycheck on or after it, and this date moves to that payday when you save."
                   : "Nothing is scheduled before this day. Choose an earlier day to include earlier ones."}
                 {isBucketMove && " The bucket counts from then too."}
               </p>
@@ -493,13 +493,13 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
 
         {item && (
           <>
-            {/* Not a field: a change is dated the day it is made. When the item begins is its own date, above. */}
+            {/* Not a field: a fact about the item. When it begins is its own date, above. */}
             <div>
-              <p className={LABEL}>Changes apply from</p>
-              <p className="tabular-nums">Today, {formatDate(todayIso())}</p>
+              <p className={LABEL}>Date added</p>
+              <p className="tabular-nums">{formatDate(item.createdOn)}</p>
               <p className={HINT}>
-                This and all future: anything dated before today keeps what it had. An earlier start date is the exception, and reaches
-                back to that date.
+                Changes you save now apply from today on; anything dated before today keeps what it had. A different start date is the
+                exception, and applies from that date.
               </p>
             </div>
 
