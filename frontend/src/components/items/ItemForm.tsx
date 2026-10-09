@@ -14,6 +14,7 @@ import {
   type ItemKind,
   type Placement,
   useDeleteItem,
+  useReplaceItem,
   useSaveItem,
 } from "../../api/items";
 import { formatDate, todayIso } from "../../lib/dates";
@@ -81,6 +82,7 @@ export function ItemForm(props: ItemFormProps) {
 export function ItemFormBody({ item, accounts, categories, tags, onClose }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
+  const replace = useReplaceItem(item?.id);
   const schedule = item?.schedule;
 
   const [kind, setKind] = useState<ItemKind>(item?.kind ?? "bill");
@@ -230,12 +232,45 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
     save.mutate(input, { onSuccess: onClose });
   };
 
-  const failure = problem ?? save.error?.message;
+  /** Archives this item and adds the form as a new one from today, leaving the old one's past alone. */
+  const addAsNew = () => {
+    const input = toInput();
+    if (typeof input === "string") {
+      setProblem(input);
+      return;
+    }
+    setProblem(undefined);
+    // A new item: nothing to date a change from, and not archived whatever the old one was.
+    const { effectiveFrom: _unused, ...fresh } = input;
+    replace.mutate({ ...fresh, archived: false }, { onSuccess: onClose });
+  };
+
+  const kindChanged = item !== undefined && kind !== item.kind;
+  const failure = problem ?? save.error?.message ?? replace.error?.message;
 
   return (
     <>
       <form onSubmit={submit} className="space-y-4">
         <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={changeKind} />
+
+        {kindChanged && (
+          // An item is one kind for its whole life, so this cannot apply "from today on" like other changes.
+          <div role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+            <p className="font-semibold">
+              Changing the type changes {item.name} all the way back to when it started.
+            </p>
+            <p className="mt-1 text-muted">
+              Its earlier dates will count as a {KIND_LABELS[kind].toLowerCase()} too, between the accounts you choose here. The dates and
+              amounts in its history stay as they are.
+            </p>
+            <p className="mt-2 text-muted">
+              To leave its past alone, archive it and add this as a new item that starts today.
+            </p>
+            <button type="button" onClick={addAsNew} disabled={replace.isPending || save.isPending} className={`${BUTTON_SECONDARY} mt-2`}>
+              {replace.isPending ? "Adding…" : "Archive this and add a new item"}
+            </button>
+          </div>
+        )}
 
         <FormSection title="Amount">
           <div>

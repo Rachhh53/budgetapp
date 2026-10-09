@@ -156,9 +156,37 @@ public final class ItemsRepository {
      * are replaced by one new version; earlier ones are left exactly as they were, so past
      * occurrences keep what they had. Nothing is written when the terms did not change.
      * The caller has checked that the item exists.
+     *
+     * <p>The one exception is a change of kind. An item has one kind for its whole life, so
+     * earlier versions cannot keep accounts and buckets that meant something else (a bucket
+     * move turned into a transfer would be left with nowhere to go). Those versions keep their
+     * dates, amounts and schedules, and take where the money comes from and goes to from the
+     * new terms.
      */
     public void update(long id, Identity identity, Terms terms, LocalDate effectiveFrom) {
         jdbi.useTransaction(handle -> {
+            boolean kindChanged = !handle.createQuery("SELECT kind FROM items WHERE id = :id")
+                    .bind("id", id)
+                    .mapTo(String.class)
+                    .one()
+                    .equals(Inputs.code(identity.kind()));
+            if (kindChanged) {
+                handle.createUpdate("""
+                                UPDATE item_versions
+                                SET pay_from_account_id = :payFrom, pay_to_account_id = :payTo, autopay = :autopay,
+                                    placement = :placement, bucket_id = :bucketId, save_up_bucket_id = :saveUpBucketId
+                                WHERE item_id = :id AND effective_from < :effectiveFrom
+                                """)
+                        .bind("id", id)
+                        .bind("effectiveFrom", effectiveFrom.toString())
+                        .bind("payFrom", terms.payFromAccountId())
+                        .bind("payTo", terms.payToAccountId())
+                        .bind("autopay", terms.autopay())
+                        .bind("placement", Inputs.code(terms.placement()))
+                        .bind("bucketId", terms.bucketId())
+                        .bind("saveUpBucketId", terms.saveUpBucketId())
+                        .execute();
+            }
             handle.createUpdate("UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived WHERE id = :id")
                     .bind("id", id)
                     .bind("name", identity.name())
@@ -180,6 +208,31 @@ public final class ItemsRepository {
                 }
             }
             insertVersion(handle, id, effectiveFrom, terms);
+        });
+    }
+
+    /**
+     * Archives one item and adds another in its place, in one step: for changing what an item
+     * is from now on while leaving the old one's history exactly as it was. Returns the new id.
+     * The caller has checked that the item exists.
+     */
+    public long replace(long id, Identity identity, Terms terms) {
+        return jdbi.inTransaction(handle -> {
+            handle.createUpdate("UPDATE items SET archived = 1 WHERE id = :id").bind("id", id).execute();
+            long created = handle.createQuery("""
+                            INSERT INTO items (name, kind, note, archived, created_at)
+                            VALUES (:name, :kind, :note, 0, :now)
+                            RETURNING id
+                            """)
+                    .bind("name", identity.name())
+                    .bind("kind", Inputs.code(identity.kind()))
+                    .bind("note", identity.note())
+                    .bind("now", clock.instant().toString())
+                    .mapTo(Long.class)
+                    .one();
+            insertVersion(handle, created, terms.schedule().startDate(), terms);
+            replaceTags(handle, created, identity.tagIds());
+            return created;
         });
     }
 

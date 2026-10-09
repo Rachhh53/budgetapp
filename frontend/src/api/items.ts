@@ -140,6 +140,18 @@ export function useSaveItem(id?: number) {
   });
 }
 
+/**
+ * Archives the item with `id` and adds what is sent as a new item that starts today: for
+ * turning an item into another kind without changing what it was before.
+ */
+export function useReplaceItem(id: number | undefined) {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: (input: ItemInput) => api.post<Item>(`/api/items/${id}/replacement`, input),
+    onSuccess: refresh,
+  });
+}
+
 /** An item as the request that would save it unchanged, to change one thing about it. */
 function asInput(item: Item): ItemInput {
   return {

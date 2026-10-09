@@ -76,6 +76,7 @@ public final class ItemsRoutes {
         routes.get("/api/items/{id}", ctx -> ApiResponse.ok(ctx, view(Inputs.id(ctx, "id"))));
         routes.put("/api/items/{id}", this::update);
         routes.delete("/api/items/{id}", this::delete);
+        routes.post("/api/items/{id}/replacement", this::replace);
         routes.put("/api/items/{id}/occurrences/{scheduledDate}", this::editOccurrence);
     }
 
@@ -220,6 +221,29 @@ public final class ItemsRoutes {
         items.update(id, identity, terms, effectiveFrom);
         letItsBucketCountFromItsStart(terms);
         ApiResponse.ok(ctx, view(id));
+    }
+
+    /**
+     * Archives an item and adds what was sent as a new one that starts today: the way to turn
+     * an item into another kind without touching what it was before. A start date that was
+     * sent is ignored, or the new item would repeat the old one's past.
+     */
+    private void replace(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        ItemInput input = Inputs.body(ctx, ItemInput.class);
+        // Everything is checked before anything is written, so a mistake leaves the old item as it was.
+        Identity identity = identity(input);
+        Terms sent = terms(input, identity.kind());
+        ScheduleRule rule = sent.schedule();
+        Terms terms = sent.withSchedule(new ScheduleRule(
+                rule.frequency(), rule.interval(), rule.day1(), rule.day2(), rule.month(),
+                pay.today(), rule.endDate(), rule.weekendRule(), rule.manualDates()));
+        if (items.find(id).isEmpty()) {
+            throw ApiException.notFound();
+        }
+        long created = items.replace(id, identity, terms);
+        letItsBucketCountFromItsStart(terms);
+        ApiResponse.send(ctx, 201, view(created));
     }
 
     private void delete(Context ctx) {

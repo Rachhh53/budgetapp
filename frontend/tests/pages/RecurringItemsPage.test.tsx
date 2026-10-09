@@ -634,6 +634,31 @@ describe("recurring items screen", () => {
     ]);
   });
 
+  it("warns that a change of type reaches back, and can archive the item and add a new one instead", async () => {
+    const fetchMock = withItems(undefined, {
+      "POST /api/items/2/replacement": () => ({ status: 201, data: { ...ELECTRIC, id: 9, kind: "budget" }, changed: true }),
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    // Nothing is said until the type is actually different.
+    expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Budget" }));
+    const warning = within(dialog).getByRole("status");
+    expect(warning).toHaveTextContent("Changing the type changes Electric all the way back to when it started.");
+    expect(warning).toHaveTextContent("Its earlier dates will count as a budget too");
+
+    await userEvent.click(within(warning).getByRole("button", { name: "Archive this and add a new item" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const sent = bodiesSentTo(fetchMock, "POST /api/items/2/replacement")[0] as Record<string, unknown>;
+    expect(sent).toMatchObject({ name: "Electric", kind: "budget", archived: false });
+    expect(sent).not.toHaveProperty("effectiveFrom");
+    // The item itself was not changed.
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toEqual([]);
+  });
+
   it("opens an item for editing from a click anywhere on its row", async () => {
     withItems([RENT]);
     renderApp("/recurring");

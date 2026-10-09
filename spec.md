@@ -499,6 +499,8 @@ Goals on the pay period screen (decided 2026-10-09): each bucket in the Accounts
 
 Recurring items sort (decided 2026-10-09): pressing a column heading orders the list by that column, pressing it again reverses it (an arrow and `aria-sort` show which); items with no next date go last. On a phone, where there is no header row, a "Sort by" list and a direction button do the same.
 
+Changing an item's type (decided 2026-10-09): an item is one kind for its whole life, so a change of type cannot apply "from today on". Saving it moves every earlier version to the new accounts and buckets while keeping each version's date, amount and schedule (Amount history keeps every entry). The form warns about this as soon as the type differs and offers one button, **Archive this and add a new item** (`POST /api/items/{id}/replacement`), which leaves the old item's past alone: it is archived and the form is added as a new item starting today. Found when a bucket move turned into a transfer left its earlier dates paying from the savings account to nowhere.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

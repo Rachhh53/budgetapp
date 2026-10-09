@@ -258,6 +258,82 @@ class ItemsApiTest extends ApiTestBase {
     }
 
     @Nested
+    class ChangingWhatKindOfItemItIs {
+        private String transferToSavings(long cents) {
+            return "{\"name\":\"Car loan\",\"kind\":\"transfer\",\"amountCents\":%d,\"payFromAccountId\":%d,\"payToAccountId\":%d,\"autopay\":true,\"schedule\":%s}"
+                    .formatted(cents, checking, savings, MONTHLY_5TH);
+        }
+
+        private JsonNode septemberOccurrence() throws Exception {
+            return server.get("/api/pay-periods/2026-09-01", cookie).data().get("occurrences").get(0);
+        }
+
+        @Test
+        void earlierDatesBecomeTheNewKindTooAndTheHistoryKeepsEveryDate() throws Exception {
+            long id = created("/api/items", carLoan());
+            server.put("/api/items/" + id, bill("Car loan", 43000, MONTHLY_5TH, "\"autopay\":true,\"effectiveFrom\":\"2026-06-01\""), cookie);
+            assertThat(septemberOccurrence().get("payToAccountId").isNull()).isTrue();
+
+            JsonNode item = server.put("/api/items/" + id, transferToSavings(45000), cookie).data();
+
+            // Every earlier date and amount is still there, with today's change added.
+            assertThat(item.get("kind").asText()).isEqualTo("transfer");
+            assertThat(item.get("history").findValuesAsText("effectiveFrom")).containsExactly("2026-01-01", "2026-06-01", "2026-10-01");
+            assertThat(item.get("history").findValues("perOccurrenceCents").stream().map(JsonNode::asLong))
+                    .containsExactly(41200L, 43000L, 45000L);
+            // A transfer from before the change goes where the item goes now, at what it cost then.
+            JsonNode september = septemberOccurrence();
+            assertThat(september.get("kind").asText()).isEqualTo("transfer");
+            assertThat(september.get("payToAccountId").asLong()).isEqualTo(savings);
+            assertThat(september.get("amountCents").asLong()).isEqualTo(43000);
+        }
+
+        @Test
+        void replacingArchivesTheOldItemAndAddsANewOneFromToday() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply reply = server.post("/api/items/" + id + "/replacement", transferToSavings(45000), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            JsonNode added = reply.data();
+            assertThat(added.get("id").asLong()).isNotEqualTo(id);
+            assertThat(added.get("kind").asText()).isEqualTo("transfer");
+            assertThat(added.get("archived").asBoolean()).isFalse();
+            // Whatever start was sent, the new one begins today, so it does not repeat the old one's past.
+            assertThat(added.get("schedule").get("startDate").asText()).isEqualTo("2026-10-01");
+            assertThat(added.get("history").findValuesAsText("effectiveFrom")).containsExactly("2026-10-01");
+            // The old one is untouched apart from being archived.
+            JsonNode old = server.get("/api/items/" + id, cookie).data();
+            assertThat(old.get("archived").asBoolean()).isTrue();
+            assertThat(old.get("kind").asText()).isEqualTo("bill");
+            assertThat(old.get("amountCents").asLong()).isEqualTo(41200);
+        }
+
+        @Test
+        void aReplacementThatIsNotValidLeavesTheOldItemAsItWas() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply reply = server.post("/api/items/" + id + "/replacement",
+                    "{\"name\":\"Car loan\",\"kind\":\"transfer\",\"amountCents\":45000,\"payFromAccountId\":%d,\"schedule\":%s}"
+                            .formatted(checking, MONTHLY_5TH),
+                    cookie);
+
+            assertThat(reply.status()).isEqualTo(400);
+            assertThat(server.get("/api/items", cookie).data()).hasSize(1);
+            assertThat(server.get("/api/items/" + id, cookie).data().get("archived").asBoolean()).isFalse();
+        }
+
+        @Test
+        void replacingNeedsASessionAndAnItemThatExists() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            assertThat(server.post("/api/items/" + id + "/replacement", transferToSavings(45000), null).status()).isEqualTo(401);
+            assertThat(server.post("/api/items/9999/replacement", transferToSavings(45000), cookie).status()).isEqualTo(404);
+            assertThat(server.get("/api/items", cookie).data()).hasSize(1);
+        }
+    }
+
+    @Nested
     class Changing {
         @Test
         void aChangeAppliesFromItsDateAndKeepsThePriceHistory() throws Exception {
