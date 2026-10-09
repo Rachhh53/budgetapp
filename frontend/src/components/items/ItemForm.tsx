@@ -1,7 +1,8 @@
 import { type FormEvent, useId, useState } from "react";
-import type { Account } from "../../api/accounts";
-import { useBuckets } from "../../api/buckets";
+import { type Account, holdsCash } from "../../api/accounts";
+import { useBuckets, useSaveBucket } from "../../api/buckets";
 import type { Category, Tag } from "../../api/categories";
+import { usePayPeriods } from "../../api/income";
 import {
   type AmountMode,
   type Item,
@@ -17,6 +18,7 @@ import {
 import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
+import { firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
@@ -101,9 +103,12 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
     item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
   );
   const [problem, setProblem] = useState<string>();
+  const addBucket = useSaveBucket();
+  const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
 
   // Archived buckets are left out, unless this item already points at one.
-  const openBuckets = (useBuckets().data ?? []).filter(
+  const everyBucket = useBuckets().data ?? [];
+  const openBuckets = everyBucket.filter(
     (bucket) => !bucket.archived || [bucketId, saveUpBucketId].includes(String(bucket.id)),
   );
   const bucketOptionsIn = (accountId: string | null) =>
@@ -120,7 +125,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const isBucketMove = kind === "bucket_move";
   const canSaveUp = kind === "bill" || kind === "budget";
   const transferBuckets = kind === "transfer" ? bucketOptionsIn(payTo) : [];
-  const saveUpBuckets = canSaveUp ? bucketOptionsIn(payFrom) : [];
+  // Only an account that can hold buckets can be saved up in.
+  const saveUpAccount = canSaveUp ? accounts.find((account) => String(account.id) === payFrom && holdsCash(account.type)) : undefined;
+  const saveUpBuckets = saveUpAccount ? bucketOptionsIn(payFrom) : [];
   // A bucket chosen for another account, or another kind of item, no longer applies.
   const chosenTransferBucket = transferBuckets.some((option) => option.id === bucketId) ? bucketId : null;
   const chosenSaveUpBucket = saveUpBuckets.some((option) => option.id === saveUpBucketId) ? saveUpBucketId : null;
@@ -446,28 +453,51 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           )}
         </fieldset>
 
-        {/* Always shown on a bill or budget, so it can be found; when it cannot be used yet, it says what is missing. */}
-        {canSaveUp && saveUpBuckets.length === 0 && (
+        {/* Always shown on a bill or budget, so it can be found; when it cannot be used, it says why. */}
+        {canSaveUp && saveUpAccount === undefined && (
           <div>
             <p className={LABEL}>Save up for it in a bucket (optional)</p>
             <p className={HINT}>
               {payFrom === null
                 ? "Choose the account it is paid from first. A share can then be set aside in one of that account's buckets every paycheck."
-                : `${accounts.find((account) => String(account.id) === payFrom)?.name ?? "This account"} has no buckets yet. Add one on its page (Accounts, then the account, then Add a bucket) and you can choose it here, to set a share aside every paycheck.`}
+                : "Buckets live in checking and savings accounts, so there is nowhere to save up for something paid from this one."}
             </p>
           </div>
         )}
-        {saveUpBuckets.length > 0 && (
+        {saveUpAccount !== undefined && (
           <div>
             <Picker
               label="Save up for it in a bucket (optional)"
               noun="bucket"
-              placeholder="Don't save up"
+              placeholder={saveUpBuckets.length === 0 ? "Type a name to add a bucket" : "Choose a bucket, or type a new one"}
               options={saveUpBuckets}
               value={chosenSaveUpBucket}
               onChange={setSaveUpBucketId}
+              // A bucket that does not exist yet is added in place, in the account this is paid from.
+              onCreate={(text) =>
+                addBucket.mutate(
+                  {
+                    accountId: saveUpAccount.id,
+                    name: text,
+                    color: firstUnusedColor([...everyBucket].reverse().map((bucket) => bucket.color)),
+                    goalCents: null,
+                    goalDate: null,
+                    note: null,
+                    archived: false,
+                    // From this paycheck's payday, as a bucket added on its own page would be.
+                    openedOn: currentPeriod?.start ?? todayIso(),
+                    startingCents: 0,
+                  },
+                  { onSuccess: (created) => setSaveUpBucketId(String(created.bucket.id)) },
+                )
+              }
               clearable
             />
+            {addBucket.error && (
+              <p role="alert" className="mt-1 text-sm text-danger">
+                {addBucket.error.message}
+              </p>
+            )}
             <p className={HINT}>
               A share is set aside every paycheck, so the money is there when it's due.
               {item?.saveUpPerPaycheckCents != null && chosenSaveUpBucket !== null && (

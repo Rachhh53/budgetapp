@@ -20,6 +20,23 @@ export interface Bucket {
   openedOn: string;
   /** What it holds today; zero once archived. */
   balanceCents: number;
+  /** The day the goal is to be reached by; `null` when there is none. */
+  goalDate: string | null;
+  /** How it stands against its goal; `null` unless it has both a goal and a date for it. */
+  goalProgress: GoalProgress | null;
+}
+
+/** Whether what is already scheduled reaches a bucket's goal by its date, and what it would take if not. */
+export interface GoalProgress {
+  /** What the bucket is projected to hold at the end of the goal date. */
+  projectedCents: number;
+  /** How much of the goal is still missing then; zero when it is on track. */
+  shortCents: number;
+  paydaysLeft: number;
+  /** What to add every paycheck to close the gap; `null` when nothing is missing or no payday is left. */
+  morePerPaycheckCents: number | null;
+  /** The same, set aside monthly; `null` when nothing is missing or the date has passed. */
+  morePerMonthCents: number | null;
 }
 
 /** Money the user put into (+) or took out of (−) a bucket by hand. */
@@ -49,6 +66,8 @@ export interface BucketInput {
   startingCents?: number;
   /** The day it counts from: today or earlier. */
   openedOn: string;
+  /** The day to reach the goal by; `null` for none. */
+  goalDate: string | null;
 }
 
 export interface BucketChangeInput {

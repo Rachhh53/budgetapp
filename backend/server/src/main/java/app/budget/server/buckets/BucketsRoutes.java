@@ -1,5 +1,7 @@
 package app.budget.server.buckets;
 
+import app.budget.engine.Money;
+import app.budget.engine.buckets.GoalPace;
 import app.budget.server.accounts.Account;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
@@ -14,6 +16,8 @@ import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -56,6 +60,7 @@ public final class BucketsRoutes {
      *
      * @param accountId     when adding: the checking or savings account it sits in. It cannot be changed later.
      * @param startingCents when adding: what is already set aside, if anything
+     * @param goalDate      the day the goal is to be reached by, if there is one; it means nothing without a goal
      * @param openedOn      the day it counts from; left out, a new bucket counts from today and an existing one keeps its day
      */
     public record BucketInput(
@@ -66,7 +71,8 @@ public final class BucketsRoutes {
             String note,
             Boolean archived,
             Long startingCents,
-            LocalDate openedOn) {}
+            LocalDate openedOn,
+            LocalDate goalDate) {}
 
     /** Request body for putting money into (+) or taking it out of (−) a bucket by hand. */
     public record ChangeInput(LocalDate date, Long amountCents, String note) {}
@@ -75,6 +81,7 @@ public final class BucketsRoutes {
      * A bucket as the API returns it.
      *
      * @param balanceCents what it holds today; zero once archived, when it no longer holds anything back
+     * @param goalProgress how it stands against its goal; {@code null} unless it has both a goal and a date for it
      */
     public record BucketView(
             long id,
@@ -85,7 +92,23 @@ public final class BucketsRoutes {
             String note,
             boolean archived,
             LocalDate openedOn,
-            long balanceCents) {}
+            long balanceCents,
+            LocalDate goalDate,
+            GoalProgress goalProgress) {}
+
+    /**
+     * Whether what is already scheduled reaches the goal by its date, and what it would take if not.
+     *
+     * @param projectedCents       what the bucket is projected to hold at the end of the goal date
+     * @param shortCents           how much of the goal is still missing then; zero when it is on track
+     * @param paydaysLeft          paydays from tomorrow to the goal date
+     * @param morePerPaycheckCents what to add every paycheck to close the gap; {@code null} when
+     *                             nothing is missing or no payday is left
+     * @param morePerMonthCents    the same, set aside monthly; {@code null} when nothing is missing
+     *                             or the date has passed
+     */
+    public record GoalProgress(
+            long projectedCents, long shortCents, int paydaysLeft, Long morePerPaycheckCents, Long morePerMonthCents) {}
 
     /** @param changes what the user moved in and out by hand, newest first */
     public record BucketDetail(BucketView bucket, List<Change> changes) {}
@@ -169,12 +192,41 @@ public final class BucketsRoutes {
     }
 
     private List<BucketView> views(List<Bucket> chosen) {
-        Map<Long, Long> held = chosen.isEmpty() ? Map.of() : ledger.bucketBalances(LocalDate.now(clock));
+        LocalDate today = LocalDate.now(clock);
+        Map<Long, Long> held = chosen.isEmpty() ? Map.of() : ledger.bucketBalances(today);
+        // Buckets often share a goal date (the end of the year, say), so each date is projected once.
+        Map<LocalDate, Map<Long, Long>> heldOn = new HashMap<>();
         return chosen.stream()
                 .map(bucket -> new BucketView(
                         bucket.id(), bucket.accountId(), bucket.name(), bucket.color(), bucket.goalCents(), bucket.note(),
-                        bucket.archived(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L)))
+                        bucket.archived(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L), bucket.goalDate(),
+                        goalProgress(bucket, today, held, heldOn)))
                 .toList();
+    }
+
+    private GoalProgress goalProgress(Bucket bucket, LocalDate today, Map<Long, Long> heldToday, Map<LocalDate, Map<Long, Long>> heldOn) {
+        if (bucket.archived() || bucket.goalCents() == null || bucket.goalDate() == null) {
+            return null;
+        }
+        LocalDate by = bucket.goalDate();
+        // A date already gone by has nothing left to project: what it holds now is what it reached.
+        Map<Long, Long> then = by.isAfter(today) ? heldOn.computeIfAbsent(by, ledger::bucketBalances) : heldToday;
+        Money projected = Money.ofCents(then.getOrDefault(bucket.id(), 0L));
+        Money shortBy = GoalPace.shortfall(Money.ofCents(bucket.goalCents()), projected);
+        int paydays = by.isAfter(today) ? ledger.paydaysBetween(today.plusDays(1), by) : 0;
+        boolean missing = shortBy.cents() > 0;
+        return new GoalProgress(
+                projected.cents(),
+                shortBy.cents(),
+                paydays,
+                missing && paydays > 0 ? (Long) GoalPace.each(shortBy, paydays).cents() : null,
+                missing && by.isAfter(today) ? (Long) GoalPace.each(shortBy, monthsLeft(today, by)).cents() : null);
+    }
+
+    /** Whole months from {@code today} to {@code by}, counting a part month as one: there is always at least one. */
+    private static int monthsLeft(LocalDate today, LocalDate by) {
+        int months = (int) ChronoUnit.MONTHS.between(today, by);
+        return today.plusMonths(months).isBefore(by) ? months + 1 : Math.max(1, months);
     }
 
     /**
@@ -205,6 +257,9 @@ public final class BucketsRoutes {
                 && (!Inputs.inSupportedYears(input.openedOn()) || input.openedOn().isAfter(LocalDate.now(clock)))) {
             throw ApiException.badRequest("Please choose today or an earlier day for this bucket to count from.");
         }
+        if (input.goalDate() != null && !Inputs.inSupportedYears(input.goalDate())) {
+            throw ApiException.badRequest("Please choose the date to reach the goal by.");
+        }
         Long goal = input.goalCents() == null ? null : (Long) Inputs.amount(input.goalCents(), "The goal");
         return new Fields(
                 Inputs.text(input.name(), "a name for the bucket", NAME_MAX),
@@ -213,6 +268,8 @@ public final class BucketsRoutes {
                 goal == null || goal == 0 ? null : goal,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
                 Boolean.TRUE.equals(input.archived()),
-                input.openedOn());
+                input.openedOn(),
+                // A date for a goal that is not there says nothing.
+                goal == null || goal == 0 ? null : input.goalDate());
     }
 }

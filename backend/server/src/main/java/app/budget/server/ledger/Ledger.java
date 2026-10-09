@@ -273,6 +273,14 @@ public final class Ledger {
         return figures.isEmpty() ? Optional.empty() : Optional.of(figures.getFirst().availableCents());
     }
 
+    /** How many paydays fall within {@code from}–{@code through}, both inclusive. */
+    public int paydaysBetween(LocalDate from, LocalDate through) {
+        return (int) pay.payPeriods(from, through).stream()
+                .map(PayPeriod::start)
+                .filter(payday -> !payday.isBefore(from) && !payday.isAfter(through))
+                .count();
+    }
+
     /**
      * For each recurring item being saved up for: what the next paycheck sets aside for it.
      * An item is left out once its next bill is fully saved for.

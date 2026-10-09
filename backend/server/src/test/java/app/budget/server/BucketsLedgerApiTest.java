@@ -293,6 +293,87 @@ class BucketsLedgerApiTest extends ApiTestBase {
     }
 
     @Nested
+    class SavingTowardsAGoalByADate {
+
+        private JsonNode giftsWithGoal(String goalAndDate) throws Exception {
+            Reply reply = server.post("/api/buckets",
+                    "{\"accountId\":%d,\"name\":\"Holiday gifts\",\"color\":\"#b45309\",\"startingCents\":15000,%s}"
+                            .formatted(checking, goalAndDate),
+                    cookie);
+            assertThat(reply.status()).isEqualTo(201);
+            return reply.data().get("bucket");
+        }
+
+        private void save50EveryPaycheck(long bucketId) throws Exception {
+            created("/api/items", """
+                    {"name":"Gift fund","kind":"bucket_move","amountCents":5000,"bucketId":%d,
+                     "schedule":{"frequency":"every_pay_period","startDate":"2026-10-01"}}""".formatted(bucketId));
+        }
+
+        @Test
+        void saysHowFarShortItWillBeAndWhatClosingTheGapTakes() throws Exception {
+            long gifts = giftsWithGoal("\"goalCents\":60000,\"goalDate\":\"2026-12-01\"").get("id").asLong();
+            save50EveryPaycheck(gifts);
+
+            JsonNode bucket = server.get("/api/buckets/" + gifts, cookie).data().get("bucket");
+
+            assertThat(bucket.get("goalDate").asText()).isEqualTo("2026-12-01");
+            JsonNode progress = bucket.get("goalProgress");
+            // 150.00 there already, plus 50.00 on Oct 1, Oct 15, Nov 1, Nov 15 and Dec 1.
+            assertThat(progress.get("projectedCents").asLong()).isEqualTo(40000);
+            assertThat(progress.get("shortCents").asLong()).isEqualTo(20000);
+            // Four paydays are still to come (today's has been counted), over two months.
+            assertThat(progress.get("paydaysLeft").asInt()).isEqualTo(4);
+            assertThat(progress.get("morePerPaycheckCents").asLong()).isEqualTo(5000);
+            assertThat(progress.get("morePerMonthCents").asLong()).isEqualTo(10000);
+        }
+
+        @Test
+        void isOnTrackWhenWhatIsScheduledGetsThere() throws Exception {
+            long gifts = giftsWithGoal("\"goalCents\":40000,\"goalDate\":\"2026-12-01\"").get("id").asLong();
+            save50EveryPaycheck(gifts);
+
+            JsonNode progress = server.get("/api/buckets/" + gifts, cookie).data().get("bucket").get("goalProgress");
+
+            assertThat(progress.get("shortCents").asLong()).isZero();
+            assertThat(progress.get("morePerPaycheckCents").isNull()).isTrue();
+            assertThat(progress.get("morePerMonthCents").isNull()).isTrue();
+        }
+
+        @Test
+        void withNothingScheduledTheWholeGapIsSharedOut() throws Exception {
+            JsonNode progress = giftsWithGoal("\"goalCents\":25000,\"goalDate\":\"2026-11-10\"").get("goalProgress");
+
+            // 100.00 missing; paydays on Oct 15 and Nov 1; one month and a bit counts as two.
+            assertThat(progress.get("shortCents").asLong()).isEqualTo(10000);
+            assertThat(progress.get("morePerPaycheckCents").asLong()).isEqualTo(5000);
+            assertThat(progress.get("morePerMonthCents").asLong()).isEqualTo(5000);
+        }
+
+        @Test
+        void aGoalWithoutADateOrADateWithoutAGoalHasNoProgressToReport() throws Exception {
+            JsonNode noDate = giftsWithGoal("\"goalCents\":60000");
+            assertThat(noDate.get("goalDate").isNull()).isTrue();
+            assertThat(noDate.get("goalProgress").isNull()).isTrue();
+
+            Reply noGoal = server.post("/api/buckets",
+                    "{\"accountId\":%d,\"name\":\"Travel\",\"color\":\"#b45309\",\"goalDate\":\"2026-12-01\"}".formatted(checking), cookie);
+            assertThat(noGoal.data().get("bucket").get("goalDate").isNull()).isTrue();
+        }
+
+        @Test
+        void aDateAlreadyGoneByReportsWhatItReachedAndAsksForNothingMore() throws Exception {
+            JsonNode progress = giftsWithGoal("\"goalCents\":60000,\"goalDate\":\"2026-09-01\"").get("goalProgress");
+
+            assertThat(progress.get("projectedCents").asLong()).isEqualTo(15000);
+            assertThat(progress.get("shortCents").asLong()).isEqualTo(45000);
+            assertThat(progress.get("paydaysLeft").asInt()).isZero();
+            assertThat(progress.get("morePerPaycheckCents").isNull()).isTrue();
+            assertThat(progress.get("morePerMonthCents").isNull()).isTrue();
+        }
+    }
+
+    @Nested
     class BucketsCannotHoldMoreThanTheAccount {
         private static final String NO_ROOM =
                 "That is more than this account has outside its buckets. Please enter a smaller amount, or update the account's balance first.";

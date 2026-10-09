@@ -110,6 +110,8 @@ const GIFTS: Bucket = {
   note: null,
   archived: false,
   openedOn: "2026-09-01",
+  goalDate: null,
+  goalProgress: null,
   balanceCents: 15000,
 };
 const EMERGENCY: Bucket = { ...GIFTS, id: 8, accountId: 2, name: "Emergency fund", goalCents: null };
@@ -393,6 +395,41 @@ describe("recurring items screen", () => {
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toHaveLength(1));
     expect(bodiesSentTo(fetchMock, "PUT /api/items/2")[0]).toMatchObject({ kind: "bill", saveUpBucketId: 7, bucketId: null });
+  });
+
+  it("adds a bucket in place from the save-up picker, in the account the bill is paid from", async () => {
+    let buckets = [EMERGENCY];
+    const created = { ...GIFTS, id: 12, name: "Car insurance", goalCents: null, balanceCents: 0 };
+    const fetchMock = withItems([ELECTRIC], {
+      "GET /api/buckets": () => ({ status: 200, data: buckets }),
+      "POST /api/buckets": () => {
+        buckets = [...buckets, created];
+        return { status: 201, data: { bucket: created, changes: [] }, changed: true };
+      },
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    // The account it is paid from has no bucket yet, and the option is there all the same.
+    const saveUp = within(dialog).getByRole("combobox", { name: "Save up for it in a bucket (optional)" });
+    await userEvent.type(saveUp, "Car insurance{Enter}");
+
+    await waitFor(() => expect(saveUp).toHaveValue("Car insurance"));
+    expect(bodiesSentTo(fetchMock, "POST /api/buckets")).toMatchObject([
+      { accountId: ELECTRIC.payFromAccountId, name: "Car insurance", goalCents: null, startingCents: 0 },
+    ]);
+  });
+
+  it("says why a bill paid from a card cannot be saved up for", async () => {
+    withItems([{ ...ELECTRIC, payFromAccountId: VISA.id }]);
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+
+    expect(within(dialog).getByText(/Buckets live in checking and savings accounts/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("combobox", { name: "Save up for it in a bucket (optional)" })).not.toBeInTheDocument();
   });
 
   it("adds a yearly bill entered as an annual amount", async () => {

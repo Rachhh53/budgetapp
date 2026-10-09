@@ -33,6 +33,7 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const [name, setName] = useState(bucket?.name ?? "");
   const [color, setColor] = useState(bucket?.color ?? firstUnusedColor(usedColors));
   const [goal, setGoal] = useState(bucket?.goalCents != null ? centsToInput(bucket.goalCents) : "");
+  const [goalDate, setGoalDate] = useState(bucket?.goalDate ?? "");
   const [starting, setStarting] = useState("");
   const [held, setHeld] = useState(bucket ? centsToInput(bucket.balanceCents) : "");
   // Only used for a bucket that exists; a new one takes its first amount as it is added.
@@ -76,6 +77,8 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
         note: note.trim() === "" ? null : note,
         archived,
         openedOn,
+        // A date only means something beside a goal.
+        goalDate: goalCents !== null && goalCents > 0 && goalDate !== "" ? goalDate : null,
         ...(bucket ? {} : { startingCents: startingCents ?? 0 }),
       });
       // A bucket's amount is the sum of what moved in and out, so a new amount is recorded
@@ -115,6 +118,22 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <MoneyField label="Goal (optional)" value={goal} onChange={setGoal} hint="What you are working towards, if anything." />
+          <div>
+            <label htmlFor={`${id}-goal-date`} className={LABEL}>
+              Goal date (optional)
+            </label>
+            <input
+              id={`${id}-goal-date`}
+              type="date"
+              value={goalDate}
+              onChange={(event) => setGoalDate(event.target.value)}
+              className={INPUT}
+            />
+            <p className={HINT}>
+              With a goal and a date, the bucket shows whether you are saving enough to get there, and how much more each paycheck or
+              month it would take.
+            </p>
+          </div>
           {!bucket && (
             <MoneyField
               label="Already set aside (optional)"

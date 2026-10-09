@@ -12,7 +12,7 @@ import org.jdbi.v3.core.Jdbi;
 public final class BucketsRepository {
 
     private static final String SELECT =
-            "SELECT id, account_id, name, color, goal_amount, note, archived, opened_on FROM buckets ";
+            "SELECT id, account_id, name, color, goal_amount, note, archived, opened_on, goal_date FROM buckets ";
 
     private final Jdbi jdbi;
     private final Clock clock;
@@ -28,16 +28,27 @@ public final class BucketsRepository {
      * @param goalCents {@code null} when the bucket has no goal
      * @param openedOn  the day it counts from: recurring moves, save-ups and interest reach it from then on.
      *                  The day it was added, unless the user chose an earlier one.
+     * @param goalDate  the day the goal is to be reached by; {@code null} when there is none
      */
     public record Bucket(
-            long id, long accountId, String name, String color, Long goalCents, String note, boolean archived, LocalDate openedOn) {}
+            long id,
+            long accountId,
+            String name,
+            String color,
+            Long goalCents,
+            String note,
+            boolean archived,
+            LocalDate openedOn,
+            LocalDate goalDate) {}
 
     /**
      * What the user can set on a bucket. The account is chosen once, when it is added.
      *
      * @param openedOn {@code null} for today when adding, and to leave it as it is when changing
+     * @param goalDate {@code null} for no date
      */
-    public record Fields(String name, String color, Long goalCents, String note, boolean archived, LocalDate openedOn) {}
+    public record Fields(
+            String name, String color, Long goalCents, String note, boolean archived, LocalDate openedOn, LocalDate goalDate) {}
 
     /** Money put into (+) or taken out of (−) a bucket by hand. */
     public record Change(long id, long bucketId, LocalDate date, long amountCents, String note) {}
@@ -77,8 +88,8 @@ public final class BucketsRepository {
     public long create(long accountId, Fields fields) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
-                        INSERT INTO buckets (account_id, name, color, goal_amount, note, archived, sort_order, opened_on, created_at)
-                        VALUES (:accountId, :name, :color, :goal, :note, :archived,
+                        INSERT INTO buckets (account_id, name, color, goal_amount, goal_date, note, archived, sort_order, opened_on, created_at)
+                        VALUES (:accountId, :name, :color, :goal, :goalDate, :note, :archived,
                                 (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM buckets WHERE account_id = :accountId),
                                 :openedOn, :now)
                         RETURNING id
@@ -87,6 +98,7 @@ public final class BucketsRepository {
                 .bind("name", fields.name())
                 .bind("color", fields.color())
                 .bind("goal", fields.goalCents())
+                .bind("goalDate", fields.goalDate() == null ? null : fields.goalDate().toString())
                 .bind("note", fields.note())
                 .bind("archived", fields.archived())
                 .bind("openedOn", (fields.openedOn() == null ? LocalDate.now(clock) : fields.openedOn()).toString())
@@ -100,12 +112,13 @@ public final class BucketsRepository {
         return jdbi.withHandle(handle -> handle
                 .createUpdate("""
                         UPDATE buckets
-                        SET name = :name, color = :color, goal_amount = :goal, note = :note, archived = :archived,
+                        SET name = :name, color = :color, goal_amount = :goal, goal_date = :goalDate, note = :note, archived = :archived,
                             opened_on = COALESCE(:openedOn, opened_on)
                         WHERE id = :id
                         """)
                 .bind("id", id)
                 .bind("openedOn", fields.openedOn() == null ? null : fields.openedOn().toString())
+                .bind("goalDate", fields.goalDate() == null ? null : fields.goalDate().toString())
                 .bind("name", fields.name())
                 .bind("color", fields.color())
                 .bind("goal", fields.goalCents())
@@ -202,7 +215,8 @@ public final class BucketsRepository {
                 noGoal ? null : goal,
                 rs.getString("note"),
                 rs.getBoolean("archived"),
-                LocalDate.parse(rs.getString("opened_on")));
+                LocalDate.parse(rs.getString("opened_on")),
+                rs.getString("goal_date") == null ? null : LocalDate.parse(rs.getString("goal_date")));
     }
 
     private static Change change(ResultSet rs) throws SQLException {

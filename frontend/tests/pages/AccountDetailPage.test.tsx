@@ -37,6 +37,8 @@ const GIFTS: Bucket = {
   note: null,
   archived: false,
   openedOn: "2026-09-01",
+  goalDate: null,
+  goalProgress: null,
   balanceCents: 20000,
 };
 
@@ -236,6 +238,80 @@ describe("account detail screen", () => {
       );
     });
 
+    it("shows what reaching a goal by its date would take, and starts saving it in one step", async () => {
+      const short = {
+        ...GIFTS,
+        goalDate: "2099-12-01",
+        goalProgress: { projectedCents: 40000, shortCents: 20000, paydaysLeft: 4, morePerPaycheckCents: 5000, morePerMonthCents: 10000 },
+      };
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [short] }),
+        "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      const gifts = (await screen.findByRole("button", { name: "Edit Holiday gifts" })).closest("li")!;
+      expect(gifts).toHaveTextContent("33% of $600.00 by Dec 1, 2099");
+      expect(gifts).toHaveTextContent("Short by $200.00.");
+      expect(gifts).toHaveTextContent("it will hold $400.00 by Dec 1, 2099");
+      expect(gifts).toHaveTextContent("set aside $50.00 more every paycheck, or $100.00 more a month");
+
+      await userEvent.click(within(gifts).getByRole("button", { name: "Start saving $50.00 every paycheck" }));
+
+      await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/items")).toHaveLength(1));
+      expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({
+        name: "Holiday gifts goal",
+        kind: "bucket_move",
+        amountCents: 5000,
+        bucketId: 7,
+        payFromAccountId: 1,
+        schedule: { frequency: "every_pay_period", endDate: "2099-12-01" },
+      });
+    });
+
+    it("says a bucket is on track when what is scheduled reaches its goal in time", async () => {
+      const onTrack = {
+        ...GIFTS,
+        goalDate: "2099-12-01",
+        goalProgress: { projectedCents: 65000, shortCents: 0, paydaysLeft: 4, morePerPaycheckCents: null, morePerMonthCents: null },
+      };
+      fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [onTrack] }),
+      });
+      renderApp("/accounts/1");
+
+      const gifts = (await screen.findByRole("button", { name: "Edit Holiday gifts" })).closest("li")!;
+      expect(gifts).toHaveTextContent("On track.");
+      expect(gifts).toHaveTextContent("it will hold $650.00 by Dec 1, 2099");
+      expect(within(gifts).queryByRole("button", { name: /Start saving/ })).not.toBeInTheDocument();
+    });
+
+    it("saves a goal date with the goal, and drops it when the goal is removed", async () => {
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: GIFTS, changes: [] }, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      let dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await userEvent.type(within(dialog).getByLabelText("Goal date (optional)"), "2026-12-01");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")).toHaveLength(1));
+      expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[0]).toMatchObject({ goalCents: 60000, goalDate: "2026-12-01" });
+
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await userEvent.type(within(dialog).getByLabelText("Goal date (optional)"), "2026-12-01");
+      await userEvent.clear(within(dialog).getByRole("textbox", { name: "Goal (optional)" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")).toHaveLength(2));
+      expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[1]).toMatchObject({ goalCents: null, goalDate: null });
+    });
+
     it("says so when the buckets hold more than the account does", async () => {
       fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
@@ -278,6 +354,7 @@ describe("account detail screen", () => {
           note: null,
           archived: false,
           openedOn: "2026-01-01",
+          goalDate: null,
           startingCents: 15000,
         },
       ]);
