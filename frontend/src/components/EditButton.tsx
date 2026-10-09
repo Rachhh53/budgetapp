@@ -16,6 +16,8 @@ export function EditButton({ name, onClick, labelled = false }: EditButtonProps)
   return (
     <button
       type="button"
+      // Marks it as the row's way in, so a click anywhere on the row can be handed to it (see rowEdit).
+      data-edit
       onClick={onClick}
       aria-label={`Edit ${name}`}
       title={`Edit ${name}`}

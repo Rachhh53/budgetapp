@@ -270,6 +270,59 @@ describe("account detail screen", () => {
       });
     });
 
+    it("adds a recurring move into a bucket from its row, starting at what its goal takes", async () => {
+      const short = {
+        ...GIFTS,
+        goalDate: "2099-12-01",
+        goalProgress: { projectedCents: 40000, shortCents: 20000, paydaysLeft: 4, morePerPaycheckCents: 5000, morePerMonthCents: 10000 },
+      };
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }),
+        "GET /api/buckets": () => ({ status: 200, data: [short] }),
+        "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Add a recurring move into Holiday gifts" }));
+      const dialog = screen.getByRole("dialog", { name: "Add a recurring move into Holiday gifts" });
+      // Already a bucket move into this bucket, every paycheck, at the suggested amount; all of it can be changed.
+      expect(within(dialog).getByRole("radio", { name: "Bucket move" })).toBeChecked();
+      expect(within(dialog).getByRole("combobox", { name: "Into bucket" })).toHaveValue("Holiday gifts · Everyday Checking");
+      expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("every_pay_period");
+      const amount = within(dialog).getByRole("textbox", { name: "Amount each time" });
+      expect(amount).toHaveValue("50.00");
+      await userEvent.clear(amount);
+      await userEvent.type(amount, "75");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({
+        name: "Holiday gifts",
+        kind: "bucket_move",
+        amountCents: 7500,
+        bucketId: 7,
+        payFromAccountId: 1,
+        schedule: { frequency: "every_pay_period", endDate: "2099-12-01" },
+      });
+    });
+
+    it("lists the recurring items that already put money in a bucket", async () => {
+      const fund = {
+        id: 5, name: "Gift fund", kind: "bucket_move", archived: false, bucketId: 7, saveUpBucketId: null, perOccurrenceCents: 5000,
+        schedule: { frequency: "every_pay_period", interval: null, day1: null, day2: null, month: null, startDate: "2026-10-01", endDate: null, weekendRule: "none" },
+      };
+      fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "GET /api/items": () => ({ status: 200, data: [fund] }),
+      });
+      renderApp("/accounts/1");
+
+      const feeding = await screen.findByRole("list", { name: "Recurring into Holiday gifts" });
+      expect(feeding).toHaveTextContent("Gift fund · $50.00 every paycheck");
+    });
+
     it("says a bucket is on track when what is scheduled reaches its goal in time", async () => {
       const onTrack = {
         ...GIFTS,

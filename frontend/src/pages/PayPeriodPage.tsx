@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { EditButton } from "../components/EditButton";
+import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
@@ -483,7 +484,7 @@ function Row({
   wrap?: boolean;
 }) {
   return (
-    <li className="py-1.5 lg:py-1">
+    <li onClick={clickRowToEdit} className={`py-1.5 lg:py-1 ${ROW_OPENS}`}>
       <div className="flex items-center gap-3">
         {lead}
         <div className="min-w-0 flex-1 leading-tight">

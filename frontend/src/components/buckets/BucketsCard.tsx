@@ -1,12 +1,16 @@
 import { useId, useState } from "react";
-import type { Account } from "../../api/accounts";
+import { type Account, useAccounts } from "../../api/accounts";
 import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
-import { useSaveItem } from "../../api/items";
+import { useCategories, useTags } from "../../api/categories";
+import { type Item, useItems, useSaveItem } from "../../api/items";
 import { addDays, formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
 import { EditButton } from "../EditButton";
-import { BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
+import { type BucketMovePreset, ItemForm } from "../items/ItemForm";
+import { describeItemSchedule } from "../items/labels";
+import { clickRowToEdit, ROW_OPENS } from "../rowEdit";
+import { BUTTON_LINK, BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
 import { BucketForm } from "./BucketForm";
 
 /**
@@ -18,6 +22,12 @@ export function BucketsCard({ account }: { account: Account }) {
   const [adding, setAdding] = useState(false);
   // Kept as ids, so an open form always shows the bucket as it is now.
   const [editingId, setEditingId] = useState<number>();
+  // The bucket a recurring move is being added to, with what the form starts out as.
+  const [movingInto, setMovingInto] = useState<BucketMovePreset>();
+  const items = useItems().data ?? [];
+  const accounts = useAccounts().data ?? [];
+  const categories = useCategories().data ?? [];
+  const tags = useTags().data ?? [];
 
   const all = buckets.data ?? [];
   const mine = all.filter((bucket) => bucket.accountId === account.id);
@@ -46,7 +56,13 @@ export function BucketsCard({ account }: { account: Account }) {
         <>
           <ul className="divide-y divide-line">
             {open.map((bucket) => (
-              <BucketLine key={bucket.id} bucket={bucket} onEdit={() => setEditingId(bucket.id)} />
+              <BucketLine
+                key={bucket.id}
+                bucket={bucket}
+                feeding={items.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))}
+                onEdit={() => setEditingId(bucket.id)}
+                onAddMove={() => setMovingInto(moveInto(bucket))}
+              />
             ))}
           </ul>
           <dl className="mt-2 space-y-1 border-t border-line pt-3">
@@ -66,7 +82,7 @@ export function BucketsCard({ account }: { account: Account }) {
       {archived.length > 0 && (
         <ul className="mt-3 border-t border-line pt-2">
           {archived.map((bucket) => (
-            <li key={bucket.id} className="flex items-center justify-between gap-3">
+            <li key={bucket.id} onClick={clickRowToEdit} className={`flex items-center justify-between gap-3 ${ROW_OPENS}`}>
               <span className="min-w-0 text-muted wrap-break-word">{bucket.name} · Archived</span>
               <EditButton name={bucket.name} onClick={() => setEditingId(bucket.id)} labelled />
             </li>
@@ -79,16 +95,53 @@ export function BucketsCard({ account }: { account: Account }) {
 
       {adding && <BucketForm account={account} buckets={all} onClose={() => setAdding(false)} />}
       {editing && <BucketForm account={account} bucket={editing} buckets={all} onClose={() => setEditingId(undefined)} />}
+      {movingInto && (
+        <ItemForm
+          preset={movingInto}
+          title={`Add a recurring move into ${movingInto.name}`}
+          accounts={accounts}
+          categories={categories}
+          tags={tags}
+          onClose={() => setMovingInto(undefined)}
+        />
+      )}
     </Card>
   );
 }
 
-function BucketLine({ bucket, onEdit }: { bucket: Bucket; onEdit: () => void }) {
+/**
+ * What the recurring item form starts out as for a move into this bucket. When the bucket is
+ * short of a goal with a date, it starts at what closing the gap takes every paycheck, from
+ * the next payday (this one is not among those the amount was shared over) to the goal date.
+ */
+function moveInto(bucket: Bucket): BucketMovePreset {
+  const suggested = bucket.goalProgress?.morePerPaycheckCents ?? null;
+  return {
+    bucketId: bucket.id,
+    name: bucket.name,
+    amountCents: suggested,
+    startDate: suggested === null ? null : addDays(todayIso(), 1),
+    endDate: suggested === null ? null : bucket.goalDate,
+  };
+}
+
+function BucketLine({
+  bucket,
+  feeding,
+  onEdit,
+  onAddMove,
+}: {
+  bucket: Bucket;
+  /** The recurring items that put money in this bucket. */
+  feeding: readonly Item[];
+  onEdit: () => void;
+  onAddMove: () => void;
+}) {
   const goal = bucket.goalCents;
   // Shown as at most full: a bucket can hold more than its goal.
   const reached = goal === null ? null : Math.max(0, Math.min(100, Math.round((bucket.balanceCents * 100) / goal)));
   return (
-    <li className="py-3">
+    <li onClick={clickRowToEdit} className={`py-3 ${ROW_OPENS}`}>
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <span aria-hidden className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: bucket.color }} />
@@ -110,7 +163,10 @@ function BucketLine({ bucket, onEdit }: { bucket: Bucket; onEdit: () => void }) 
           </span>
         </div>
         {/* One way in: the amount, the goal and the rest are all changed in the same form. */}
-        <div className="flex shrink-0 sm:justify-end">
+        <div className="flex shrink-0 flex-wrap gap-1 sm:justify-end">
+          <button type="button" onClick={onAddMove} aria-label={`Add a recurring move into ${bucket.name}`} className={BUTTON_LINK}>
+            Add a recurring move
+          </button>
           <EditButton name={bucket.name} onClick={onEdit} labelled />
         </div>
       </div>
@@ -119,6 +175,26 @@ function BucketLine({ bucket, onEdit }: { bucket: Bucket; onEdit: () => void }) 
         <div aria-hidden className="mt-1 h-2 overflow-hidden rounded-full bg-bg">
           <div className="h-full rounded-full" style={{ width: `${reached}%`, backgroundColor: bucket.color }} />
         </div>
+      )}
+      {/* Where its projection comes from: what already puts money in it on a schedule. */}
+      {feeding.length > 0 && (
+        <ul aria-label={`Recurring into ${bucket.name}`} className="mt-1 text-sm text-muted">
+          {feeding.map((item) => (
+            <li key={item.id}>
+              {item.name} ·{" "}
+              {item.saveUpBucketId === bucket.id ? (
+                "saved up for every paycheck"
+              ) : (
+                <>
+                  <span data-amount className="tabular-nums">
+                    {formatCents(item.perOccurrenceCents)}
+                  </span>{" "}
+                  {describeItemSchedule(item.schedule).toLowerCase()}
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
       <GoalPaceNote bucket={bucket} />
     </li>

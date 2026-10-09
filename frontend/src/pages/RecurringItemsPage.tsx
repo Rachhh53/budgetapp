@@ -6,6 +6,7 @@ import { type Item, ITEM_KINDS, type ItemKind, useItems } from "../api/items";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton } from "../components/EditButton";
+import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { ItemForm } from "../components/items/ItemForm";
 import { describeItemSchedule, describeKind, describeLandsIn, KIND_PLURALS } from "../components/items/labels";
 import { BUTTON_PRIMARY, INPUT, PAGE_TITLE } from "../components/ui";
@@ -210,7 +211,11 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
       : `${accountName(item.payFromAccountId)} → ${accountName(item.payToAccountId)}`;
 
   return (
-    <div role="row" className={`grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 md:px-5 ${COLUMNS} ${item.archived ? "text-muted" : ""}`}>
+    <div
+      role="row"
+      onClick={clickRowToEdit}
+      className={`grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 md:px-5 ${COLUMNS} ${ROW_OPENS} ${item.archived ? "text-muted" : ""}`}
+    >
       <span role="cell" className="min-w-0">
         <span className="block max-w-full truncate font-semibold">{item.name}</span>
         {item.archived && <span className="ml-2 rounded-md border border-line px-1.5 py-0.5 text-xs font-semibold">Archived</span>}

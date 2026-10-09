@@ -564,7 +564,7 @@ describe("recurring items screen", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
     expect(within(dialog).getByRole("combobox", { name: "Category (optional)" })).toHaveValue("Housing › Rent");
     expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
-    const history = within(dialog).getByRole("region", { name: "Price history" });
+    const history = within(dialog).getByRole("region", { name: "Amount history" });
     expect(history).toHaveTextContent("From Jan 1, 2025");
     expect(history).toHaveTextContent("$17,760.00 a year");
 
@@ -581,6 +581,17 @@ describe("recurring items screen", () => {
     expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toMatchObject([
       { name: "Rent", amountCents: 160000, effectiveFrom: todayIso(), schedule: { startDate: "2026-01-01", day1: 1 } },
     ]);
+  });
+
+  it("opens an item for editing from a click anywhere on its row", async () => {
+    withItems([RENT]);
+    renderApp("/recurring");
+    const row = await rowFor("Rent");
+
+    // On plain text in the row, not on the Edit button.
+    await userEvent.click(within(row).getByText("Rent"));
+
+    expect(screen.getByRole("dialog", { name: "Edit Rent" })).toBeInTheDocument();
   });
 
   it("shows when an item starts, and saves an earlier start so it can be backdated", async () => {
