@@ -434,7 +434,7 @@ describe("pay period screen", () => {
     expect(within(accounts).queryByText(/^Paid off/)).not.toBeInTheDocument();
   });
 
-  it("says when an account has no balance entered and is added up from nothing", async () => {
+  it("shows an account with no balance entered like any other, with no extra label", async () => {
     withPeriod({
       ...OCTOBER,
       accounts: [OCTOBER.accounts[0]!, { ...OCTOBER.accounts[1]!, entered: false, builtFromZero: true }],
@@ -443,9 +443,8 @@ describe("pay period screen", () => {
 
     const accounts = await panel("Accounts & buckets");
     await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
-    expect(within(accounts).getByText("Owed Oct 1 · built from $0").closest("div")).toHaveTextContent("$612.48");
-    expect(accounts).toHaveTextContent("No balance has been entered for Visa, so it is added up from $0 using everything set up for it.");
-    expect(within(accounts).getByRole("link", { name: "Enter a balance" })).toHaveAttribute("href", "/accounts/3");
+    expect(within(accounts).getByText("Owed Oct 1").closest("div")).toHaveTextContent("$612.48");
+    expect(accounts).not.toHaveTextContent(/built from/i);
   });
 
   it("says which day an account counts from when its balance was entered part-way through", async () => {

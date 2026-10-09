@@ -1018,14 +1018,13 @@ function AccountsPanel({
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />
         {beforeFirst ? (
           <AccountLine
-            label={balance.builtFromZero ? "Built from $0" : `First balance, entered ${formatDay(balance.startingOn)}`}
+            // An account with no balance entered simply has nothing in it yet: no first balance to name.
+            label={balance.builtFromZero ? `${owed ? "Owed" : "Starting"} ${formatDay(periodStart)}` : `First balance, entered ${formatDay(balance.startingOn)}`}
             cents={balance.startingCents}
           />
         ) : (
           <AccountLine
-            label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${
-              balance.entered ? " · set by you" : balance.builtFromZero ? " · built from $0" : ""
-            }`}
+            label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
             cents={balance.startingCents}
           />
         )}
@@ -1051,16 +1050,6 @@ function AccountsPanel({
       {beforeFirst && !balance.builtFromZero && (
         <p className="mt-1 text-sm text-muted">
           Nothing is counted for {shown.account.name} before the first balance you entered, so this pay period shows that balance as it is.
-        </p>
-      )}
-      {balance.builtFromZero && (
-        <p className="mt-1 text-sm text-muted">
-          No balance has been entered for {shown.account.name}, so it is added up from $0
-          {beforeFirst ? `: nothing moves in or out of it until ${formatDay(balance.startingOn)}` : " using everything set up for it"}.{" "}
-          <Link to={`/accounts/${shown.account.id}`} className="font-semibold text-accent-ink underline">
-            Enter a balance
-          </Link>{" "}
-          to start from what it really holds.
         </p>
       )}
       {held.length > 0 && (
