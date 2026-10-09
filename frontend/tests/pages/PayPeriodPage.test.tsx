@@ -358,6 +358,59 @@ describe("pay period screen", () => {
     expect(within(accounts).getByText("Paid off").closest("div")).toHaveTextContent("−$612.48");
   });
 
+  it("says how each goal is going, and stops saving into a bucket that has reached its goal", async () => {
+    const fund = {
+      ...ELECTRIC_ITEM,
+      id: 8,
+      name: "Gift fund",
+      kind: "bucket_move" as const,
+      bucketId: 7,
+      schedule: { ...ELECTRIC_ITEM.schedule, frequency: "every_pay_period" as const, endDate: null },
+    };
+    const short = {
+      ...GIFTS,
+      id: 9,
+      name: "New bike",
+      goalDate: "2099-12-01",
+      goalProgress: { projectedCents: 40000, shortCents: 20000, paydaysLeft: 4, morePerPaycheckCents: 5000, morePerMonthCents: 10000 },
+    };
+    const fetchMock = withPeriod(
+      {
+        ...OCTOBER,
+        end: "2099-10-14",
+        buckets: [
+          { bucketId: 7, accountId: 1, startingCents: 55000, endingCents: 60000 },
+          { bucketId: 9, accountId: 1, startingCents: 15000, endingCents: 20000 },
+        ],
+      },
+      {
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS, short] }),
+        "GET /api/items": () => ({ status: 200, data: [ELECTRIC_ITEM, fund] }),
+        "PUT /api/items/8": () => ({ status: 200, data: fund, changed: true }),
+      },
+    );
+    renderApp();
+
+    const buckets = within(await panel("Accounts & buckets")).getByRole("region", { name: "Buckets in Everyday Checking" });
+    const bike = within(buckets).getByText("New bike").closest("li")!;
+    expect(bike).toHaveTextContent("Short $50.00 a paycheck for Dec 1, 2099");
+    expect(within(bike).queryByRole("button", { name: /Stop saving/ })).not.toBeInTheDocument();
+
+    const gifts = within(buckets).getByText("Holiday gifts").closest("li")!;
+    expect(gifts).toHaveTextContent("Goal reached");
+    await userEvent.click(within(gifts).getByRole("button", { name: "Stop saving into Holiday gifts" }));
+
+    // The move into it ends with this pay period; nothing else about it changes.
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/8")[0]).toMatchObject({
+        name: "Gift fund",
+        kind: "bucket_move",
+        bucketId: 7,
+        schedule: { frequency: "every_pay_period", endDate: "2099-10-14" },
+      }),
+    );
+  });
+
   it("shows what is set aside in buckets and what that leaves available", async () => {
     const withBuckets: PeriodDetail = {
       ...OCTOBER,

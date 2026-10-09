@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Info } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info, PartyPopper } from "lucide-react";
 import { EditButton } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
@@ -8,7 +8,7 @@ import { type Bucket, useBuckets } from "../api/buckets";
 import { type Category, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
-import { type Item, useChangeItemAmount, useItems } from "../api/items";
+import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
 import {
   type AccountPeriod,
   type BucketPeriod,
@@ -189,6 +189,8 @@ export function PayPeriodPage() {
             accounts={accounts.data}
             buckets={buckets.data}
             bucketPeriods={detail.buckets}
+            items={items.data}
+            periodEnd={detail.end}
             primaryAccountId={detail.primaryAccountId}
           />
         </div>
@@ -919,12 +921,16 @@ function AccountsPanel({
   accounts,
   buckets,
   bucketPeriods,
+  items,
+  periodEnd,
   primaryAccountId,
 }: {
   balances: readonly AccountPeriod[];
   accounts: readonly Account[];
   buckets: readonly Bucket[];
   bucketPeriods: readonly BucketPeriod[];
+  items: readonly Item[];
+  periodEnd: string;
   primaryAccountId: number | null;
 }) {
   const id = useId();
@@ -1005,7 +1011,20 @@ function AccountsPanel({
           </div>
           <ul className="divide-y divide-line">
             {held.map(({ bucket, period }) => (
-              <BucketRow key={bucket.id} bucket={bucket} period={period} />
+              <BucketRow
+                key={bucket.id}
+                bucket={bucket}
+                period={period}
+                periodEnd={periodEnd}
+                // The recurring moves still putting money in it after this period: what "Stop saving" would end.
+                saving={items.filter(
+                  (item) =>
+                    !item.archived &&
+                    item.kind === "bucket_move" &&
+                    item.bucketId === bucket.id &&
+                    (item.schedule.endDate === null || item.schedule.endDate > periodEnd),
+                )}
+              />
             ))}
           </ul>
         </section>
@@ -1015,9 +1034,24 @@ function AccountsPanel({
 }
 
 /** One bucket at the end of the period: what it holds, what the period moved, and how far along its goal is. */
-function BucketRow({ bucket, period }: { bucket: Bucket; period: BucketPeriod }) {
+function BucketRow({
+  bucket,
+  period,
+  periodEnd,
+  saving,
+}: {
+  bucket: Bucket;
+  period: BucketPeriod;
+  periodEnd: string;
+  saving: readonly Item[];
+}) {
+  const stop = useEndItems();
   const moved = period.endingCents - period.startingCents;
   const goal = bucket.goalCents;
+  const goalReached = goal !== null && goal > 0 && period.endingCents >= goal;
+  // Against its goal date, as things stand today (the same words as on the account's page).
+  const pace = goalReached || bucket.goalDate === null ? null : bucket.goalProgress;
+  const projected = pace === null ? "" : `With what is scheduled it will hold ${formatCents(pace.projectedCents)} by ${formatDate(bucket.goalDate ?? "")}.`;
   // Shown as at most full: a bucket can hold more than its goal.
   const reached = goal === null ? null : Math.max(0, Math.min(100, Math.round((period.endingCents * 100) / goal)));
   const detail = [
@@ -1031,10 +1065,54 @@ function BucketRow({ bucket, period }: { bucket: Bucket; period: BucketPeriod })
       <div className="flex items-center gap-3">
         <Dot color={bucket.color} />
         <div className="min-w-0 flex-1 leading-tight">
-          <div className="font-medium wrap-break-word">{bucket.name}</div>
+          <div className="font-medium wrap-break-word">
+            {bucket.name}
+            {goalReached && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 align-middle text-xs font-semibold text-on-accent">
+                <PartyPopper aria-hidden className="size-3.5" />
+                Goal reached
+              </span>
+            )}
+          </div>
           {detail !== "" && (
             <div data-amount className="text-sm leading-tight text-muted tabular-nums">
               {detail}
+            </div>
+          )}
+          {/* In words, never color alone; the fuller sentence is there on hover. */}
+          {pace !== null && (
+            <div data-amount title={projected} className="text-sm leading-tight tabular-nums">
+              {pace.shortCents === 0 ? (
+                <span className="font-semibold">On track</span>
+              ) : (
+                <span className="font-semibold text-danger">
+                  Short{" "}
+                  {pace.morePerPaycheckCents !== null
+                    ? `${formatCents(pace.morePerPaycheckCents)} a paycheck`
+                    : `by ${formatCents(pace.shortCents)}`}
+                </span>
+              )}
+              <span className="text-muted"> for {formatDate(bucket.goalDate ?? "")}</span>
+            </div>
+          )}
+          {/* Only where it would change something: a move still running, in this period or a later one. */}
+          {goalReached && saving.length > 0 && periodEnd >= todayIso() && (
+            <div className="mt-1">
+              <button
+                type="button"
+                disabled={stop.isPending}
+                onClick={() => stop.mutate({ items: saving, endDate: periodEnd, effectiveFrom: todayIso() })}
+                aria-label={`Stop saving into ${bucket.name}`}
+                title={`Ends ${saving.map((item) => item.name).join(", ")} after this pay period. You can undo it straight afterwards.`}
+                className="min-h-11 rounded-lg border border-line px-3 text-sm font-semibold lg:min-h-8"
+              >
+                {stop.isPending ? "Stopping…" : "Stop saving"}
+              </button>
+              {stop.error && (
+                <p role="alert" className="text-sm text-danger">
+                  {stop.error.message}
+                </p>
+              )}
             </div>
           )}
         </div>

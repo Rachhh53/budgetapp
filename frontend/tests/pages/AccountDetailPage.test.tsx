@@ -297,6 +297,9 @@ describe("account detail screen", () => {
       const amount = within(dialog).getByRole("textbox", { name: "Set aside every paycheck (optional)" });
       expect(amount).toHaveAccessibleDescription(/Reaching the goal by Dec 1, 2099 takes \$50\.00 more every paycheck\./);
       await userEvent.type(amount, "75");
+      // With a goal date ahead, the move stops on it unless told to keep going.
+      const stopAtGoal = within(dialog).getByRole("checkbox", { name: "Stop on the goal date (Dec 1, 2099)" });
+      expect(stopAtGoal).toBeChecked();
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -306,8 +309,17 @@ describe("account detail screen", () => {
         amountCents: 7500,
         bucketId: 7,
         payFromAccountId: 1,
-        schedule: { frequency: "every_pay_period", endDate: null },
+        schedule: { frequency: "every_pay_period", endDate: "2099-12-01" },
       });
+
+      // Unticked, it keeps going after the goal date.
+      await userEvent.click(screen.getByRole("button", { name: "Edit Holiday gifts" }));
+      const again = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await userEvent.type(within(again).getByRole("textbox", { name: "Set aside every paycheck (optional)" }), "10");
+      await userEvent.click(within(again).getByRole("checkbox", { name: "Stop on the goal date (Dec 1, 2099)" }));
+      await userEvent.click(within(again).getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "POST /api/items")[1]).toMatchObject({ amountCents: 1000, schedule: { endDate: null } });
     });
 
     it("adds nothing recurring when that amount is left empty", async () => {

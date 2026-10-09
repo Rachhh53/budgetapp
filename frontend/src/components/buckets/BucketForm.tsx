@@ -47,6 +47,8 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const [problem, setProblem] = useState<string>();
   // A recurring move into the bucket, set up from here so it need not be found on another screen.
   const [everyPaycheck, setEveryPaycheck] = useState("");
+  // Saving towards a date usually ends on it; untick to keep setting money aside afterwards.
+  const [stopAtGoal, setStopAtGoal] = useState(true);
   const addMove = useSaveItem();
   // Set once a new bucket has been added, so trying again after a later step failed does not add it twice.
   const [createdId, setCreatedId] = useState<number>();
@@ -122,7 +124,7 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
           payToAccountId: null,
           autopay: true,
           placement: "due_period",
-          // From today, which counts for the paycheck in hand; it has no end until one is given under Recurring items.
+          // From today, which counts for the paycheck in hand. It ends on the goal date if asked to, and otherwise runs on.
           schedule: {
             frequency: "every_pay_period",
             interval: null,
@@ -130,7 +132,7 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
             day2: null,
             month: null,
             startDate: todayIso(),
-            endDate: null,
+            endDate: stopAtGoal && canStopAtGoal ? goalDate : null,
             weekendRule: "none",
           },
           daysAfterPayday: 0,
@@ -144,6 +146,8 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
     }
   };
 
+  // Only a goal with a date still ahead gives the move somewhere to stop.
+  const canStopAtGoal = goal.trim() !== "" && goalDate > todayIso();
   const saving = save.isPending || adjust.isPending || addMove.isPending;
   const failure = problem ?? save.error?.message ?? adjust.error?.message ?? addMove.error?.message;
 
@@ -244,6 +248,17 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
                   : "")
               }
             />
+            {canStopAtGoal && everyPaycheck.trim() !== "" && (
+              <label className="mt-1 flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={stopAtGoal}
+                  onChange={(event) => setStopAtGoal(event.target.checked)}
+                  className="size-5 accent-(--accent)"
+                />
+                <span>Stop on the goal date ({formatDate(goalDate)})</span>
+              </label>
+            )}
           </div>
         )}
 

@@ -140,6 +140,46 @@ export function useSaveItem(id?: number) {
   });
 }
 
+/** An item as the request that would save it unchanged, to change one thing about it. */
+function asInput(item: Item): ItemInput {
+  return {
+    name: item.name,
+    kind: item.kind,
+    note: item.note,
+    archived: item.archived,
+    tagIds: item.tagIds,
+    amountCents: item.amountCents,
+    amountMode: item.amountMode,
+    estimate: item.estimate,
+    categoryId: item.categoryId,
+    payFromAccountId: item.payFromAccountId,
+    payToAccountId: item.payToAccountId,
+    autopay: item.autopay,
+    placement: item.placement,
+    schedule: item.schedule,
+    daysAfterPayday: item.daysAfterPayday,
+    bucketId: item.bucketId,
+    saveUpBucketId: item.saveUpBucketId,
+  };
+}
+
+/**
+ * Ends recurring items on a day: nothing is scheduled after it, and everything up to it stays
+ * as it was. Used to stop saving into a bucket that has reached its goal.
+ */
+export function useEndItems() {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: ({ items, endDate, effectiveFrom }: { items: readonly Item[]; endDate: string; effectiveFrom: string }) =>
+      Promise.all(
+        items.map((item) =>
+          api.put<Item>(`/api/items/${item.id}`, { ...asInput(item), schedule: { ...item.schedule, endDate }, effectiveFrom }),
+        ),
+      ),
+    onSuccess: refresh,
+  });
+}
+
 /**
  * Changes an item's amount from one occurrence on ("this and all future"), leaving
  * everything else about it as it is. Earlier occurrences keep what they had.
@@ -148,27 +188,8 @@ export function useChangeItemAmount() {
   const refresh = useRefreshItems();
   return useMutation({
     mutationFn: ({ item, amountCents, effectiveFrom }: { item: Item; amountCents: number; effectiveFrom: string }) => {
-      const input: ItemInput = {
-        name: item.name,
-        kind: item.kind,
-        note: item.note,
-        archived: item.archived,
-        tagIds: item.tagIds,
-        amountCents,
-        amountMode: item.amountMode,
-        // A typed amount is the amount: it stops being an estimate (spec §1).
-        estimate: false,
-        categoryId: item.categoryId,
-        payFromAccountId: item.payFromAccountId,
-        payToAccountId: item.payToAccountId,
-        autopay: item.autopay,
-        placement: item.placement,
-        schedule: item.schedule,
-        daysAfterPayday: item.daysAfterPayday,
-        bucketId: item.bucketId,
-        saveUpBucketId: item.saveUpBucketId,
-        effectiveFrom,
-      };
+      // A typed amount is the amount: it stops being an estimate (spec §1).
+      const input: ItemInput = { ...asInput(item), amountCents, estimate: false, effectiveFrom };
       return api.put<Item>(`/api/items/${item.id}`, input);
     },
     onSuccess: refresh,

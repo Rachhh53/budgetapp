@@ -495,6 +495,8 @@ Buckets card tidy-up (decided 2026-10-09): a recurring move is set up inside the
 
 Pay period screen (decided 2026-10-09): hovering, focusing or tapping **Coming in** lists what it is made of for that account (each paycheck, one-off money in, transfers arriving, estimated interest); any difference from the backend's total is listed as its own line, so the list always adds up to the figure.
 
+Goals on the pay period screen (decided 2026-10-09): each bucket in the Accounts & buckets panel says how its goal is going at the end of that period, on its existing row (no new panel): "Goal reached", or against a goal date "On track" / "Short $X a paycheck". A bucket that has reached its goal offers **Stop saving**, which ends the recurring bucket moves into it after that pay period (their end date is set; Undo brings them back); otherwise a move does whatever it was set up to do. The bucket form's recurring move has a "Stop on the goal date" tick (on by default) when the goal has a date still ahead.
+
 ### Carried forward into later phases
 
 | Feature | Notes |
