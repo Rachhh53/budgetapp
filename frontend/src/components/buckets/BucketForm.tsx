@@ -3,11 +3,13 @@ import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Bucket, useDeleteBucket, useMoveBucketMoney, useSaveBucket } from "../../api/buckets";
 import { usePayPeriods } from "../../api/income";
-import { todayIso } from "../../lib/dates";
-import { centsToInput, parseDollars } from "../../lib/money";
+import { useItems, useSaveItem } from "../../api/items";
+import { formatDate, todayIso } from "../../lib/dates";
+import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
+import { describeItemSchedule } from "../items/labels";
 import { BucketHistory } from "./BucketHistory";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
@@ -43,6 +45,16 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
   const [archived, setArchived] = useState(bucket?.archived ?? false);
   const [chosenOpenedOn, setChosenOpenedOn] = useState<string | null>(bucket?.openedOn ?? null);
   const [problem, setProblem] = useState<string>();
+  // A recurring move into the bucket, set up from here so it need not be found on another screen.
+  const [everyPaycheck, setEveryPaycheck] = useState("");
+  const addMove = useSaveItem();
+  // Set once a new bucket has been added, so trying again after a later step failed does not add it twice.
+  const [createdId, setCreatedId] = useState<number>();
+  const everyItem = useItems().data ?? [];
+  const feeding = bucket
+    ? everyItem.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))
+    : [];
+  const stillNeeded = bucket?.goalProgress?.morePerPaycheckCents ?? null;
 
   // A new bucket counts from this paycheck's payday unless told otherwise, so a move set up
   // for "every paycheck" includes the paycheck in hand instead of silently waiting for the next.
@@ -64,28 +76,67 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
     const startingCents = optionalCents(starting);
     // An empty "In this bucket" reads as nothing in it.
     const heldCents = bucket ? (optionalCents(held) ?? 0) : null;
-    if (goalCents === "invalid" || startingCents === "invalid" || heldCents === "invalid") {
+    const moveCents = optionalCents(everyPaycheck);
+    if (goalCents === "invalid" || startingCents === "invalid" || heldCents === "invalid" || moveCents === "invalid") {
       setProblem(AMOUNT_HELP);
       return;
     }
     setProblem(undefined);
     try {
-      await save.mutateAsync({
-        accountId: account.id,
-        name,
-        color,
-        goalCents,
-        note: note.trim() === "" ? null : note,
-        archived,
-        openedOn,
-        // A date only means something beside a goal.
-        goalDate: goalCents !== null && goalCents > 0 && goalDate !== "" ? goalDate : null,
-        ...(bucket ? {} : { startingCents: startingCents ?? 0 }),
-      });
+      let bucketId = bucket?.id ?? createdId;
+      if (bucketId === undefined || bucket) {
+        const saved = await save.mutateAsync({
+          accountId: account.id,
+          name,
+          color,
+          goalCents,
+          note: note.trim() === "" ? null : note,
+          archived,
+          openedOn,
+          // A date only means something beside a goal.
+          goalDate: goalCents !== null && goalCents > 0 && goalDate !== "" ? goalDate : null,
+          ...(bucket ? {} : { startingCents: startingCents ?? 0 }),
+        });
+        bucketId = saved.bucket.id;
+        if (!bucket) {
+          setCreatedId(bucketId);
+        }
+      }
       // A bucket's amount is the sum of what moved in and out, so a new amount is recorded
       // as one more move, for the difference: the history keeps how it got there.
       if (bucket && heldCents !== null && !archived && heldCents !== bucket.balanceCents) {
         await adjust.mutateAsync({ date: todayIso(), amountCents: heldCents - bucket.balanceCents, note: ADJUSTED_NOTE });
+      }
+      if (moveCents !== null && moveCents > 0 && !archived) {
+        await addMove.mutateAsync({
+          name,
+          kind: "bucket_move",
+          note: null,
+          archived: false,
+          tagIds: [],
+          amountCents: moveCents,
+          amountMode: "per_occurrence",
+          estimate: false,
+          categoryId: null,
+          payFromAccountId: account.id,
+          payToAccountId: null,
+          autopay: true,
+          placement: "due_period",
+          // From today, which counts for the paycheck in hand; it has no end until one is given under Recurring items.
+          schedule: {
+            frequency: "every_pay_period",
+            interval: null,
+            day1: null,
+            day2: null,
+            month: null,
+            startDate: todayIso(),
+            endDate: null,
+            weekendRule: "none",
+          },
+          daysAfterPayday: 0,
+          bucketId,
+          saveUpBucketId: null,
+        });
       }
       onClose();
     } catch {
@@ -93,8 +144,8 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
     }
   };
 
-  const saving = save.isPending || adjust.isPending;
-  const failure = problem ?? save.error?.message ?? adjust.error?.message;
+  const saving = save.isPending || adjust.isPending || addMove.isPending;
+  const failure = problem ?? save.error?.message ?? adjust.error?.message ?? addMove.error?.message;
 
   return (
     <Modal
@@ -157,6 +208,44 @@ export function BucketForm({ account, bucket, buckets, onClose }: BucketFormProp
             />
           )}
         </div>
+
+        {!archived && (
+          <div>
+            {feeding.length > 0 && (
+              <>
+                <p className={LABEL}>Recurring into this bucket</p>
+                <ul aria-label="Recurring into this bucket" className="mb-3 text-muted">
+                  {feeding.map((item) => (
+                    <li key={item.id}>
+                      {item.name} ·{" "}
+                      {item.saveUpBucketId === bucket?.id ? (
+                        "saved up for every paycheck"
+                      ) : (
+                        <>
+                          <span data-amount className="tabular-nums">
+                            {formatCents(item.perOccurrenceCents)}
+                          </span>{" "}
+                          {describeItemSchedule(item.schedule).toLowerCase()}
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <MoneyField
+              label={feeding.length > 0 ? "Set aside more every paycheck (optional)" : "Set aside every paycheck (optional)"}
+              value={everyPaycheck}
+              onChange={setEveryPaycheck}
+              hint={
+                "Adds a recurring bucket move, starting with this paycheck. Change or stop it under Recurring items." +
+                (stillNeeded !== null && bucket?.goalDate
+                  ? ` Reaching the goal by ${formatDate(bucket.goalDate)} takes ${formatCents(stillNeeded)} more every paycheck.`
+                  : "")
+              }
+            />
+          </div>
+        )}
 
         <div>
           <label htmlFor={`${id}-opened`} className={LABEL}>

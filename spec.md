@@ -491,6 +491,8 @@ Form redesign (2026-10-09, §6): the recurring item form is a centered dialog li
 
 Archived recurring items (decided 2026-10-09): hidden from the Recurring items list and left out of the All and per-kind counts; an **Archived** filter chip, shown only when something is archived, lists them.
 
+Buckets card tidy-up (decided 2026-10-09): a recurring move is set up inside the bucket's own Add/Edit form ("Set aside every paycheck (optional)", which adds an every-paycheck bucket move from the paycheck in hand; the form also lists what already feeds the bucket) instead of from a button on its row; archived buckets sit in a closed "Archived buckets (n)" section like archived accounts; "Put the rest in a bucket" is closed until opened.
+
 ### Carried forward into later phases
 
 | Feature | Notes |

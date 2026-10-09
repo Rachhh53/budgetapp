@@ -49,24 +49,9 @@ const DAYS_AFTER_PAYDAY = Array.from({ length: 15 }, (_, days) => days);
 /** Months apart on offer for "every few months". */
 const MONTHS_APART = [2, 3, 4, 6];
 
-/** What a new item starts out as when it is added from a bucket: a move into that bucket. */
-export interface BucketMovePreset {
-  bucketId: number;
-  name: string;
-  /** What to suggest setting aside each time; `null` to leave the amount empty. */
-  amountCents: number | null;
-  /** When it begins and stops, for one that saves towards a goal date; `null` for the usual. */
-  startDate: string | null;
-  endDate: string | null;
-}
-
 interface ItemFormProps {
   /** The item being changed; leave out to add a new one. */
   item?: Item;
-  /** For a new item only: start it as a bucket move into one bucket. */
-  preset?: BucketMovePreset;
-  /** The dialog's title, when the usual one would say too little. */
-  title?: string;
   accounts: readonly Account[];
   categories: readonly Category[];
   tags: readonly Tag[];
@@ -84,8 +69,8 @@ interface ItemFormProps {
 export function ItemForm(props: ItemFormProps) {
   return (
     <Modal
-      title={props.title ?? (props.item ? `Edit ${props.item.name}` : "Add a recurring item")}
-      icon={props.item ? KIND_ICONS[props.item.kind] : props.preset ? KIND_ICONS.bucket_move : CalendarClock}
+      title={props.item ? `Edit ${props.item.name}` : "Add a recurring item"}
+      icon={props.item ? KIND_ICONS[props.item.kind] : CalendarClock}
       onClose={props.onClose}
     >
       <ItemFormBody {...props} />
@@ -94,37 +79,33 @@ export function ItemForm(props: ItemFormProps) {
 }
 
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
-export function ItemFormBody({ item, preset, accounts, categories, tags, onClose }: ItemFormProps) {
+export function ItemFormBody({ item, accounts, categories, tags, onClose }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
   const schedule = item?.schedule;
 
-  const [kind, setKind] = useState<ItemKind>(item?.kind ?? (preset ? "bucket_move" : "bill"));
-  const [name, setName] = useState(item?.name ?? preset?.name ?? "");
+  const [kind, setKind] = useState<ItemKind>(item?.kind ?? "bill");
+  const [name, setName] = useState(item?.name ?? "");
   const [categoryId, setCategoryId] = useState<number | null>(item?.categoryId ?? null);
   const [payFrom, setPayFrom] = useState<string | null>(item ? String(item.payFromAccountId) : null);
   const [payTo, setPayTo] = useState<string | null>(item?.payToAccountId != null ? String(item.payToAccountId) : null);
   const [amountMode, setAmountMode] = useState<AmountMode>(item?.amountMode ?? "per_occurrence");
-  const [amount, setAmount] = useState(
-    item ? centsToInput(item.amountCents) : preset?.amountCents != null ? centsToInput(preset.amountCents) : "",
-  );
+  const [amount, setAmount] = useState(item ? centsToInput(item.amountCents) : "");
   const [estimate, setEstimate] = useState(item?.estimate ?? false);
-  const [frequency, setFrequency] = useState<ItemFrequency>(schedule?.frequency ?? (preset ? "every_pay_period" : "monthly"));
+  const [frequency, setFrequency] = useState<ItemFrequency>(schedule?.frequency ?? "monthly");
   const [day1, setDay1] = useState(schedule?.day1 ?? 1);
   const [day2, setDay2] = useState(schedule?.day2 ?? 15);
   const [month, setMonth] = useState(schedule?.month ?? 1);
   const [monthsApart, setMonthsApart] = useState(schedule?.interval && schedule.interval > 1 ? schedule.interval : 3);
   // `null` until chosen: a new item then starts where its kind of schedule usually does (see `startsOn`).
-  const [chosenStart, setChosenStart] = useState<string | null>(schedule?.startDate ?? preset?.startDate ?? null);
+  const [chosenStart, setChosenStart] = useState<string | null>(schedule?.startDate ?? null);
   const [daysAfterPayday, setDaysAfterPayday] = useState(item?.daysAfterPayday ?? 0);
   const [autopay, setAutopay] = useState(item?.autopay ?? false);
   const [placement, setPlacement] = useState<Placement>(item?.placement ?? "due_period");
   const [tagIds, setTagIds] = useState<number[]>(item?.tagIds ?? []);
   const [note, setNote] = useState(item?.note ?? "");
   const [archived, setArchived] = useState(item?.archived ?? false);
-  const [bucketId, setBucketId] = useState<string | null>(
-    item?.bucketId != null ? String(item.bucketId) : preset ? String(preset.bucketId) : null,
-  );
+  const [bucketId, setBucketId] = useState<string | null>(item?.bucketId != null ? String(item.bucketId) : null);
   const [saveUpBucketId, setSaveUpBucketId] = useState<string | null>(
     item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
   );
@@ -228,7 +209,7 @@ export function ItemFormBody({ item, preset, accounts, categories, tags, onClose
         day2: frequency === "semi_monthly" ? day2 : null,
         month: frequency === "yearly" ? month : null,
         startDate: startsOn,
-        endDate: schedule?.endDate ?? preset?.endDate ?? null,
+        endDate: schedule?.endDate ?? null,
         weekendRule: schedule?.weekendRule ?? "none",
       },
       daysAfterPayday: everyPaycheck ? daysAfterPayday : 0,
@@ -259,7 +240,7 @@ export function ItemFormBody({ item, preset, accounts, categories, tags, onClose
   const summaryWhere = isBucketMove
     ? intoBucket && ` into ${intoBucket}`
     : nameOf(payFrom) && ` from ${nameOf(payFrom)}${movesMoney && nameOf(payTo) ? ` to ${nameOf(payTo)}` : ""}`;
-  const endsOn = schedule?.endDate ?? preset?.endDate ?? null;
+  const endsOn = schedule?.endDate ?? null;
   const summaryWhen =
     startsOn === ""
       ? ITEM_FREQUENCY_LABELS[frequency].toLowerCase()

@@ -1,17 +1,15 @@
 import { PartyPopper } from "lucide-react";
 import { useId, useState } from "react";
-import { type Account, useAccounts } from "../../api/accounts";
+import type { Account } from "../../api/accounts";
 import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
-import { useCategories, useTags } from "../../api/categories";
 import { type Item, useItems, useSaveItem } from "../../api/items";
 import { addDays, formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
 import { EditButton } from "../EditButton";
-import { type BucketMovePreset, ItemForm } from "../items/ItemForm";
 import { describeItemSchedule } from "../items/labels";
 import { clickRowToEdit, ROW_OPENS } from "../rowEdit";
-import { BUTTON_LINK, BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
+import { BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
 import { BucketForm } from "./BucketForm";
 
 /**
@@ -23,12 +21,7 @@ export function BucketsCard({ account }: { account: Account }) {
   const [adding, setAdding] = useState(false);
   // Kept as ids, so an open form always shows the bucket as it is now.
   const [editingId, setEditingId] = useState<number>();
-  // The bucket a recurring move is being added to, with what the form starts out as.
-  const [movingInto, setMovingInto] = useState<BucketMovePreset>();
   const items = useItems().data ?? [];
-  const accounts = useAccounts().data ?? [];
-  const categories = useCategories().data ?? [];
-  const tags = useTags().data ?? [];
 
   const all = buckets.data ?? [];
   const mine = all.filter((bucket) => bucket.accountId === account.id);
@@ -62,7 +55,6 @@ export function BucketsCard({ account }: { account: Account }) {
                 bucket={bucket}
                 feeding={items.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))}
                 onEdit={() => setEditingId(bucket.id)}
-                onAddMove={() => setMovingInto(moveInto(bucket))}
               />
             ))}
           </ul>
@@ -80,15 +72,19 @@ export function BucketsCard({ account }: { account: Account }) {
           )}
         </>
       )}
+      {/* Tucked away like archived accounts: out of sight until opened. */}
       {archived.length > 0 && (
-        <ul className="mt-3 border-t border-line pt-2">
-          {archived.map((bucket) => (
-            <li key={bucket.id} onClick={clickRowToEdit} className={`flex items-center justify-between gap-3 ${ROW_OPENS}`}>
-              <span className="min-w-0 text-muted wrap-break-word">{bucket.name} · Archived</span>
-              <EditButton name={bucket.name} onClick={() => setEditingId(bucket.id)} labelled />
-            </li>
-          ))}
-        </ul>
+        <details className="mt-3 border-t border-line pt-2">
+          <summary className="min-h-11 cursor-pointer content-center font-medium text-muted">Archived buckets ({archived.length})</summary>
+          <ul>
+            {archived.map((bucket) => (
+              <li key={bucket.id} onClick={clickRowToEdit} className={`flex items-center justify-between gap-3 ${ROW_OPENS}`}>
+                <span className="min-w-0 text-muted wrap-break-word">{bucket.name} · Archived</span>
+                <EditButton name={bucket.name} onClick={() => setEditingId(bucket.id)} labelled />
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       <button type="button" onClick={() => setAdding(true)} className={`${BUTTON_SECONDARY} mt-3`}>
         Add a bucket
@@ -96,47 +92,19 @@ export function BucketsCard({ account }: { account: Account }) {
 
       {adding && <BucketForm account={account} buckets={all} onClose={() => setAdding(false)} />}
       {editing && <BucketForm account={account} bucket={editing} buckets={all} onClose={() => setEditingId(undefined)} />}
-      {movingInto && (
-        <ItemForm
-          preset={movingInto}
-          title={`Add a recurring move into ${movingInto.name}`}
-          accounts={accounts}
-          categories={categories}
-          tags={tags}
-          onClose={() => setMovingInto(undefined)}
-        />
-      )}
     </Card>
   );
-}
-
-/**
- * What the recurring item form starts out as for a move into this bucket. When the bucket is
- * short of a goal with a date, it starts at what closing the gap takes every paycheck, from
- * the next payday (this one is not among those the amount was shared over) to the goal date.
- */
-function moveInto(bucket: Bucket): BucketMovePreset {
-  const suggested = bucket.goalProgress?.morePerPaycheckCents ?? null;
-  return {
-    bucketId: bucket.id,
-    name: bucket.name,
-    amountCents: suggested,
-    startDate: suggested === null ? null : addDays(todayIso(), 1),
-    endDate: suggested === null ? null : bucket.goalDate,
-  };
 }
 
 function BucketLine({
   bucket,
   feeding,
   onEdit,
-  onAddMove,
 }: {
   bucket: Bucket;
   /** The recurring items that put money in this bucket. */
   feeding: readonly Item[];
   onEdit: () => void;
-  onAddMove: () => void;
 }) {
   const goal = bucket.goalCents;
   // Shown as at most full: a bucket can hold more than its goal.
@@ -174,10 +142,7 @@ function BucketLine({
           </span>
         </div>
         {/* One way in: the amount, the goal and the rest are all changed in the same form. */}
-        <div className="flex shrink-0 flex-wrap gap-1 sm:justify-end">
-          <button type="button" onClick={onAddMove} aria-label={`Add a recurring move into ${bucket.name}`} className={BUTTON_LINK}>
-            Add a recurring move
-          </button>
+        <div className="flex shrink-0 sm:justify-end">
           <EditButton name={bucket.name} onClick={onEdit} labelled />
         </div>
       </div>
@@ -214,7 +179,8 @@ function BucketLine({
 
 /**
  * For an account where every dollar should have a job: puts whatever is not in a bucket yet
- * into one of them, in one step.
+ * into one of them, in one step. Closed until asked for: it is for one particular way of
+ * budgeting, and should not take up room for everyone else.
  */
 function PutTheRestIn({ buckets, cents }: { buckets: readonly Bucket[]; cents: number }) {
   const id = useId();
@@ -226,34 +192,37 @@ function PutTheRestIn({ buckets, cents }: { buckets: readonly Bucket[]; cents: n
     return null;
   }
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        move.mutate({ bucketId: chosen.id, date: todayIso(), amountCents: cents, note: "The rest of the balance" });
-      }}
-      className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"
-    >
-      <div className="sm:flex-1">
-        <label htmlFor={`${id}-rest`} className={LABEL}>
-          Put the rest in a bucket
-        </label>
-        <select id={`${id}-rest`} value={chosen.id} onChange={(event) => setBucketId(Number(event.target.value))} className={INPUT}>
-          {buckets.map((bucket) => (
-            <option key={bucket.id} value={bucket.id}>
-              {bucket.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <button type="submit" disabled={move.isPending} className={BUTTON_SECONDARY}>
-        {move.isPending ? "Saving…" : <>Put <span data-amount>{formatCents(cents)}</span> in</>}
-      </button>
-      {move.isError && (
-        <p role="alert" className="text-danger sm:basis-full">
-          {move.error.message}
-        </p>
-      )}
-    </form>
+    <details className="mt-2">
+      <summary className="min-h-11 cursor-pointer content-center font-medium text-accent-ink">Put the rest in a bucket</summary>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          move.mutate({ bucketId: chosen.id, date: todayIso(), amountCents: cents, note: "The rest of the balance" });
+        }}
+        className="flex flex-col gap-2 sm:flex-row sm:items-end"
+      >
+        <div className="sm:flex-1">
+          <label htmlFor={`${id}-rest`} className={LABEL}>
+            Which bucket
+          </label>
+          <select id={`${id}-rest`} value={chosen.id} onChange={(event) => setBucketId(Number(event.target.value))} className={INPUT}>
+            {buckets.map((bucket) => (
+              <option key={bucket.id} value={bucket.id}>
+                {bucket.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button type="submit" disabled={move.isPending} className={BUTTON_SECONDARY}>
+          {move.isPending ? "Saving…" : <>Put <span data-amount>{formatCents(cents)}</span> in</>}
+        </button>
+        {move.isError && (
+          <p role="alert" className="text-danger sm:basis-full">
+            {move.error.message}
+          </p>
+        )}
+      </form>
+    </details>
   );
 }
 

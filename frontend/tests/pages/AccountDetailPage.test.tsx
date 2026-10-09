@@ -226,10 +226,16 @@ describe("account detail screen", () => {
       expect(within(buckets).getByText("In buckets").closest("div")).toHaveTextContent("$200.00");
       expect(within(buckets).getByText("Not in a bucket").closest("div")).toHaveTextContent("$1,505.10");
       expect(within(buckets).getByText("Balance you entered").closest("div")).toHaveTextContent("$1,705.10");
-      expect(within(buckets).getByText("Old trip · Archived")).toBeInTheDocument();
+      // Archived buckets are tucked away until opened.
+      expect(within(buckets).getByText("Archived buckets (1)")).toBeInTheDocument();
+      expect(within(buckets).getByText("Old trip · Archived")).not.toBeVisible();
 
       // The rest can be given a job in one step.
-      expect(within(buckets).getByRole("combobox", { name: "Put the rest in a bucket" })).toHaveValue("7");
+      // Closed until asked for.
+      expect(within(buckets).getByLabelText("Which bucket")).not.toBeVisible();
+      await userEvent.click(within(buckets).getByText("Put the rest in a bucket"));
+      expect(within(buckets).getByLabelText("Which bucket")).toBeVisible();
+      expect(within(buckets).getByLabelText("Which bucket")).toHaveValue("7");
       await userEvent.click(within(buckets).getByRole("button", { name: "Put $1,505.10 in" }));
       await waitFor(() =>
         expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/changes")).toEqual([
@@ -270,7 +276,7 @@ describe("account detail screen", () => {
       });
     });
 
-    it("adds a recurring move into a bucket from its row, starting at what its goal takes", async () => {
+    it("sets up a recurring move from a bucket's Edit form, and says what its goal still takes", async () => {
       const short = {
         ...GIFTS,
         goalDate: "2099-12-01",
@@ -278,23 +284,20 @@ describe("account detail screen", () => {
       };
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
-        "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }),
         "GET /api/buckets": () => ({ status: 200, data: [short] }),
+        "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: short, changes: [] }, changed: true }),
         "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
       });
       renderApp("/accounts/1");
 
-      await userEvent.click(await screen.findByRole("button", { name: "Add a recurring move into Holiday gifts" }));
-      const dialog = screen.getByRole("dialog", { name: "Add a recurring move into Holiday gifts" });
-      // Already a bucket move into this bucket, every paycheck, at the suggested amount; all of it can be changed.
-      expect(within(dialog).getByRole("radio", { name: "Bucket move" })).toBeChecked();
-      expect(within(dialog).getByRole("combobox", { name: "Into bucket" })).toHaveValue("Holiday gifts · Everyday Checking");
-      expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("every_pay_period");
-      const amount = within(dialog).getByRole("textbox", { name: "Amount each time" });
-      expect(amount).toHaveValue("50.00");
-      await userEvent.clear(amount);
+      // The row itself only offers Edit; the move is set up inside it.
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      expect(screen.queryByRole("button", { name: /Add a recurring move/ })).not.toBeInTheDocument();
+      const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      const amount = within(dialog).getByRole("textbox", { name: "Set aside every paycheck (optional)" });
+      expect(amount).toHaveAccessibleDescription(/Reaching the goal by Dec 1, 2099 takes \$50\.00 more every paycheck\./);
       await userEvent.type(amount, "75");
-      await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({
@@ -303,8 +306,24 @@ describe("account detail screen", () => {
         amountCents: 7500,
         bucketId: 7,
         payFromAccountId: 1,
-        schedule: { frequency: "every_pay_period", endDate: "2099-12-01" },
+        schedule: { frequency: "every_pay_period", endDate: null },
       });
+    });
+
+    it("adds nothing recurring when that amount is left empty", async () => {
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "PUT /api/buckets/7": () => ({ status: 200, data: { bucket: GIFTS, changes: [] }, changed: true }),
+        "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
+      await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save changes" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(bodiesSentTo(fetchMock, "POST /api/items")).toEqual([]);
     });
 
     it("lists the recurring items that already put money in a bucket", async () => {
@@ -397,6 +416,7 @@ describe("account detail screen", () => {
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
         "POST /api/buckets": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
+        "POST /api/items": () => ({ status: 201, data: {}, changed: true }),
         "GET /api/pay-periods": () => ({
           status: 200,
           data: { primarySourceId: 1, primaryAccountId: 1, periods: [{ start: "2026-01-01", end: "2099-12-31", current: true }] },
@@ -410,6 +430,7 @@ describe("account detail screen", () => {
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Holiday gifts");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Goal (optional)" }), "600");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
+      await userEvent.type(within(dialog).getByRole("textbox", { name: "Set aside every paycheck (optional)" }), "50");
       // It counts from this paycheck's payday unless told otherwise, so the paycheck in hand is included.
       await waitFor(() => expect(within(dialog).getByLabelText("Counts from")).toHaveValue("2026-01-01"));
       await userEvent.click(within(dialog).getByRole("button", { name: "Add bucket" }));
@@ -428,6 +449,14 @@ describe("account detail screen", () => {
           startingCents: 15000,
         },
       ]);
+      // The new bucket gets its recurring move in the same step.
+      expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({
+        name: "Holiday gifts",
+        kind: "bucket_move",
+        amountCents: 5000,
+        bucketId: 7,
+        payFromAccountId: 1,
+      });
     });
 
     it("lists what was changed by hand in the bucket's Edit form, and removes one", async () => {
