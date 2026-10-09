@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type BalanceEntry, holdsCash, useAccount, useAccountProjection, useAccounts, useDeleteBalance } from "../api/accounts";
 import { useAccountBalances } from "../api/periods";
+import { TransactionsCard } from "../components/accounts/TransactionsCard";
 import { useBuckets } from "../api/buckets";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { BalanceForm } from "../components/accounts/BalanceForm";
@@ -102,7 +103,7 @@ export function AccountDetailPage() {
                   <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(today.balanceCents)}</p>
                   <p className="text-muted">
                     today
-                    {latest ? ` · you entered ${formatCents(latest.amountCents)} on ${formatDate(latest.date)}` : " · no balance entered yet"}
+                    {latest && ` · you entered ${formatCents(latest.amountCents)} on ${formatDate(latest.date)}`}
                   </p>
                 </>
               ) : latest ? (
@@ -154,6 +155,8 @@ export function AccountDetailPage() {
 
         {cash && <BucketsCard account={account} />}
         {cash && <InterestCard detail={detail.data} />}
+
+        <TransactionsCard account={account} />
 
         <Card title="Balances you entered">
           {balances.length === 0 ? (

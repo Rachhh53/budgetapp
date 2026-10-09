@@ -14,7 +14,8 @@ import java.time.LocalDate;
  * Pay periods with their balances: {@code /api/pay-periods} lists them with each one's
  * projected ending, and {@code /api/pay-periods/{start}} is everything in one of them.
  * {@code /api/accounts/{id}/projection} follows one account through them, and
- * {@code /api/account-balances} is what every account holds today.
+ * {@code /api/account-balances} is what every account holds today, and
+ * {@code /api/accounts/{id}/transactions} lists what moved one of them.
  */
 public final class LedgerRoutes {
 
@@ -33,6 +34,16 @@ public final class LedgerRoutes {
         routes.get("/api/pay-periods/{start}", this::one);
         routes.get("/api/accounts/{id}/projection", this::accountProjection);
         routes.get("/api/account-balances", ctx -> ApiResponse.ok(ctx, ledger.balancesOn(calendar.today())));
+        routes.get("/api/accounts/{id}/transactions", this::accountTransactions);
+    }
+
+    /** What moved one account within {@code from}–{@code to}; by default the last three months through the next one. */
+    private void accountTransactions(Context ctx) {
+        Account account = accounts.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound);
+        LocalDate from = Inputs.dateParam(ctx, "from", calendar.today().minusMonths(3));
+        LocalDate to = Inputs.dateParam(ctx, "to", calendar.today().plusMonths(1));
+        Inputs.requireSensibleRange(from, to);
+        ApiResponse.ok(ctx, ledger.transactions(account, from, to));
     }
 
     /** One account at the end of each pay period, from the current one through the horizon: its chart. */

@@ -904,6 +904,50 @@ class BucketsLedgerApiTest extends ApiTestBase {
     }
 
     @Nested
+    class AccountTransactions {
+        @Test
+        void requiresASession() throws Exception {
+            assertThat(server.get("/api/accounts/" + checking + "/transactions", null).status()).isEqualTo(401);
+        }
+
+        @Test
+        void listsWhatMovedTheAccountNewestFirst() throws Exception {
+            created("/api/items", """
+                    {"name":"To savings","kind":"transfer","amountCents":20000,"payFromAccountId":%d,"payToAccountId":%d,"autopay":true,
+                     "schedule":{"frequency":"monthly","day1":2,"startDate":"2026-01-01"}}""".formatted(checking, savings));
+            created("/api/entries",
+                    "{\"kind\":\"money_out\",\"date\":\"2026-10-03\",\"amountCents\":4500,\"description\":\"Vet\",\"accountId\":%d}".formatted(checking));
+
+            JsonNode lines = server.get("/api/accounts/" + checking + "/transactions?from=2026-09-01&to=2026-10-14", cookie).data();
+
+            // Nothing from September: the account only counts from the balance entered on Oct 1.
+            assertThat(lines.findValuesAsText("date")).containsExactly("2026-10-03", "2026-10-02", "2026-10-01", "2026-10-01");
+            assertThat(lines.get(0).get("label").asText()).isEqualTo("Vet");
+            assertThat(lines.get(0).get("kind").asText()).isEqualTo("money_out");
+            assertThat(lines.get(0).get("amountCents").asLong()).isEqualTo(-4500);
+            assertThat(lines.get(1).get("label").asText()).isEqualTo("To savings");
+            assertThat(lines.get(1).get("amountCents").asLong()).isEqualTo(-20000);
+            assertThat(lines.findValuesAsText("kind")).contains("paycheck", "balance");
+
+            // The same transfer arrives in savings as money coming in.
+            JsonNode arriving = server.get("/api/accounts/" + savings + "/transactions?from=2026-10-02&to=2026-10-02", cookie).data();
+            assertThat(arriving).hasSize(1);
+            assertThat(arriving.get(0).get("amountCents").asLong()).isEqualTo(20000);
+        }
+
+        @Test
+        void refusesDatesThatMakeNoSense() throws Exception {
+            assertThat(server.get("/api/accounts/" + checking + "/transactions?from=2026-10-14&to=2026-10-01", cookie).status()).isEqualTo(400);
+            assertThat(server.get("/api/accounts/" + checking + "/transactions?from=soon", cookie).status()).isEqualTo(400);
+        }
+
+        @Test
+        void anUnknownAccountIsNotFound() throws Exception {
+            assertThat(server.get("/api/accounts/999/transactions", cookie).status()).isEqualTo(404);
+        }
+    }
+
+    @Nested
     class AccountProjection {
         @Test
         void requiresASession() throws Exception {

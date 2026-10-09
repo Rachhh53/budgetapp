@@ -23,8 +23,8 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/holidays": () => ({ status: 200, data: [] }),
 };
 
-/** Any account's chart: with no balance entered there is nothing to project, whichever account it is. */
-const NO_PROJECTION = /^GET \/api\/accounts\/\d+\/projection$/;
+/** Any account's chart and transactions: on a fresh install there is nothing to show, whichever account it is. */
+const NO_PROJECTION = /^GET \/api\/accounts\/\d+\/(projection|transactions)(\?.*)?$/;
 const nothingProjected: Handler = () => ({ status: 200, data: [] });
 
 /**

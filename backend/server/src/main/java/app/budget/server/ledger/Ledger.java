@@ -64,6 +64,8 @@ public final class Ledger {
     private static final Set<String> OWED = Set.of(Inputs.code(AccountType.CREDIT_CARD), Inputs.code(AccountType.LOAN));
 
     private static final String INTEREST_LABEL = "Interest";
+    private static final String BALANCE_LABEL = "Balance you entered";
+    private static final String ONE_OFF_LABEL = "One-off entry";
 
     private final AccountsRepository accounts;
     private final EntriesRepository entries;
@@ -277,6 +279,49 @@ public final class Ledger {
         return held;
     }
 
+    /**
+     * One thing that moved an account's balance, or a balance the user entered for it.
+     *
+     * @param kind        {@code paycheck}, {@code interest}, {@code balance}, or the lower-case kind
+     *                    of the recurring item or one-off entry it came from
+     * @param amountCents what it did to the balance, signed; for {@code balance}, the balance entered
+     * @param unpaid      true for something paid by hand that has not been ticked off yet
+     */
+    public record Transaction(LocalDate date, String label, String kind, long amountCents, boolean unpaid) {}
+
+    /**
+     * Everything that moved {@code account} within {@code from}–{@code to}, newest first:
+     * paychecks, recurring items, one-off entries, transfers arriving, estimated interest, and
+     * the balances entered along the way. Nothing dated before the account starts counting
+     * (its first entered balance) is listed, because none of it is in the balance.
+     */
+    public List<Transaction> transactions(Account account, LocalDate from, LocalDate to) {
+        Workings workings = workings(List.of(new PayPeriod(from, to, from)));
+        LocalDate countedFrom = workings.countedFrom().get(account.id());
+        if (countedFrom == null) {
+            return List.of();
+        }
+        LocalDate since = countedFrom.isAfter(from) ? countedFrom : from;
+        List<Transaction> found = new ArrayList<>();
+        for (Transaction line : workings.lines().getOrDefault(account.id(), List.of())) {
+            if (within(line.date(), since, to)) {
+                found.add(line);
+            }
+        }
+        for (InterestCredit credit : workings.projection(account.id()).interest()) {
+            if (within(credit.date(), since, to)) {
+                found.add(new Transaction(credit.date(), INTEREST_LABEL, "interest", credit.amount().cents(), false));
+            }
+        }
+        for (BalanceEntry entry : accounts.balances(account.id())) {
+            if (within(entry.date(), from, to)) {
+                found.add(new Transaction(entry.date(), BALANCE_LABEL, "balance", entry.amountCents(), false));
+            }
+        }
+        found.sort(Comparator.comparing(Transaction::date).reversed());
+        return found;
+    }
+
     /** What every open bucket holds at the end of {@code day}, by bucket id. */
     public Map<Long, Long> bucketBalances(LocalDate day) {
         Map<Long, Long> held = new HashMap<>();
@@ -345,10 +390,13 @@ public final class Ledger {
             List<Entry> entries,
             Map<Long, Projection> projections,
             Set<Long> builtFromZero,
+            Map<Long, List<Transaction>> lines,
+            Map<Long, LocalDate> countedFrom,
             Map<Long, List<PeriodBuckets>> buckets,
             List<Move> bucketMoves) {
 
-        static final Workings NONE = new Workings(List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), List.of());
+        static final Workings NONE =
+                new Workings(List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), Map.of(), Map.of(), List.of());
 
         Projection projection(long accountId) {
             return projections.getOrDefault(accountId, Projection.NONE);
@@ -422,9 +470,12 @@ public final class Ledger {
         Map<Long, String> types = allAccounts.stream().collect(Collectors.toMap(Account::id, Account::type));
         Set<Long> cash = allAccounts.stream().filter(AccountType::holdsCash).map(Account::id).collect(Collectors.toSet());
         Map<Long, List<Movement>> movements = new HashMap<>();
+        // The same movements with their names kept, for the list of an account's transactions.
+        Map<Long, List<Transaction>> lines = new HashMap<>();
 
         for (Paycheck paycheck : pay.paychecks(from, last)) {
-            add(movements, types, paycheck.depositAccountId(), paycheck.payDate(), paycheck.netCents(), true, false);
+            add(movements, lines, types, paycheck.depositAccountId(), paycheck.payDate(), paycheck.netCents(), true, false,
+                    paycheck.sourceName(), "paycheck");
         }
 
         Map<Long, StillToPay> stillToPay = new HashMap<>();
@@ -475,25 +526,32 @@ public final class Ledger {
                 // The engine moves it to the day of that balance; remember it so the period can say so.
                 carried.add(new Carried(occurrence, paidFrom.newestEntered()));
             }
-            add(movements, types, payFrom, occurrence.payBy(), occurrence.amountCents(), false, unpaid);
+            add(movements, lines, types, payFrom, occurrence.payBy(), occurrence.amountCents(), false, unpaid,
+                    occurrence.name(), Inputs.code(occurrence.kind()));
             Long payTo = occurrence.payToAccountId();
             if (payTo != null) {
-                add(movements, types, payTo, occurrence.payBy(), occurrence.amountCents(), true,
-                        outstanding(occurrence, stillToPay.get(payTo)));
+                add(movements, lines, types, payTo, occurrence.payBy(), occurrence.amountCents(), true,
+                        outstanding(occurrence, stillToPay.get(payTo)), occurrence.name(), Inputs.code(occurrence.kind()));
             }
         }
 
         List<Entry> oneOffs = entries.between(from, last);
         for (Entry entry : oneOffs) {
-            add(movements, types, entry.accountId(), entry.date(), entry.amountCents(), entry.kind() == EntryKind.MONEY_IN, false);
+            String label = entry.description() != null && !entry.description().isBlank()
+                    ? entry.description()
+                    : entry.payee() != null && !entry.payee().isBlank() ? entry.payee() : ONE_OFF_LABEL;
+            add(movements, lines, types, entry.accountId(), entry.date(), entry.amountCents(), entry.kind() == EntryKind.MONEY_IN, false,
+                    label, Inputs.code(entry.kind()));
             if (entry.toAccountId() != null) {
-                add(movements, types, entry.toAccountId(), entry.date(), entry.amountCents(), true, false);
+                add(movements, lines, types, entry.toAccountId(), entry.date(), entry.amountCents(), true, false,
+                        label, Inputs.code(entry.kind()));
             }
         }
 
         Map<Long, Settings> interestSettings = interest.allSettings();
         Map<Long, List<Rate>> apys = interest.allRates(RateKind.APY);
         Map<Long, Projection> projections = new HashMap<>();
+        Map<Long, LocalDate> countedFrom = new HashMap<>(firstBalance);
         entered.forEach((accountId, forAccount) -> {
             List<BalanceAnchor> anchors = forAccount.stream()
                     .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents())))
@@ -506,6 +564,7 @@ public final class Ledger {
         for (long accountId : builtFromZero) {
             List<Movement> counted = movements.getOrDefault(accountId, List.of());
             LocalDate since = counted.stream().map(Movement::date).min(Comparator.naturalOrder()).orElse(first);
+            countedFrom.put(accountId, since);
             InterestTerms terms = cash.contains(accountId)
                     ? interestTerms(interestSettings.get(accountId), apys.get(accountId))
                     : null;
@@ -552,7 +611,7 @@ public final class Ledger {
             }
         });
         bucketMoves.sort(Comparator.comparing(Move::date));
-        return new Workings(listed, carried, oneOffs, projections, builtFromZero, bucketsByAccount, bucketMoves);
+        return new Workings(listed, carried, oneOffs, projections, builtFromZero, lines, countedFrom, bucketsByAccount, bucketMoves);
     }
 
     /** True unless the occurrence names a bucket that is archived, or was not open yet on the day it counts. */
@@ -643,16 +702,21 @@ public final class Ledger {
      */
     private static void add(
             Map<Long, List<Movement>> movements,
+            Map<Long, List<Transaction>> lines,
             Map<Long, String> types,
             long accountId,
             LocalDate date,
             long cents,
             boolean incoming,
-            boolean outstanding) {
+            boolean outstanding,
+            String label,
+            String kind) {
         boolean raisesBalance = OWED.contains(types.get(accountId)) != incoming;
         Money amount = Money.ofCents(cents);
         movements.computeIfAbsent(accountId, id -> new ArrayList<>())
                 .add(new Movement(date, raisesBalance ? amount : amount.negate(), outstanding));
+        lines.computeIfAbsent(accountId, id -> new ArrayList<>())
+                .add(new Transaction(date, label, kind, raisesBalance ? cents : -cents, outstanding));
     }
 
     private static boolean within(LocalDate date, LocalDate from, LocalDate to) {

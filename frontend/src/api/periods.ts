@@ -147,6 +147,29 @@ export function useAccountBalances() {
   });
 }
 
+/** One thing that moved an account's balance, or a balance entered for it. */
+export interface AccountTransaction {
+  date: string;
+  label: string;
+  /** `paycheck`, `interest`, `balance`, or the kind of the recurring item or one-off entry. */
+  kind: string;
+  /** What it did to the balance, signed; for `balance`, the balance that was entered. */
+  amountCents: number;
+  /** Paid by hand and not ticked off yet. */
+  unpaid: boolean;
+}
+
+/** What moved one account within `from`–`to`, newest first. */
+export function useAccountTransactions(accountId: number, from: string | undefined, to: string | undefined) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "transactions", accountId, from, to],
+    queryFn: () => api.get<AccountTransaction[]>(`/api/accounts/${accountId}/transactions?from=${from}&to=${to}`),
+    enabled: from !== undefined && to !== undefined,
+    // Keep the list on screen while another stretch of dates loads.
+    placeholderData: (previous) => previous,
+  });
+}
+
 /** Everything in the pay period that opens on `start`. */
 export function usePeriod(start: string | undefined) {
   return useQuery({

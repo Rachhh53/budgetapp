@@ -65,6 +65,41 @@ describe("account detail screen", () => {
     expect(rows[1]).toHaveTextContent("—");
   });
 
+  it("lists what moved the account, saying what is upcoming or not paid yet", async () => {
+    fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+      "GET /api/accounts/1/transactions": () => ({
+        status: 200,
+        data: [
+          { date: "2999-01-05", label: "Rent", kind: "bill", amountCents: -120000, unpaid: true },
+          { date: "2026-10-02", label: "Balance you entered", kind: "balance", amountCents: 170510, unpaid: false },
+          { date: "2026-10-01", label: "Acme Corp", kind: "paycheck", amountCents: 248620, unpaid: false },
+        ],
+      }),
+    });
+    renderApp("/accounts/1");
+
+    const rows = within(await screen.findByRole("region", { name: "Transactions" }));
+    const rent = (await rows.findByText("Rent")).closest("li")!;
+    expect(rent).toHaveTextContent("-$1,200.00");
+    expect(rent).toHaveTextContent("Bill · Upcoming · Not paid yet");
+    expect(rows.getByText("Acme Corp").closest("li")).toHaveTextContent("+$2,486.20");
+    expect(rows.getByText("Acme Corp").closest("li")).toHaveTextContent("Oct 1, 2026 · Paycheck");
+    // A balance entered is shown as where the account stood, with no plus or minus.
+    expect(rows.getByText("Balance you entered").closest("li")).toHaveTextContent(/^Balance you enteredOct 2, 2026 · Balance\$1,705\.10$/);
+  });
+
+  it("says so kindly when nothing moved between the dates, and when the dates are backwards", async () => {
+    fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }) });
+    renderApp("/accounts/1");
+
+    const card = await screen.findByRole("region", { name: "Transactions" });
+    expect(await within(card).findByText(/Nothing moved in or out of Everyday Checking between these dates/)).toBeInTheDocument();
+    await userEvent.clear(within(card).getByLabelText("To"));
+    await userEvent.type(within(card).getByLabelText("To"), "2000-01-01");
+    expect(within(card).getByText(/Choose a From date that is on or before the To date/)).toBeInTheDocument();
+  });
+
   it("invites a first balance when none has been entered", async () => {
     fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: EMPTY }) });
     renderApp("/accounts/1");
