@@ -125,6 +125,15 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
 | POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |
 | DELETE | `/api/accounts/{id}/rates/{rateId}` | remove one rate |
+| GET | `/api/cards` | every credit card with what is owed today, its settings, regular APR, next payment and the promotion that ends soonest with a balance on it |
+| GET | `/api/cards/{id}` | one card: the above plus every promotion (remaining balance, days left, warning, payoff per paycheck), its statements (the next one projected, then those entered), APR history and the next close and due dates |
+| PUT | `/api/cards/{id}/settings` | how it bills and is paid `{ statementCloseDay, dueDay, paymentMode, fixedPaymentCents?, autopay, payFromAccountId?, monthlyEstimateCents? }`; `paymentMode` is `statement_balance`, `full_balance`, `minimum` or `fixed`. Choosing `payFromAccountId` adds the card's own payment as a recurring item and keeps it in step |
+| POST | `/api/cards/{id}/statements` | a statement as it arrived `{ closeDate, balanceCents, minimumDueCents?, dueDate? }`; the same closing date again replaces it |
+| DELETE | `/api/cards/{id}/statements/{statementId}` | remove one statement |
+| POST | `/api/cards/{id}/promos` | a promotional rate `{ label, kind, rateBp, startDate, endDate, originalBalanceCents, rateAfterBp?, deferredInterest }`; `kind` is `balance_transfer`, `purchase` or `other` |
+| PUT, DELETE | `/api/cards/{id}/promos/{promoId}` | change or remove one promotion |
+| POST | `/api/cards/{id}/promos/{promoId}/payoff` | the payoff helper: adds a card payment every pay period until the promotion ends, sized to clear it |
+| GET, PUT | `/api/accounts/{id}/loan` | a loan's terms and what they work out to (next payment shared into interest, principal and escrow; payoff date; interest still to pay; year by year); set `{ paymentCents, paymentDay?, escrowInsuranceCents?, escrowTaxesCents?, originalPrincipalCents?, termMonths?, startDate? }`. The rate is one of the account's rates |
 | GET, POST | `/api/buckets` | buckets with today's balance; add `{ accountId, name, color, goalCents?, goalDate?, note?, startingCents?, openedOn? }` (checking and savings only); `openedOn` is the day it counts from, today or earlier. With a goal and a `goalDate`, each bucket carries `goalProgress`: `{ projectedCents, shortCents, paydaysLeft, morePerPaycheckCents, morePerMonthCents }` |
 | GET, PUT, DELETE | `/api/buckets/{id}` | one bucket with the money moved by hand; change or archive; delete (refused while a recurring item uses it) |
 | POST | `/api/buckets/{id}/changes` | put money in or take it out by hand `{ date, amountCents, note? }` (negative takes out) |
@@ -164,7 +173,8 @@ Every request that changes something is recorded so it can be undone, and its an
 Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Item kinds are `bill`, `transfer`,
 `budget` and `card_payment`; item schedules are `every_pay_period`, `weekly`, `biweekly`, `semi_monthly`, `monthly`,
 `every_n_months`, `yearly` and `one_time`. A balance you enter stands for the start of that day (see `spec.md` §5.3). Settings keys: `theme`,
-`accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36).
+`accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36), `promo_warning_days` (30, 45, 60, 90 or 120: how long
+before a card's promotional rate ends the warnings start).
 
 ## CI and dependency checks
 

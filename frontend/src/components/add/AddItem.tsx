@@ -25,8 +25,8 @@ import { EntryFields } from "./EntryFields";
 export type AddKind = EntryKind | "recurring";
 
 interface AddItemContext {
-  /** Opens the form with `kind` chosen. */
-  add: (kind: AddKind) => void;
+  /** Opens the form with `kind` chosen and, when given, the account it is for (a charge on one card, say). */
+  add: (kind: AddKind, accountId?: number) => void;
   /** Opens the form on a one-off that already exists, to change or delete it. */
   editEntry: (entry: Entry) => void;
   menuOpen: boolean;
@@ -61,14 +61,14 @@ const EDITABLE = "input, textarea, select, [contenteditable='true']";
  * screen: Ctrl+N opens the menu, Ctrl+E goes straight to money out and Ctrl+I to money in.
  */
 export function AddItemProvider({ children }: { children: ReactNode }) {
-  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry } | null>(null);
+  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hasMenu, setHasMenu] = useState(false);
   const [period, setPeriod] = useState<PeriodDetail>();
 
-  const add = useCallback((kind: AddKind) => {
+  const add = useCallback((kind: AddKind, accountId?: number) => {
     setMenuOpen(false);
-    setForm({ kind });
+    setForm({ kind, accountId });
   }, []);
   const editEntry = useCallback((entry: Entry) => setForm({ kind: entry.kind, entry }), []);
 
@@ -108,6 +108,7 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
         <AddItemForm
           initialKind={form.kind}
           entry={form.entry}
+          accountId={form.accountId}
           period={period}
           onClose={() => setForm(null)}
         />
@@ -123,11 +124,14 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
 function AddItemForm({
   initialKind,
   entry,
+  accountId,
   period,
   onClose,
 }: {
   initialKind: AddKind;
   entry?: Entry;
+  /** The account a new one-off starts on, when the form was opened for one. */
+  accountId?: number;
   period?: PeriodDetail;
   onClose: () => void;
 }) {
@@ -171,6 +175,7 @@ function AddItemForm({
           <EntryFields
             kind={kind}
             entry={entry}
+            accountId={accountId}
             period={period}
             accounts={accounts.data}
             categories={categories.data}

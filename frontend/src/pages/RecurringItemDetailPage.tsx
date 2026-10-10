@@ -65,8 +65,10 @@ export function RecurringItemDetailPage() {
   const itemTags = (tags.data ?? []).filter((tag) => item.tagIds.includes(tag.id));
   const everyPaycheck = item.schedule.frequency === "every_pay_period";
   // Set up on its bucket, and changed there: one form, so one button.
-  const ownForm = item.kind !== "bucket_move";
-  const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
+  // A card's own payment is the same: it is kept in step with the card's payment setting, and changed there.
+  const cardId = item.paymentOfCardId ?? null;
+  const ownForm = item.kind !== "bucket_move" && cardId === null;
+  const edit =(part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
 
   return (
     <>
@@ -87,7 +89,11 @@ export function RecurringItemDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
-          <EditPageButton label="Edit item" onClick={() => setEditing("item")} />
+          {cardId === null ? (
+            <EditPageButton label="Edit item" onClick={() => setEditing("item")} />
+          ) : (
+            <EditPageButton label="Edit on the card's page" onClick={() => navigate(`/cards/${cardId}`)} />
+          )}
           {ownForm && (
             <button type="button" onClick={() => setEditing("amount")} aria-label={`Change the amount of ${item.name}`} className={BUTTON_PRIMARY}>
               Change the amount
@@ -101,19 +107,37 @@ export function RecurringItemDetailPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <p className="text-muted">Amount</p>
-              <Amount cents={item.perOccurrenceCents} estimate={item.estimate} className="-ml-2 text-3xl font-bold" />
-              <p className="text-muted">
-                each time
-                {item.amountMode === "annual" && " · entered as a yearly total"}
-                {item.estimate && " · an estimate"}
-              </p>
+              {item.followsCard ? (
+                <>
+                  <p className="text-2xl font-bold">Follows the card</p>
+                  <p className="text-muted">worked out from the card's payment setting for each statement</p>
+                </>
+              ) : (
+                <>
+                  <Amount cents={item.perOccurrenceCents} estimate={item.estimate} className="-ml-2 text-3xl font-bold" />
+                  <p className="text-muted">
+                    each time
+                    {item.amountMode === "annual" && " · entered as a yearly total"}
+                    {item.estimate && " · an estimate"}
+                  </p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-muted">A year</p>
-              <p data-amount className="text-2xl font-bold tabular-nums">
-                {formatCents(item.perYearCents)}
-              </p>
-              <p className="text-muted">{everyPaycheck ? "over a year of paychecks" : "what it adds up to over a year"}</p>
+              {item.followsCard ? (
+                <>
+                  <p className="text-2xl font-bold">—</p>
+                  <p className="text-muted">it changes with what is charged</p>
+                </>
+              ) : (
+                <>
+                  <p data-amount className="text-2xl font-bold tabular-nums">
+                    {formatCents(item.perYearCents)}
+                  </p>
+                  <p className="text-muted">{everyPaycheck ? "over a year of paychecks" : "what it adds up to over a year"}</p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-muted">Next date</p>

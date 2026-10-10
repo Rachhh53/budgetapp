@@ -24,6 +24,7 @@ import { Amount } from "../components/Amount";
 import { BucketsCard } from "../components/buckets/BucketsCard";
 import { Card } from "../components/Card";
 import { EditPageButton } from "../components/EditButton";
+import { LoanCards } from "../components/loans/LoanCards";
 import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
@@ -163,12 +164,12 @@ export function AccountDetailPage() {
                 </p>
               </div>
             )}
-            {(cash || investment) && currentRate && (
+            {currentRate && (
               <div>
-                <p className="text-muted">{investment ? "Assumed growth" : "Rate"}</p>
+                <p className="text-muted">{investment ? "Assumed growth" : account.type === "credit_card" ? "Regular APR" : "Rate"}</p>
                 <p className="text-2xl font-bold tabular-nums">{formatRate(currentRate.rateBp)}</p>
                 <p className="text-muted">
-                  {investment ? "a year, your assumption" : "APY"} since {formatDate(currentRate.effectiveDate)}
+                  {investment ? "a year, your assumption" : cash ? "APY" : "a year"} since {formatDate(currentRate.effectiveDate)}
                 </p>
               </div>
             )}
@@ -201,6 +202,17 @@ export function AccountDetailPage() {
         {cash && <InterestCard detail={detail.data} />}
         {investment && <ContributionsCard accountId={account.id} />}
         {investment && <GrowthCard detail={detail.data} />}
+        {account.type === "loan" && <LoanCards account={account} rates={detail.data.rates} />}
+        {account.type === "credit_card" && (
+          <Card title="Statements, payment and promo rates">
+            <p className="text-muted">
+              How this card bills and is paid, its promotional rates and the payoff helper are on its own page.
+            </p>
+            <Link to={`/cards/${account.id}`} className="mt-2 inline-block font-semibold text-accent-ink underline">
+              Open {account.name} under Credit cards
+            </Link>
+          </Card>
+        )}
 
         <TransactionsCard account={account} />
 

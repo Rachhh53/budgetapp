@@ -145,12 +145,9 @@ public final class BalanceProjector {
         TreeMap<LocalDate, List<Money>> byDay = new TreeMap<>();
         movements.stream()
                 .sorted(Comparator.comparing(Movement::date))
-                .forEach(movement -> {
-                    LocalDate day = movement.outstanding() && movement.date().isBefore(newestEntered)
-                            ? newestEntered
-                            : movement.date();
-                    byDay.computeIfAbsent(day, key -> new ArrayList<>()).add(movement.amount());
-                });
+                .forEach(movement -> byDay
+                        .computeIfAbsent(movement.countsOn(newestEntered), key -> new ArrayList<>())
+                        .add(movement.amount()));
         return byDay;
     }
 

@@ -97,6 +97,17 @@ public final class ItemCalendar {
                     skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber);
         }
 
+        /**
+         * This occurrence at the amount worked out for it: for a card payment that follows its
+         * card, which is only an estimate while the statement it pays is one.
+         */
+        public Occurrence withAmount(long cents, boolean isEstimate) {
+            return new Occurrence(
+                    itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, cents, isEstimate, projectedCents,
+                    autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
+                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber);
+        }
+
         /** This occurrence with its money going into no bucket: for one dated before its bucket was opened. */
         public Occurrence withoutBucket() {
             return new Occurrence(

@@ -6,6 +6,8 @@ import { NAV_ITEMS } from "./nav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
+import { CardDetailPage } from "./pages/CardDetailPage";
+import { CardsPage } from "./pages/CardsPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
@@ -21,6 +23,7 @@ const PAGES: Record<string, ReactNode> = {
   "/": <PayPeriodPage />,
   "/recurring": <RecurringItemsPage />,
   "/accounts": <AccountsPage />,
+  "/cards": <CardsPage />,
   "/income": <IncomePage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
@@ -38,6 +41,7 @@ export function App() {
         ))}
         <Route path="/periods/:start" element={<PayPeriodPage />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
+        <Route path="/cards/:id" element={<CardDetailPage />} />
         <Route path="/assets/:id" element={<AssetDetailPage />} />
         <Route path="/income/:id" element={<IncomeDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />

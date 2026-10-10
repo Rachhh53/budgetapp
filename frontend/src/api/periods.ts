@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { Entry } from "./entries";
-import { PAY_KEY, type PayPeriods, type Paycheck } from "./income";
+import { PAY_KEY, type PayPeriods, type Paycheck, type PromoEnd } from "./income";
 import type { ItemKind, Placement } from "./items";
 
 /** One occurrence of a recurring item, with any "just this one" edit applied. */
@@ -121,6 +121,8 @@ export interface PeriodDetail {
   buckets: BucketPeriod[];
   /** What moved those buckets during the period, earliest first. */
   bucketMoves: BucketMove[];
+  /** Promotional rates that end in this period with a balance still on them. */
+  promosEnding?: PromoEnd[];
 }
 
 /** What a "just this one" edit can change. Only what is sent changes. */
@@ -157,7 +159,11 @@ export function useAccountBalances() {
 export interface AccountTransaction {
   date: string;
   label: string;
-  /** `paycheck`, `contribution`, `employer_match`, `interest`, `growth`, `balance`, or the kind of the recurring item or one-off entry. */
+  /**
+   * `paycheck`, `contribution`, `employer_match`, `interest`, `growth`, `balance`, what was worked out for a card
+   * (`card_interest`, `deferred_interest`, `card_estimate`) or a loan (`loan_interest`, `escrow`), or the kind of the
+   * recurring item or one-off entry.
+   */
   kind: string;
   /** What it did to the balance, signed; for `balance`, the balance that was entered. */
   amountCents: number;

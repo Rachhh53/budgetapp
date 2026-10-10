@@ -101,6 +101,10 @@ export interface Item extends ItemTerms {
   paused: boolean;
   /** The first day it runs again; `null` when not paused, or paused until turned back on. */
   pausedUntil: string | null;
+  /** The credit card whose own payment this is, kept in step with that card's payment setting. */
+  paymentOfCardId?: number | null;
+  /** True when its amount is whatever that card's payment setting works out to, so `amountCents` means nothing. */
+  followsCard?: boolean;
 }
 
 export interface ItemInput extends ItemTerms {

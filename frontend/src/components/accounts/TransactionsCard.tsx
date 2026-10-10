@@ -18,6 +18,11 @@ const KIND_LABELS: Record<string, string> = {
   contribution: "From a paycheck",
   employer_match: "Employer match",
   growth: "Assumed, not actual",
+  card_interest: "Estimate",
+  deferred_interest: "Estimate",
+  card_estimate: "Estimate",
+  loan_interest: "Interest",
+  escrow: "Part of your payment that does not lower the loan",
   balance: "Balance",
 };
 
@@ -32,7 +37,7 @@ const PAGE_SIZE = 8;
  * items, one-off entries, transfers, interest, and the balances entered along the way. A year
  * of them is long, so the card folds away and the list comes a page at a time.
  */
-export function TransactionsCard({ account }: { account: Account }) {
+export function TransactionsCard({ account, title = "Transactions" }: { account: Account; title?: string }) {
   const id = useId();
   const today = todayIso();
   // The whole year so far to begin with; the list follows the dates as soon as they change.
@@ -55,7 +60,7 @@ export function TransactionsCard({ account }: { account: Account }) {
       <details open>
         <summary className="flex min-h-11 cursor-pointer items-center">
           <h2 id={`${id}-title`} className="text-lg font-semibold">
-            Transactions
+            {title}
           </h2>
         </summary>
         <div className="mt-3 mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-md">

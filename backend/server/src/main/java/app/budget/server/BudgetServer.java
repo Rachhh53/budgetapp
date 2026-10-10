@@ -14,6 +14,8 @@ import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRoutes;
+import app.budget.server.cards.CardsRepository;
+import app.budget.server.cards.CardsRoutes;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.CategoriesRoutes;
 import app.budget.server.categories.TagsRepository;
@@ -31,6 +33,8 @@ import app.budget.server.items.ItemsRepository;
 import app.budget.server.items.ItemsRoutes;
 import app.budget.server.ledger.Ledger;
 import app.budget.server.ledger.LedgerRoutes;
+import app.budget.server.loans.LoansRepository;
+import app.budget.server.loans.LoansRoutes;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
 import app.budget.server.schedule.HolidaysRepository;
@@ -103,7 +107,9 @@ public final class BudgetServer {
         BucketsRepository buckets = new BucketsRepository(database.jdbi(), clock);
         InterestRepository interest = new InterestRepository(database.jdbi());
         ItemCalendar itemCalendar = new ItemCalendar(items, payCalendar);
-        Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest);
+        CardsRepository cards = new CardsRepository(database.jdbi());
+        LoansRepository loans = new LoansRepository(database.jdbi());
+        Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest, cards, loans);
         AssetsRepository assets = new AssetsRepository(database.jdbi(), clock);
         NetWorthCalculator netWorth = new NetWorthCalculator(assets, accounts, ledger);
 
@@ -133,10 +139,12 @@ public final class BudgetServer {
             new HolidaysRoutes(holidays, clock).register(routes);
             new IncomeRoutes(income, accounts, payCalendar, clock).register(routes);
             new CategoriesRoutes(categories, tags, items, itemCalendar, payCalendar).register(routes);
-            new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags, buckets, ledger).register(routes);
+            new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags, buckets, ledger, cards).register(routes);
             new EntriesRoutes(entries, accounts, categories, tags, buckets, ledger, clock).register(routes);
             new LedgerRoutes(ledger, payCalendar, accounts).register(routes);
             new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
+            new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
+            new LoansRoutes(loans, accounts, interest, ledger, payCalendar).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
 

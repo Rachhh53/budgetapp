@@ -29,20 +29,22 @@ interface AccountFormProps {
   account?: Account;
   /** Every account, for the bank and label suggestions and recently used colors. */
   accounts: readonly Account[];
+  /** When adding: the kind of account to start on, for a screen that adds one kind (Credit cards). */
+  initialType?: AccountType;
   onClose: () => void;
   /** Called after the account was deleted, so the caller can leave its screen. */
   onDeleted?: () => void;
 }
 
 /** Add or change an account. Everything chosen from a list is a picker, never free text. */
-export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFormProps) {
+export function AccountForm({ account, accounts, initialType, onClose, onDeleted }: AccountFormProps) {
   const id = useId();
   const save = useSaveAccount(account?.id);
 
   // Newest accounts first, so the colors offered first are the ones used most recently.
   const usedColors = [...accounts].reverse().map((existing) => existing.color);
   const [name, setName] = useState(account?.name ?? "");
-  const [type, setType] = useState<AccountType>(account?.type ?? "checking");
+  const [type, setType] = useState<AccountType>(account?.type ?? initialType ?? "checking");
   const [subtypeLabel, setSubtypeLabel] = useState(account?.subtypeLabel ?? "");
   const [institution, setInstitution] = useState(account?.institution ?? "");
   const [color, setColor] = useState(account?.color ?? firstUnusedColor(usedColors));

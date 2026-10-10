@@ -1,10 +1,11 @@
-import { ChevronLeft, ChevronRight, Info, PartyPopper } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info, PartyPopper, TriangleAlert } from "lucide-react";
 import { EditButton } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Bucket, useBuckets } from "../api/buckets";
+import { type Card as CreditCard, useCards } from "../api/cards";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
@@ -46,8 +47,6 @@ const EDITABLE = "input, textarea, select, [contenteditable='true'], [role='dial
  * On a wide screen everything fits without scrolling the page — the three columns scroll
  * inside themselves only if a period holds more than fits. On a phone it is one column,
  * with what needs doing by hand first.
- *
- * The credit cards panel arrives in Phase 5.
  */
 export function PayPeriodPage() {
   const { start: startParam } = useParams();
@@ -66,6 +65,8 @@ export function PayPeriodPage() {
   const tags = useTags();
   const items = useItems();
   const buckets = useBuckets();
+  // Only for the cards panel: the period itself is shown whether or not this has arrived.
+  const cards = useCards();
 
   const nearby = around.data?.periods ?? [];
   const at = nearby.findIndex((candidate) => candidate.start === start);
@@ -204,6 +205,7 @@ export function PayPeriodPage() {
             primaryAccountId={detail.primaryAccountId}
             interest={detail.interest}
           />
+          <CardsPanel detail={detail} cards={(cards.data ?? []).filter((card) => !card.account.archived)} />
         </div>
       </div>
 
@@ -364,6 +366,13 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
                   <span className="font-semibold text-danger">
                     {" "}
                     · Low<span className="sr-only"> balance</span>
+                  </span>
+                )}
+                {(period.promosEnding?.length ?? 0) > 0 && (
+                  // Kept to one word on screen so the strip stays one line high; the cards panel below says the rest.
+                  <span title="A promotional rate ends in this pay period with a balance left" className="font-semibold text-warn-ink">
+                    {" "}
+                    · Promo<span className="sr-only"> rate ends</span>
                   </span>
                 )}
               </span>
@@ -629,7 +638,8 @@ function OccurrenceAmount({ occurrence, context }: { occurrence: Occurrence; con
   const changeFuture = useChangeItemAmount();
   const item = context.items.find((candidate) => candidate.id === occurrence.itemId);
   // A yearly total is shared out by the app, so one occurrence's amount cannot stand for the item's.
-  const canChangeFuture = item !== undefined && item.amountMode === "per_occurrence";
+  // Nor can a card's own payment be changed from here on: its amount is set on the card's page.
+  const canChangeFuture = item !== undefined && item.amountMode === "per_occurrence" && item.paymentOfCardId == null;
 
   const save = (amountCents: number, scope: EditScope) => {
     if (scope === "future" && item !== undefined) {
@@ -1168,6 +1178,60 @@ function AccountsPanel({
           </ul>
         </section>
       )}
+    </Panel>
+  );
+}
+
+/**
+ * Every card across the period: what is owed at its end, what is paid toward it, and any
+ * promotional rate that runs out during it with a balance left. Nothing is shown until a card exists.
+ */
+function CardsPanel({ detail, cards }: { detail: PeriodDetail; cards: readonly CreditCard[] }) {
+  if (cards.length === 0) {
+    return null;
+  }
+  return (
+    <Panel title="Credit cards" aside="at period end">
+      <ul className="divide-y divide-line">
+        {cards.map((card) => {
+          const balance = detail.accounts.find((candidate) => candidate.accountId === card.account.id);
+          const payments = detail.occurrences.filter(
+            (occurrence) => !occurrence.skipped && occurrence.kind === "card_payment" && occurrence.payToAccountId === card.account.id,
+          );
+          const paid = payments.reduce((sum, occurrence) => sum + occurrence.amountCents, 0);
+          const ending = (detail.promosEnding ?? []).filter((promo) => promo.accountId === card.account.id);
+          return (
+            <li key={card.account.id} className="py-1.5 lg:py-1">
+              <div className="flex items-center gap-3">
+                <Dot color={card.account.color} />
+                <div className="min-w-0 flex-1 leading-tight">
+                  <Link to={`/cards/${card.account.id}`} className="font-medium text-accent-ink underline wrap-break-word">
+                    {card.account.name}
+                  </Link>
+                  <div data-amount className="text-sm leading-tight text-muted tabular-nums">
+                    {payments.length === 0
+                      ? "No payment this period"
+                      : `${formatCents(paid)} paid · ${payments.map((occurrence) => formatDay(occurrence.payBy)).join(", ")}`}
+                  </div>
+                </div>
+                <span data-amount className="shrink-0 font-semibold tabular-nums">
+                  {balance ? formatCents(balance.endingCents) : "—"}
+                </span>
+              </div>
+              {/* In words with an icon, never color alone. */}
+              {ending.map((promo) => (
+                <p key={promo.promoId} className="mt-1 flex items-start gap-1.5 rounded-md border border-warn-line bg-warn px-2 py-1 text-sm font-semibold text-warn-ink">
+                  <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+                  <span data-amount className="min-w-0">
+                    {promo.label} ends {formatDay(promo.endDate)} with {formatCents(promo.remainingCents)} left
+                    {promo.deferredInterest && " · deferred interest"}
+                  </span>
+                </p>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
     </Panel>
   );
 }

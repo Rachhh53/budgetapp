@@ -124,6 +124,26 @@ export function ItemForm(props: ItemFormProps) {
   if (bucket && account && buckets) {
     return <BucketForm account={account} bucket={bucket} buckets={buckets} onClose={props.onClose} />;
   }
+  // A card's own payment is kept in step with the card's payment setting, so that is where it is changed.
+  const cardId = props.item?.paymentOfCardId ?? null;
+  if (props.item && cardId !== null) {
+    return (
+      <Modal title={props.item.name} icon={KIND_ICONS[props.item.kind]} onClose={props.onClose}>
+        <p>
+          This is the card's own payment. How much it is, which account it comes from and whether it is on autopay are all set on the
+          card's page, and this item follows.
+        </p>
+        <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={props.onClose} className={BUTTON_SECONDARY}>
+            Close
+          </button>
+          <Link to={`/cards/${cardId}`} onClick={props.onClose} className={`${BUTTON_PRIMARY} content-center text-center`}>
+            Go to the card's page
+          </Link>
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal
       title={props.item ? [`Edit ${props.item.name}`, ...(props.part && PART_TITLES[props.part] ? [PART_TITLES[props.part]] : [])].join(" · ") : "Add a recurring item"}

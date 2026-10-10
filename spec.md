@@ -201,6 +201,11 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
 - **card_statements** — `account_id, close_date, statement_balance, minimum_due, due_date`.
 - **card_promos** — `account_id, label, kind (balance_transfer | purchase | other), rate_bp, start_date, end_date, original_balance, rate_after_bp (nullable → regular APR), deferred_interest`. Several per card allowed.
 - **loan_settings** — `account_id, original_principal, rate_bp, term_months, start_date, payment_amount, escrow_insurance, escrow_taxes`.
+- As built (Phase 5, migration `V15`):
+  - `card_settings` also has `payment_item_id` (the recurring item that is the card's own payment, kept in step with these settings) and `monthly_estimate` (for a card whose charges are not entered one by one). `pay_from_account_id` may be empty: no payment is scheduled then.
+  - `card_statements` is unique per card and closing date: the same date again replaces it.
+  - `card_promos` also has `payoff_item_id`, the recurring payment the payoff helper added.
+  - `loan_settings` has no `rate_bp`: a loan's rate, like a card's APR, is a dated rate in `rate_history` (kinds `loan_rate` and `apr`), so a change of rate never rewrites earlier months. It has `payment_day` (1–31, 31 = last day), and `original_principal`, `term_months` and `start_date` are optional.
 
 ### 4.10 Yearly plans
 - **plan_years** — `id, year, status (draft | active | closed), basis (last_12 | last_12_trend | prior_year), created_at`.
@@ -261,12 +266,26 @@ For an occurrence due on **D**, with **P** = the period containing D:
   - **Statement balance, estimated** (asked for by Rachel on 2026-10-09): the card's projected balance as of its statement closing date is the estimated payment on the next due date, so a recurring card payment can be set to "pay the statement balance" and follow the card instead of a typed amount.
 - Interest estimate when a balance is carried, using the promo rate while active, then `rate_after` / regular APR.
 - **Promos:** warn within the user's lead time; stronger warning for deferred interest. **Payoff helper:** remaining promo balance ÷ number of primary paydays before the end date, rounded up to the cent; one-click "add as recurring payment". Test: $2,400 before Mar 15, 2027 with 10 paydays left → $240.00.
+- As built (Phase 5):
+  - **Statement cycle**: a statement closes on the card's closing day each month and is due on the first due day after it. A statement the user enters stands in for the balance from the day after it closed, and replaces any estimate.
+  - **The card's own payment** is a recurring `card_payment` item the card keeps in step with its payment setting: created when a pay-from account is chosen, changed from today on when the setting changes, archived when the account is cleared. Unless the mode is fixed, or one occurrence was typed over, its amount is worked out per statement — it "follows the card". It is edited on the card's page, not as an item.
+  - **Amounts by mode**: full balance = what is owed on the due day; statement balance = the statement entered, or the projected balance at the close; minimum = the minimum entered, or the larger of $25 and 1% of the statement plus that month's interest, never more than is owed; fixed = the amount set.
+  - **Interest**: a month at APR ÷ 12 on what was left unpaid from the statement before, added at the close. Paying the statement in full means none. A carried balance is shared out lowest rate first, each promotion up to what is left of the balance it started with; once a promotion ends, its share is charged `rate_after`, or the regular APR.
+  - **Deferred interest**: if a deferred promotion still has a balance on its end date, interest for the whole promotion on its starting balance is charged that day.
+  - **Monthly estimate**: one estimate of spending is added at each close until the real statement is entered (decided 2026-10-10, §11).
+  - **Warnings**: from `promo_warning_days` before the end (a setting, 60 by default; choices 30, 45, 60, 90, 120 — its control arrives with Settings in Phase 6), only while a balance is on the promotion; `soon_deferred` is the stronger one, `ended` once it has passed with a balance left. A pay period is flagged when a promotion ends in it with a balance projected to remain.
+  - **Payoff helper**: paydays strictly after today and before the end date. The payment it adds runs every pay period from the next payday to the day before the end, from the card's pay-from account, or the primary paycheck's account when none is set.
 
 ### 5.7 Loans, home, net worth
 - Amortization: each payment splits into interest and principal; escrow is part of the payment but not principal.
 - Home value from user entries, with optional appreciation between entries. Equity = value − linked loan balance.
 - Net worth = cash + savings + investments + assets − card balances − loan balances.
-- As built (home and net worth; loans themselves are Phase 5):
+- As built (loans, Phase 5):
+  - A month's interest (rate ÷ 12, HALF_EVEN) is added to what is owed on the payment day; it is skipped on a day a balance was entered, which already includes it.
+  - A scheduled (recurring) payment into the loan has the month's insurance and taxes taken out before it lowers the loan, at most one month's escrow per calendar month. An extra one-off payment goes wholly to the loan.
+  - The loan's page shows the next payment shared out, the payoff date and the interest still to pay at this payment and rate, year by year, and — when the amount borrowed, term and rate are all known — the level payment those terms work out to. If the payment does not cover a month's interest it says so, and no payoff date is given.
+  - What is owed always starts from the balance the user enters; the terms never overwrite it. Equity and net worth use the ledger's balance, so they move with each payment.
+- As built (home and net worth):
   - **Asset value on a day**: the latest value entered on or before it, compounded for each whole month since at the monthly rate of its assumed yearly growth. With no rate, it stays as entered. A value worked out this way is marked as an estimate wherever it shows. An asset with no value entered counts for nothing.
   - **Equity**: value − what the linked loan is owed today.
   - **Net worth** is today's figure: every account's balance at the end of today plus every asset, less cards and loans. Archived accounts and assets are left out. A card or loan balance is entered as the amount owed.
@@ -431,7 +450,7 @@ Planner per §5.9 with editable growth rates, option cards, payoff order (highes
 ## 11. Open questions to confirm during the build
 - ~~Holidays: user-entered only, or also prefill common US bank holidays (stored locally)?~~ **Decided 2026-10-06:** prefill US bank holidays (calculated locally, Federal Reserve rules: a Sunday holiday is observed on Monday, a Saturday one is not moved); each can be switched off, changed or removed, and the user can add their own.
 - ~~Budget timing: keep "start of period" only, or also offer "spread evenly"?~~ **Decided 2026-10-06:** neither as a setting. Each budget has its own date (§5.3): the period's first day by default, changeable per budget for one occurrence or for this and all future.
-- Cards without itemized charges: estimate per pay period or per month by default?
+- ~~Cards without itemized charges: estimate per pay period or per month by default?~~ **Decided 2026-10-10:** per month — one estimate for each statement month, added when the statement closes and replaced by the real statement once it is entered.
 - Pay stubs: which employers' formats to test against first (use the user's real stubs, kept local).
 
 ---
@@ -599,6 +618,25 @@ Also in this branch: growth is kept out of the pay period's Income panel and the
 **The income source page is laid out like an account's page** (Rachel, 2026-10-10: "is there a way for it to look more like an account detail page?"; layout and figures chosen by her from options): a card of four big figures first — **Take-home** and **Gross** a paycheck, **So far this year** and **Whole year** (take-home from the paychecks that have arrived this calendar year, today's included, and from every paycheck of the year, each counted in the year it arrives; raises and typed-over paychecks are in them; `GET /api/income-sources/{id}/this-year`) — then a titled card per topic: **Schedule**, **Coming out of every paycheck** (with an "Each paycheck" total), **Employer match**, **Pay history**, beside **Upcoming paychecks** in a right-hand column. A topic with nothing set up says so and says where to add it. Rule for every later screen (Rachel, same day: "all future detail pages and overview tabs should look more consistent"): a new overview copies Accounts and Income, and a new detail page copies the account and income source pages — breadcrumb, title, action buttons, figures card, one card per topic.
 
 Not in this phase: loan amortization and loan payments (Phase 5) — a loan here is a balance the user enters; net worth over time (today's figure only).
+
+### Phase 5 — Credit cards and loans (`milestone/5-cards-loans`)
+
+**Status: built, waiting for Rachel to try it and confirm.** Branched from `main` after Phase 4 was merged (PR #9). Verified with 184 engine, 417 server and 304 frontend tests passing. Not yet merged.
+
+Decided with Rachel before building (2026-10-10): Phase 5 only, in one branch and one pull request (the pop-up forms that are still too long stay carried forward); Credit cards is an overview with a page per card, like Accounts and Income, not the mockup's side-by-side; a card whose charges are not itemized takes one estimate per statement month (§11).
+
+Migration on this branch: `V15` card settings, statements, promotions and loan settings. Only adds tables, so nothing recorded for Undo stops fitting.
+
+| Feature | Status | Notes |
+|---|---|---|
+| Add credit card settings, payment modes, statements and charges | Done | `PUT /api/cards/{id}/settings`, statements entered as they arrive (they replace the estimate), the four payment modes, and the card's own payment as a recurring item that follows the card (§5.6). `+ Charge` on a card's page opens the add form on that card. A bill or one-off paid from a card already landed on it (Phase 2). |
+| Add card interest estimates, promo rates with warnings, and the payoff helper | Done | Interest on what is carried, promotions lowest rate first, `rate_after` or the APR once one ends, deferred interest on the end date. Countdown and warning in words with an icon; the stronger one for deferred interest. The payoff helper adds the per-paycheck payment in one click and then says it is added. `promo_warning_days` is a setting (default 60); its control comes with Settings in Phase 6. |
+| Add loans with amortization and escrow linked to the home for equity | Done | `GET`, `PUT /api/accounts/{id}/loan`; interest monthly on the payment day, escrow taken out of the scheduled payment, extra payments wholly to the loan (§5.7). The loan's page has **Monthly payment** (next payment shared out, payoff date, interest still to pay, year by year), **Loan terms** and **Interest rate**, each with its own short form. A linked home's equity follows the loan's balance. |
+| Render the Credit cards screen and the pay-period cards panel | Done | `/cards` overview (owed, next payment, on a promo rate; a row per card with its countdown) and `/cards/{id}` (figures, promo rates with progress, payoff helper, "If it's not paid off", statements, statement and due dates, payment setting, regular APR, charges and payments). The pay period has a **Credit cards** panel and a "Promo ends" flag on the strip. |
+
+Also in this branch: a card's own payment shows "Follows the card" in place of an amount on Recurring items and is edited on the card's page, as a bucket's own move is edited on its bucket; an account's page shows a card's or loan's rate among its figures and, for a card, links to its page under Credit cards; every new pop-up is a short form (billing dates, payment setting, statement, loan payment, loan terms, rate) or two short steps (a promo rate).
+
+Not in this phase: the control for how early promo warnings start (Phase 6, Settings); comparing ways to pay debt down (Phase 12).
 
 ### Carried forward into later phases
 

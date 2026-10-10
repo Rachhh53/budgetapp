@@ -1,0 +1,125 @@
+package app.budget.engine.loans;
+
+import app.budget.engine.BasisPoints;
+import app.budget.engine.Money;
+import app.budget.engine.interest.InterestTerms;
+import app.budget.engine.interest.SavingsInterest;
+import app.budget.engine.projection.BalanceAnchor;
+import app.budget.engine.projection.Movement;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+/**
+ * Follows one loan day by day to work out what its payments really do to it (spec §5.7):
+ * a month's interest is added on the payment day, and the escrow part of a regular payment
+ * never reaches the loan.
+ *
+ * <p>Payments are the caller's; what comes back are the extra movements to add to them, so
+ * the balance itself is still projected in one place.
+ */
+public final class LoanProjector {
+
+    private LoanProjector() {}
+
+    /**
+     * @param paymentDay    day of the month a month's interest is added, 1–31 (31 = the last day)
+     * @param escrowMonthly the part of a month's regular payments that goes to insurance and taxes
+     * @param rate          the loan's rate over time; {@code null} when none was entered
+     */
+    public record Terms(int paymentDay, Money escrowMonthly, InterestTerms rate) {}
+
+    public enum Kind {
+        /** A month's interest, added to what is owed. */
+        INTEREST,
+        /** The part of a regular payment that went to escrow, so it did not lower the loan. */
+        ESCROW
+    }
+
+    /** @param amount what it adds to the amount owed; always positive */
+    public record Derived(LocalDate date, Kind kind, Money amount) {}
+
+    /**
+     * @param anchors balances the user entered (what was owed at the start of that day), in any order
+     * @param regular the scheduled payments, as movements (negative); escrow comes out of these,
+     *                up to a month's escrow in each calendar month
+     * @param other   anything else that moves the loan: an extra payment goes wholly to the loan
+     * @param through the last day to follow
+     */
+    public static List<Derived> project(
+            List<BalanceAnchor> anchors, List<Movement> regular, List<Movement> other, Terms terms, LocalDate through) {
+        if (anchors.isEmpty()) {
+            return List.of();
+        }
+        TreeMap<LocalDate, Money> entered = new TreeMap<>();
+        for (BalanceAnchor anchor : anchors) {
+            entered.put(anchor.date(), anchor.balance());
+        }
+        LocalDate start = entered.firstKey();
+        if (start.isAfter(through)) {
+            return List.of();
+        }
+        // What is still outstanding when the newest balance was entered happens on that day, as in the projection.
+        LocalDate newest = entered.lastKey();
+        TreeMap<LocalDate, List<Money>> scheduled = byDay(regular, newest);
+        TreeMap<LocalDate, List<Money>> others = byDay(other, newest);
+        TreeSet<LocalDate> interestDays = new TreeSet<>(SavingsInterest.creditDates(terms.paymentDay(), start, through));
+
+        TreeSet<LocalDate> days = new TreeSet<>(entered.keySet());
+        days.addAll(scheduled.keySet());
+        days.addAll(others.keySet());
+        days.addAll(interestDays);
+
+        List<Derived> derived = new ArrayList<>();
+        Map<YearMonth, Money> escrowTaken = new HashMap<>();
+        Money owed = entered.firstEntry().getValue();
+        for (LocalDate day : days.subSet(start, true, through, true)) {
+            Money anchored = entered.get(day);
+            if (anchored != null) {
+                owed = anchored;
+            }
+            // A balance entered for the payment day is taken to hold that month's interest already.
+            if (interestDays.contains(day) && anchored == null && terms.rate() != null) {
+                BasisPoints rate = terms.rate().rateOn(day).orElse(null);
+                Money interest = rate == null ? Money.ZERO : Amortization.monthlyInterest(owed, rate);
+                if (!interest.isZero()) {
+                    owed = owed.plus(interest);
+                    derived.add(new Derived(day, Kind.INTEREST, interest));
+                }
+            }
+            for (Money amount : scheduled.getOrDefault(day, List.of())) {
+                owed = owed.plus(amount);
+                if (!amount.isNegative()) {
+                    continue;
+                }
+                YearMonth month = YearMonth.from(day);
+                Money taken = escrowTaken.getOrDefault(month, Money.ZERO);
+                Money wanted = terms.escrowMonthly().minus(taken);
+                Money paid = amount.negate();
+                Money escrow = wanted.compareTo(paid) > 0 ? paid : wanted;
+                if (!escrow.isNegative() && !escrow.isZero()) {
+                    owed = owed.plus(escrow);
+                    escrowTaken.put(month, taken.plus(escrow));
+                    derived.add(new Derived(day, Kind.ESCROW, escrow));
+                }
+            }
+            for (Money amount : others.getOrDefault(day, List.of())) {
+                owed = owed.plus(amount);
+            }
+        }
+        return derived;
+    }
+
+    private static TreeMap<LocalDate, List<Money>> byDay(List<Movement> movements, LocalDate newestEntered) {
+        TreeMap<LocalDate, List<Money>> byDay = new TreeMap<>();
+        for (Movement movement : movements) {
+            byDay.computeIfAbsent(movement.countsOn(newestEntered), day -> new ArrayList<>()).add(movement.amount());
+        }
+        return byDay;
+    }
+}

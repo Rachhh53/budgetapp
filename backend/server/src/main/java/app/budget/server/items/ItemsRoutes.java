@@ -1,5 +1,6 @@
 package app.budget.server.items;
 
+import app.budget.engine.cards.CardPayment;
 import app.budget.engine.items.Placement;
 import app.budget.engine.schedule.Frequency;
 import app.budget.engine.schedule.ScheduleRule;
@@ -11,6 +12,7 @@ import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
+import app.budget.server.cards.CardsRepository;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.income.PayCalendar;
@@ -26,6 +28,7 @@ import app.budget.server.ledger.Ledger;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -52,6 +55,7 @@ public final class ItemsRoutes {
     private final TagsRepository tags;
     private final BucketsRepository buckets;
     private final Ledger ledger;
+    private final CardsRepository cards;
 
     public ItemsRoutes(
             ItemsRepository items,
@@ -61,7 +65,8 @@ public final class ItemsRoutes {
             CategoriesRepository categories,
             TagsRepository tags,
             BucketsRepository buckets,
-            Ledger ledger) {
+            Ledger ledger,
+            CardsRepository cards) {
         this.items = items;
         this.calendar = calendar;
         this.pay = pay;
@@ -70,6 +75,7 @@ public final class ItemsRoutes {
         this.tags = tags;
         this.buckets = buckets;
         this.ledger = ledger;
+        this.cards = cards;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -142,6 +148,10 @@ public final class ItemsRoutes {
      * @param history     every version, oldest first: the item's price history
      * @param paused      true while it is paused today, so nothing it is scheduled for happens
      * @param pausedUntil the first day it runs again; {@code null} when not paused, or paused until turned back on
+     * @param paymentOfCardId the credit card whose own payment this is, kept in step with that card's
+     *                    payment setting; {@code null} for any other item
+     * @param followsCard true when its amount is whatever that card's payment setting works out to
+     *                    (its statement balance, say), so {@code amountCents} means nothing
      */
     public record ItemView(
             long id,
@@ -170,7 +180,9 @@ public final class ItemsRoutes {
             Next next,
             List<PricePoint> history,
             boolean paused,
-            LocalDate pausedUntil) {}
+            LocalDate pausedUntil,
+            Long paymentOfCardId,
+            boolean followsCard) {}
 
     /** @param until the first day it runs again; left out to pause until it is turned back on */
     public record PauseInput(LocalDate until) {}
@@ -338,8 +350,11 @@ public final class ItemsRoutes {
                         : Inputs.optionalText(input.confirmationCode(), "the confirmation code", CODE_MAX),
                 input.note() == null ? stored.note() : Inputs.optionalText(input.note(), "the note", NOTE_MAX),
                 input.skipped() == null ? stored.skipped() : input.skipped(),
-                // Kept from the first time the amount is typed over, so the original stays on record.
-                stored.projectedCents() != null || amount == null ? stored.projectedCents() : (Long) current.amountCents(),
+                // Kept from the first time the amount is typed over, so the original stays on record: what the
+                // period showed, which for a payment that follows its card is what the card worked out.
+                stored.projectedCents() != null || amount == null
+                        ? stored.projectedCents()
+                        : ledger.amountOf(id, scheduledDate).orElse(current.amountCents()),
                 input.checkNumber() == null
                         ? stored.checkNumber()
                         : Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)));
@@ -357,16 +372,25 @@ public final class ItemsRoutes {
                 .anyMatch(item -> !item.archived() && item.versionOn(pay.today()).terms().saveUpBucketId() != null);
         Map<Long, Long> saveUps = anySavedUpFor ? ledger.nextSaveUps() : Map.of();
         Map<Long, List<Pause>> pauses = items.pauses();
+        // The recurring items that are a card's own payment, by item.
+        Map<Long, CardsRepository.Settings> cardPayments = new HashMap<>();
+        for (CardsRepository.Settings settings : cards.allSettings().values()) {
+            if (settings.paymentItemId() != null) {
+                cardPayments.put(settings.paymentItemId(), settings);
+            }
+        }
         return chosen.stream()
                 .map(item -> view(
                         item,
                         Optional.ofNullable(next.get(item.id())),
                         saveUps.get(item.id()),
-                        pauses.getOrDefault(item.id(), List.of()).stream().filter(pause -> pause.covers(pay.today())).findFirst()))
+                        pauses.getOrDefault(item.id(), List.of()).stream().filter(pause -> pause.covers(pay.today())).findFirst(),
+                        cardPayments.get(item.id())))
                 .toList();
     }
 
-    private ItemView view(Item item, Optional<Occurrence> next, Long saveUpPerPaycheckCents, Optional<Pause> pause) {
+    private ItemView view(
+            Item item, Optional<Occurrence> next, Long saveUpPerPaycheckCents, Optional<Pause> pause, CardsRepository.Settings card) {
         Terms terms = item.versionOn(pay.today()).terms();
         Amounts amounts = calendar.amounts(terms);
         return new ItemView(
@@ -398,7 +422,9 @@ public final class ItemsRoutes {
                         .orElse(null),
                 item.versions().stream().map(this::pricePoint).toList(),
                 pause.isPresent(),
-                pause.map(Pause::until).orElse(null));
+                pause.map(Pause::until).orElse(null),
+                card == null ? null : (Long) card.accountId(),
+                card != null && card.paymentMode() != CardPayment.Mode.FIXED);
     }
 
     /**
