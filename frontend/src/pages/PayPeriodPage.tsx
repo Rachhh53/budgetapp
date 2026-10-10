@@ -5,7 +5,7 @@ import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Bucket, useBuckets } from "../api/buckets";
-import { type Category, useCategories, useTags } from "../api/categories";
+import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
@@ -123,6 +123,7 @@ export function PayPeriodPage() {
     accountName: (id) => names.get(id) ?? "an account",
     bucketName: (id) => (id === null ? undefined : bucketNames.get(id)),
     categories: categories.data,
+    tags: tags.data,
     items: items.data,
     editItem: setEditingItem,
   };
@@ -216,6 +217,7 @@ interface RowContext {
   /** `undefined` for no bucket, or one that has since been archived or removed. */
   bucketName: (id: number | null) => string | undefined;
   categories: readonly Category[];
+  tags: readonly Tag[];
   items: readonly Item[];
   editItem: (item: Item) => void;
 }
@@ -671,8 +673,26 @@ function Dot({ color }: { color: string | undefined }) {
   return <span aria-hidden className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: color ?? "var(--border)" }} />;
 }
 
-function categoryOf(categoryId: number | null, context: RowContext): Category | undefined {
-  return context.categories.find((category) => category.id === categoryId);
+/**
+ * The category's colour beside a row. Its name, and the row's tags, are kept off the line
+ * itself, where they read like an account or bucket name: they show on hover and are read
+ * out by a screen reader.
+ */
+function CategoryDot({ categoryId, tagIds, context }: { categoryId: number | null; tagIds: readonly number[]; context: RowContext }) {
+  const category = context.categories.find((candidate) => candidate.id === categoryId);
+  const tagNames = context.tags.filter((tag) => tagIds.includes(tag.id)).map((tag) => tag.name);
+  const about = [category && `Category: ${category.name}`, tagNames.length > 0 && `Tags: ${tagNames.join(", ")}`]
+    .filter(Boolean)
+    .join(" · ");
+  if (about === "") {
+    return <Dot color={undefined} />;
+  }
+  return (
+    <span title={about} className="flex shrink-0 items-center">
+      <Dot color={category?.color} />
+      <span className="sr-only">{about}</span>
+    </span>
+  );
 }
 
 function IncomePanel({
@@ -778,7 +798,13 @@ function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurren
             {occurrences.map((occurrence) => (
               <Row
                 key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
-                lead={<Dot color={categoryOf(occurrence.categoryId, context)?.color} />}
+                lead={
+                  <CategoryDot
+                    categoryId={occurrence.categoryId}
+                    tagIds={context.items.find((item) => item.id === occurrence.itemId)?.tagIds ?? []}
+                    context={context}
+                  />
+                }
                 title={
                   <>
                     <ItemName occurrence={occurrence} context={context} />
@@ -837,7 +863,7 @@ function ManualPanel({
           {oneOffs.map((entry) => (
             <Row
               key={entry.id}
-              lead={<Dot color={categoryOf(entry.categoryId, context)?.color} />}
+              lead={<CategoryDot categoryId={entry.categoryId} tagIds={entry.tagIds} context={context} />}
               title={<EntryName entry={entry} />}
               detail={oneOffDetail(entry, context)}
               amount={<EntryAmount entry={entry} />}
@@ -854,8 +880,8 @@ function oneOffDetail(entry: Entry, context: RowContext): string {
     entry.toAccountId === null
       ? context.accountName(entry.accountId)
       : `${context.accountName(entry.accountId)} → ${context.accountName(entry.toAccountId)}`;
-  const category = categoryOf(entry.categoryId, context);
-  return ["One-off", formatDay(entry.date), where, category?.name].filter(Boolean).join(" · ");
+  // The category is on the coloured dot, not here: after an account it reads like one of its buckets.
+  return ["One-off", formatDay(entry.date), where].join(" · ");
 }
 
 /** A bill paid by hand: tick it when it is paid, and keep the confirmation code with it. */

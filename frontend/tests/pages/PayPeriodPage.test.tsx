@@ -305,7 +305,9 @@ describe("pay period screen", () => {
     const manual = await panel("Pay manually & one-offs");
     expect(within(manual).getByText("1 of 2 paid")).toBeInTheDocument();
     expect(within(manual).getByText("Due Oct 16 · pay by Oct 14 · Everyday Checking")).toBeInTheDocument();
-    expect(within(manual).getByText("One-off · Oct 3 · Everyday Checking · Pets")).toBeInTheDocument();
+    // The category is not on the line, where it would read like a bucket; it is on the dot, for hover and screen readers.
+    expect(within(manual).getByText("One-off · Oct 3 · Everyday Checking")).toBeInTheDocument();
+    expect(within(manual).getByTitle("Category: Pets")).toBeInTheDocument();
     // Paid is said in words and the code is plain text with a pencil to change it.
     expect(within(manual).getByText("✓ Paid Oct 7")).toBeInTheDocument();
     expect(within(manual).getByText("VX93-2210")).toBeInTheDocument();
