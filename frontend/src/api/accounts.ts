@@ -69,6 +69,10 @@ export interface AccountInput {
   color: string;
   archived: boolean;
   lowBalanceThresholdCents: number | null;
+  /** Only read when adding: the account's first balance (what is owed, for a card or loan). */
+  balanceCents?: number;
+  /** The day that balance is from; today when left out. */
+  balanceDate?: string;
 }
 
 export interface BalanceInput {

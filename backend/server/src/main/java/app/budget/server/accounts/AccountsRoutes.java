@@ -64,7 +64,11 @@ public final class AccountsRoutes {
         routes.put("/api/account-balances", this::saveBalances);
     }
 
-    /** Request body for creating or changing an account. */
+    /**
+     * Request body for creating or changing an account. {@code balanceCents} and
+     * {@code balanceDate} are only read when adding: they record its first balance (today when no
+     * date is given), so an account and what it holds or owes go in as one change.
+     */
     public record AccountInput(
             String name,
             String institution,
@@ -72,7 +76,9 @@ public final class AccountsRoutes {
             String subtypeLabel,
             String color,
             Boolean archived,
-            Long lowBalanceThresholdCents) {}
+            Long lowBalanceThresholdCents,
+            Long balanceCents,
+            LocalDate balanceDate) {}
 
     /** Request body for entering a balance. */
     public record BalanceInput(LocalDate date, Long amountCents, String note) {}
@@ -93,7 +99,19 @@ public final class AccountsRoutes {
     public record Deleted(boolean deleted) {}
 
     private void create(Context ctx) {
-        long id = accounts.create(fields(Inputs.body(ctx, AccountInput.class)));
+        AccountInput input = Inputs.body(ctx, AccountInput.class);
+        AccountsRepository.Fields fields = fields(input);
+        // Checked before anything is saved, so a refused balance never leaves an account behind.
+        LocalDate today = LocalDate.now(clock);
+        LocalDate balanceDate = input.balanceDate() == null ? today : input.balanceDate();
+        Long balance = input.balanceCents() == null ? null : Inputs.signedAmount(input.balanceCents(), "The balance");
+        if (balance != null && (balanceDate.isAfter(today) || !Inputs.inSupportedYears(balanceDate))) {
+            throw ApiException.badRequest("A balance needs a date of today or earlier.");
+        }
+        long id = accounts.create(fields);
+        if (balance != null) {
+            accounts.saveBalance(id, balanceDate, balance, null);
+        }
         ApiResponse.send(ctx, 201, detail(id));
     }
 

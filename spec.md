@@ -581,7 +581,9 @@ Migration on this branch: `V12` employer match, assets and asset values.
 
 Also in this branch: growth is kept out of the pay period's Income panel and the investment tab says how much of "Coming in" is assumed growth. Undo covers the three new tables without new code. On a phone the Accounts list wraps long names instead of cutting them off, and the match choice is a dropdown, since three segments left one stranded on its own row. Checked by eye in a real browser at 375px and 1440px: Accounts, Update balances, the asset form and page, the investment account page, the Income screen and its form, and the pay period's investment tab. Nothing runs off the side.
 
-Not in this phase: loan amortization and loan payments (Phase 5) — a loan here is a balance the user enters; net worth over time (today's figure only).
+First balance while adding an account (Rachel, 2026-10-10, on adding a home loan: "no dollar amount fields"): the Add an account form takes the balance — **Amount owed** for a card or loan — and the day it is from, for every kind of account, saved with the account as one change (`balanceCents`, `balanceDate` on `POST /api/accounts`). Before this a new account's balance could only be entered afterwards from its page or Update balances. 350 server and 262 frontend tests.
+
+Not in this phase: a loan's interest rate, payment, term and escrow (insurance, taxes), with amortization (Phase 5, "Add loans with amortization and escrow linked to the home for equity") — a loan here is a balance the user enters; net worth over time (today's figure only).
 
 ### Carried forward into later phases
 

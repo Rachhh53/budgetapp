@@ -106,7 +106,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/session` | lock |
 | GET | `/api/settings` | all settings with effective values |
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
-| GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel?, lowBalanceThresholdCents? }` (the threshold is for checking and savings) |
+| GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel?, lowBalanceThresholdCents?, balanceCents?, balanceDate? }` (the threshold is for checking and savings; `balanceCents` is its first balance — what is owed, for a card or loan — from `balanceDate`, today when left out, saved in the same change) |
 | GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances, interest settings and rate history; change; delete (refused while income, an item or an entry uses it) |
 | PUT, DELETE | `/api/items/{id}/pause` | pause a recurring item from today, `{ until? }` (the first day it runs again; left out to pause until resumed); DELETE resumes it today. Paused dates never happen, even after resuming |
 | GET | `/api/account-balances` | what every account holds at the end of today (`balanceCents`) and what of it is outside buckets (`availableCents`): the last balance entered plus everything since, or built up from nothing when none was entered |

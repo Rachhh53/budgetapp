@@ -177,6 +177,50 @@ describe("accounts screen", () => {
     expect(bodiesSentTo(fetchMock, "POST /api/accounts/9/rates")).toEqual([{ rateBp: 410, effectiveDate: todayIso() }]);
   });
 
+  it("takes what is owed on a loan while adding it, in the same request", async () => {
+    const fetchMock = fakeBackend({
+      "POST /api/accounts": (body) => ({
+        status: 201,
+        data: {
+          account: { ...(body as Omit<Account, "id" | "latestBalance">), id: 9, latestBalance: null },
+          balances: [],
+          interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null },
+          rates: [],
+        } satisfies AccountDetail,
+      }),
+    });
+    renderApp("/accounts");
+    await screen.findByText("No accounts yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Maple Street mortgage");
+    expect(within(dialog).getByLabelText("Balance (optional)")).toBeInTheDocument();
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Loan");
+    await userEvent.type(within(dialog).getByLabelText("Amount owed (optional)"), "285000");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "POST /api/accounts")).toEqual([
+      expect.objectContaining({ type: "loan", balanceCents: 28_500_000, balanceDate: todayIso() }),
+    ]);
+  });
+
+  it("asks kindly when the first balance is not an amount, and adds nothing", async () => {
+    const fetchMock = fakeBackend();
+    renderApp("/accounts");
+    await screen.findByText("No accounts yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Everyday Checking");
+    await userEvent.type(within(dialog).getByLabelText("Balance (optional)"), "lots");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
+
+    expect(await within(dialog).findByText("Please enter an amount like 1,250.00.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "POST /api/accounts")).toEqual([]);
+  });
+
   it("offers no interest rate for an account that earns none this way", async () => {
     fakeBackend();
     renderApp("/accounts");
