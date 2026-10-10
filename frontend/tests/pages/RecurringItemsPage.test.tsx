@@ -212,9 +212,10 @@ describe("recurring items screen", () => {
       "Next",
       "Edit",
     ]);
-    // Being able to change an item is never left to be discovered: every row says so.
+    // Being able to change an item is never left to be discovered: every row has its pencil, named for what it edits.
     expect(within(table).getAllByRole("button", { name: /^Edit / })).toHaveLength(4);
-    expect(within(table).getAllByText("Edit", { selector: "button span" })).toHaveLength(4);
+    // The pencil alone: the column heading already says Edit.
+    expect(within(table).queryByText("Edit", { selector: "button span" })).not.toBeInTheDocument();
     // One header row and one row per item.
     expect(within(table).getAllByRole("row")).toHaveLength(5);
   });

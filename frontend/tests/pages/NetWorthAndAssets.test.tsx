@@ -131,8 +131,8 @@ describe("accounts screen: home & assets", () => {
     const car = within(group).getByRole("link", { name: /Outback/ });
     expect(car).toHaveTextContent("Vehicle");
     expect(car).not.toHaveTextContent("(estimate)");
-    // A visible Edit button on every row, not just a clickable name.
-    expect(within(group).getByRole("button", { name: "Edit Outback" })).toBeInTheDocument();
+    // A row does one thing, open the asset's page: editing starts there, so no button sits on the row.
+    expect(within(group).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("adds a home with its value, its loan and an assumed rate", async () => {
@@ -191,11 +191,14 @@ describe("accounts screen: home & assets", () => {
   });
 
   it("asks again kindly for a rate that is not a rate, and shows the backend's reason when it refuses", async () => {
-    const fetchMock = withAssets({ "PUT /api/assets/6": () => ({ status: 400, error: "Please add a name for this." }) });
-    renderApp("/accounts");
-    const group = await screen.findByRole("region", { name: "Home & assets" });
+    const fetchMock = withAssets({
+      "GET /api/assets/6": () => ({ status: 200, data: { asset: CAR, values: [] } }),
+      "PUT /api/assets/6": () => ({ status: 400, error: "Please add a name for this." }),
+    });
+    renderApp("/assets/6");
 
-    await userEvent.click(within(group).getByRole("button", { name: "Edit Outback" }));
+    // The same button, pencil and wording as on an account's and an income source's page.
+    await userEvent.click(await screen.findByRole("button", { name: "Edit asset" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Outback" });
     // Its value has its own history, so it is not asked for again here.
     expect(within(dialog).queryByRole("textbox", { name: "Value" })).not.toBeInTheDocument();

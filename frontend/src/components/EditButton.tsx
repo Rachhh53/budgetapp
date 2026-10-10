@@ -1,15 +1,26 @@
 import { Pencil } from "lucide-react";
+import { BUTTON_SECONDARY } from "./ui";
 
 interface EditButtonProps {
   /** What it opens, for screen readers and the tooltip: "Edit Electric". */
   name: string;
   onClick: () => void;
-  /**
-   * Show the word "Edit" beside the pencil. Left off on the rows of an overview screen
-   * (Accounts, Income), where the row itself opens the detail and the pencil alone is enough,
-   * and wherever a row has no room for the word.
-   */
+  /** Show the word "Edit" beside the pencil. Left off on list rows (Recurring items, the pay period), where the pencil alone is enough. */
   labelled?: boolean;
+}
+
+/**
+ * The Edit button at the top of a detail page (an account, an asset, an income source): the
+ * same pencil and the same shape on every one, saying what it edits ("Edit account"). The rows
+ * of an overview only open the page; editing starts here.
+ */
+export function EditPageButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className={`${BUTTON_SECONDARY} inline-flex items-center justify-center gap-2`}>
+      <Pencil aria-hidden className="size-4" />
+      {label}
+    </button>
+  );
 }
 
 /**

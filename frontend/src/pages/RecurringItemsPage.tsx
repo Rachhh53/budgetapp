@@ -387,7 +387,7 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
       </Cell>
       {/* On a phone it closes the card, on the right where a thumb reaches. */}
       <Cell className="col-span-2 -my-2 justify-self-end md:col-span-1 md:-my-1">
-        <EditButton name={item.name} onClick={onEdit} labelled />
+        <EditButton name={item.name} onClick={onEdit} />
       </Cell>
     </div>
   );

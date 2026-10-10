@@ -4,11 +4,11 @@ import { useAccounts } from "../api/accounts";
 import { type IncomeSource, type PayTerms, useDeletePayChange, useIncomeSources, useIncomeThisYear } from "../api/income";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
-import { EditButton } from "../components/EditButton";
+import { EditButton, EditPageButton } from "../components/EditButton";
 import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule, WEEKEND_LABELS } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
-import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_LINK, BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -68,9 +68,7 @@ export function IncomeDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
-          <button type="button" onClick={() => setForm({})} aria-label={`Edit ${source.name}`} className={BUTTON_SECONDARY}>
-            Edit
-          </button>
+          <EditPageButton label="Edit income source" onClick={() => setForm({})} />
           <button
             type="button"
             onClick={() => setForm({ payChange: true })}

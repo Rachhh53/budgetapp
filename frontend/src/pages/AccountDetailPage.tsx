@@ -23,7 +23,8 @@ import { ProjectionChart } from "../components/accounts/ProjectionChart";
 import { Amount } from "../components/Amount";
 import { BucketsCard } from "../components/buckets/BucketsCard";
 import { Card } from "../components/Card";
-import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { EditPageButton } from "../components/EditButton";
+import { BUTTON_LINK, BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -106,9 +107,7 @@ export function AccountDetailPage() {
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <button type="button" onClick={() => setEditing(true)} className={BUTTON_SECONDARY}>
-            Edit account
-          </button>
+          <EditPageButton label="Edit account" onClick={() => setEditing(true)} />
           <button type="button" onClick={() => setUpdating(true)} className={BUTTON_PRIMARY}>
             Update balance
           </button>

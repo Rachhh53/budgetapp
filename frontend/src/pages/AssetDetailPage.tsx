@@ -6,6 +6,7 @@ import { Amount } from "../components/Amount";
 import { AssetForm } from "../components/assets/AssetForm";
 import { ASSET_KIND_ICONS, ASSET_KIND_LABELS } from "../components/assets/labels";
 import { Card } from "../components/Card";
+import { EditPageButton } from "../components/EditButton";
 import { Modal } from "../components/Modal";
 import { AMOUNT_HELP, MoneyField } from "../components/MoneyField";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
@@ -71,9 +72,7 @@ export function AssetDetailPage() {
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <button type="button" onClick={() => setEditing(true)} className={BUTTON_SECONDARY}>
-            Edit
-          </button>
+          <EditPageButton label="Edit asset" onClick={() => setEditing(true)} />
           <button type="button" onClick={() => setUpdating(true)} className={BUTTON_PRIMARY}>
             Update value
           </button>

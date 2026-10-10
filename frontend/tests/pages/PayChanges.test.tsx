@@ -89,9 +89,9 @@ describe("a raise: pay that changes from a date", () => {
 
   it("a plain edit is a correction, and says which paychecks it reaches", async () => {
     const fetchMock = withSalary(SALARY);
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const timing = within(dialog).getByRole("group", { name: "When the amounts below apply" });
     expect(within(timing).getByRole("radio", { name: /I'm correcting the amounts/ })).toBeChecked();
@@ -119,7 +119,7 @@ describe("a raise: pay that changes from a date", () => {
     withSalary(WITH_RAISE);
     renderApp("/income");
 
-    await screen.findByRole("button", { name: "Edit Brightwater Health" });
+    await screen.findByRole("link", { name: /Brightwater Health/ });
     expect(screen.queryByRole("heading", { name: "Pay history" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Record a pay change/ })).not.toBeInTheDocument();
   });

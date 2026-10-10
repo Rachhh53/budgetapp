@@ -234,9 +234,9 @@ describe("income screen: employer match", () => {
       "GET /api/income-sources": () => ({ status: 200, data: [noMatch] }),
       "PUT /api/income-sources/1": () => ({ status: 200, data: SALARY, changed: true }),
     });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const match = within(dialog).getByRole("group", { name: "Employer match" });
     expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("none");
@@ -263,9 +263,9 @@ describe("income screen: employer match", () => {
 
   it("sets up a match that is the same amount every paycheck, and takes one off again", async () => {
     const fetchMock = withInvestments({ "PUT /api/income-sources/1": () => ({ status: 200, data: SALARY, changed: true }) });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     let dialog = screen.getByRole("dialog", { name: "Edit income source" });
     let match = within(dialog).getByRole("group", { name: "Employer match" });
     // The form opens on the match as it is.
@@ -279,7 +279,7 @@ describe("income screen: employer match", () => {
       match: { toAccountId: 2, mode: "fixed", fixedCents: 7500, matchBp: null, capBpOfGross: null },
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit income source" }));
     dialog = screen.getByRole("dialog", { name: "Edit income source" });
     match = within(dialog).getByRole("group", { name: "Employer match" });
     await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "No match");
@@ -294,9 +294,9 @@ describe("income screen: employer match", () => {
       "GET /api/income-sources": () => ({ status: 200, data: [takeHomeOnly] }),
       "PUT /api/income-sources/1": () => ({ status: 200, data: takeHomeOnly, changed: true }),
     });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const match = within(dialog).getByRole("group", { name: "Employer match" });
     await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A percentage of what I put in");
@@ -322,9 +322,9 @@ describe("income screen: employer match", () => {
 
   it("takes a contribution as a percent of gross pay, and says what that comes to", async () => {
     const fetchMock = withInvestments({ "PUT /api/income-sources/1": () => ({ status: 200, data: SALARY, changed: true }) });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const deductions = within(dialog).getByRole("group", { name: "Goes to your accounts" });
     // It opens as the dollar amount it was saved as.
@@ -343,9 +343,9 @@ describe("income screen: employer match", () => {
   it("asks for gross pay before taking a contribution as a percent of it", async () => {
     const takeHomeOnly: IncomeSource = { ...SALARY, grossCents: null, match: null, matchFigures: null };
     const fetchMock = withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [takeHomeOnly] }) });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const deductions = within(dialog).getByRole("group", { name: "Goes to your accounts" });
     await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent of gross pay");

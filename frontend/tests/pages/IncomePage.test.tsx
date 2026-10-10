@@ -150,8 +150,8 @@ describe("income screen", () => {
     expect(bakery).toHaveTextContent("Every 2 weeks · Fridays");
     // The varying amount is marked as an estimate in words, not just by its blue box.
     expect(bakery).toHaveTextContent("$318.40 (estimate)");
-    // Each row still has its visible Edit.
-    expect(within(sources).getByRole("button", { name: "Edit Riverside Bakery" })).toBeInTheDocument();
+    // A row does one thing, open the source's page: editing starts there, so no button sits on the row.
+    expect(within(sources).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("shows one source's schedule and where the money goes on its own page", async () => {
@@ -368,9 +368,9 @@ describe("income screen", () => {
 
   it("edits a source, keeping the primary one primary", async () => {
     const fetchMock = withIncome({ "PUT /api/income-sources/1": () => ({ status: 200, data: SALARY }) });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Northwind Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     expect(within(dialog).getByLabelText("Take-home per paycheck")).toHaveValue("2486.20");
     expect(within(dialog).getByRole("combobox", { name: "Deposited to" })).toHaveValue("Everyday Checking");
@@ -390,9 +390,9 @@ describe("income screen", () => {
     withIncome({
       "DELETE /api/income-sources/1": () => ({ status: 409, error: "This source defines your pay periods." }),
     });
-    renderApp("/income");
+    renderApp("/income/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Northwind Health" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete income source…" }));
     expect(screen.getByRole("button", { name: "Keep it" })).toHaveFocus();
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));

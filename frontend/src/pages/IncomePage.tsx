@@ -4,14 +4,11 @@ import { type Account, useAccounts } from "../api/accounts";
 import { type IncomeSource, useIncomeSources } from "../api/income";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
-import { EditButton } from "../components/EditButton";
 import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
 import { BUTTON_PRIMARY, PAGE_TITLE, ROW_LINK } from "../components/ui";
 
-/** What the form is open for: a new source, an existing one, or closed. */
-type FormState = { source?: IncomeSource } | null;
 
 /**
  * Income (design/income.png), as an overview like the Accounts screen: every source on one
@@ -22,7 +19,7 @@ type FormState = { source?: IncomeSource } | null;
 export function IncomePage() {
   const sources = useIncomeSources();
   const accounts = useAccounts();
-  const [form, setForm] = useState<FormState>(null);
+  const [adding, setAdding] = useState(false);
   const headingId = useId();
 
   const allAccounts = accounts.data ?? [];
@@ -35,7 +32,7 @@ export function IncomePage() {
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Money coming in</p>
           <h1 className={PAGE_TITLE}>Income</h1>
         </div>
-        <button type="button" disabled={needsAccount} onClick={() => setForm({})} className={BUTTON_PRIMARY}>
+        <button type="button" disabled={needsAccount} onClick={() => setAdding(true)} className={BUTTON_PRIMARY}>
           + Add income source
         </button>
       </div>
@@ -78,7 +75,7 @@ export function IncomePage() {
               </h2>
               <ul className="divide-y divide-line">
                 {sources.data.map((source) => (
-                  <SourceRow key={source.id} source={source} accounts={allAccounts} onEdit={() => setForm({ source })} />
+                  <SourceRow key={source.id} source={source} accounts={allAccounts} />
                 ))}
               </ul>
             </section>
@@ -87,20 +84,16 @@ export function IncomePage() {
         <UpcomingPaychecks />
       </div>
 
-      {form && (
-        <IncomeSourceForm
-          source={form.source}
-          isFirst={sources.data?.length === 0}
-          accounts={allAccounts}
-          onClose={() => setForm(null)}
-        />
-      )}
+      {adding && <IncomeSourceForm isFirst={sources.data?.length === 0} accounts={allAccounts} onClose={() => setAdding(false)} />}
     </>
   );
 }
 
-/** One source on the overview: who pays, when, into which account, and what a paycheck brings home. */
-function SourceRow({ source, accounts, onEdit }: { source: IncomeSource; accounts: Account[]; onEdit: () => void }) {
+/**
+ * One source on the overview: who pays, when, into which account, and what a paycheck brings
+ * home. The row only opens the source's page; editing starts there.
+ */
+function SourceRow({ source, accounts }: { source: IncomeSource; accounts: Account[] }) {
   const account = accounts.find((candidate) => candidate.id === source.depositAccountId)?.name ?? "an account that was removed";
 
   return (
@@ -123,7 +116,6 @@ function SourceRow({ source, accounts, onEdit }: { source: IncomeSource; account
           </span>
         </span>
       </Link>
-      <EditButton name={source.name} onClick={onEdit} />
     </li>
   );
 }

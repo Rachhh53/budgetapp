@@ -10,7 +10,6 @@ import { Amount } from "../components/Amount";
 import { AssetForm } from "../components/assets/AssetForm";
 import { ASSET_KIND_LABELS } from "../components/assets/labels";
 import { Card } from "../components/Card";
-import { EditButton } from "../components/EditButton";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE, ROW_LINK } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
@@ -28,14 +27,10 @@ export function AccountsPage() {
   const [adding, setAdding] = useState(false);
   const [addingAsset, setAddingAsset] = useState(false);
   const [updating, setUpdating] = useState(false);
-  // Kept as ids, so an open form always shows the account or asset as it is now.
-  const [editingId, setEditingId] = useState<number>();
-  const [editingAssetId, setEditingAssetId] = useState<number>();
 
   const all = accounts.data ?? [];
   const active = all.filter((account) => !account.archived);
   const archived = all.filter((account) => account.archived);
-  const editing = all.find((account) => account.id === editingId);
   const groups = ACCOUNT_GROUPS.map(({ title, types }) => ({ title, accounts: active.filter((account) => types.includes(account.type)) })).filter(
     (group) => group.accounts.length > 0,
   );
@@ -43,7 +38,6 @@ export function AccountsPage() {
   const everyAsset = assets.data ?? [];
   const owned = everyAsset.filter((asset) => !asset.archived);
   const archivedAssets = everyAsset.filter((asset) => asset.archived);
-  const editingAsset = everyAsset.find((asset) => asset.id === editingAssetId);
   const nothingYet = accounts.data !== undefined && assets.data !== undefined && all.length === 0 && everyAsset.length === 0;
   // The assets group is one more card in the grid, so it counts when deciding which card is left alone on the last row.
   const cards = groups.length + (owned.length > 0 ? 1 : 0);
@@ -106,12 +100,11 @@ export function AccountsPage() {
               key={group.title}
               title={group.title}
               accounts={group.accounts}
-              onEdit={setEditingId}
               // A group left alone on the last row takes the whole width instead of sitting in half of it.
               wide={cards % 2 === 1 && index === cards - 1}
             />
           ))}
-          {owned.length > 0 && <AssetGroup assets={owned} onEdit={setEditingAssetId} wide={cards % 2 === 1} />}
+          {owned.length > 0 && <AssetGroup assets={owned} wide={cards % 2 === 1} />}
         </div>
       )}
 
@@ -122,20 +115,18 @@ export function AccountsPage() {
           </summary>
           <ul className="mt-2 divide-y divide-line">
             {archived.map((account) => (
-              <AccountRow key={account.id} account={account} today={undefined} onEdit={setEditingId} />
+              <AccountRow key={account.id} account={account} today={undefined} />
             ))}
             {archivedAssets.map((asset) => (
-              <AssetRow key={asset.id} asset={asset} onEdit={setEditingAssetId} />
+              <AssetRow key={asset.id} asset={asset} />
             ))}
           </ul>
         </details>
       )}
 
       {adding && <AccountForm accounts={all} onClose={() => setAdding(false)} />}
-      {editing && <AccountForm account={editing} accounts={all} onClose={() => setEditingId(undefined)} />}
       {updating && <UpdateBalancesForm accounts={all} onClose={() => setUpdating(false)} />}
       {addingAsset && <AssetForm assets={everyAsset} accounts={all} onClose={() => setAddingAsset(false)} />}
-      {editingAsset && <AssetForm asset={editingAsset} assets={everyAsset} accounts={all} onClose={() => setEditingAssetId(undefined)} />}
     </>
   );
 }
@@ -174,12 +165,10 @@ function NetWorthSummary({ worth }: { worth: NetWorth }) {
 function AccountGroup({
   title,
   accounts,
-  onEdit,
   wide,
 }: {
   title: string;
   accounts: Account[];
-  onEdit: (id: number) => void;
   wide: boolean;
 }) {
   const headingId = `group-${title.replace(/\W+/g, "-").toLowerCase()}`;
@@ -198,14 +187,15 @@ function AccountGroup({
       </div>
       <ul className="divide-y divide-line">
         {accounts.map((account) => (
-          <AccountRow key={account.id} account={account} today={held(account)} onEdit={onEdit} />
+          <AccountRow key={account.id} account={account} today={held(account)} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AccountRow({ account, today, onEdit }: { account: Account; today: AccountBalance | undefined; onEdit: (id: number) => void }) {
+/** One account on the overview. The row only opens the account's page; editing starts there. */
+function AccountRow({ account, today }: { account: Account; today: AccountBalance | undefined }) {
   return (
     <li className="flex items-center gap-2">
       <Link to={`/accounts/${account.id}`} className={ROW_LINK}>
@@ -239,12 +229,11 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
           )}
         </span>
       </Link>
-      <EditButton name={account.name} onClick={() => onEdit(account.id)} />
     </li>
   );
 }
 
-function AssetGroup({ assets, onEdit, wide }: { assets: Asset[]; onEdit: (id: number) => void; wide: boolean }) {
+function AssetGroup({ assets, wide }: { assets: Asset[]; wide: boolean }) {
   const total = assets.reduce((sum, asset) => sum + (asset.valueCents ?? 0), 0);
   return (
     <section aria-labelledby="group-home-assets" className={`${GROUP} ${wide ? "lg:col-span-2" : ""}`}>
@@ -256,14 +245,14 @@ function AssetGroup({ assets, onEdit, wide }: { assets: Asset[]; onEdit: (id: nu
       </div>
       <ul className="divide-y divide-line">
         {assets.map((asset) => (
-          <AssetRow key={asset.id} asset={asset} onEdit={onEdit} />
+          <AssetRow key={asset.id} asset={asset} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => void }) {
+function AssetRow({ asset }: { asset: Asset }) {
   return (
     <li className="flex items-center gap-2">
       <Link to={`/assets/${asset.id}`} className={ROW_LINK}>
@@ -293,7 +282,6 @@ function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => voi
           )}
         </span>
       </Link>
-      <EditButton name={asset.name} onClick={() => onEdit(asset.id)} />
     </li>
   );
 }

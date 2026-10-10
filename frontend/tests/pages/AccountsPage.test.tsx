@@ -199,14 +199,13 @@ describe("accounts screen", () => {
     expect(row).toHaveAttribute("href", `/accounts/${CHECKING.id}`);
   });
 
-  it("has an Edit button on every account, which opens it for changing without leaving the list", async () => {
+  it("keeps a row to one job, opening the account: editing starts on its page", async () => {
     fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
     renderApp("/accounts");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Everyday Checking" }));
-
-    const dialog = screen.getByRole("dialog", { name: "Edit account" });
-    expect(within(dialog).getByLabelText("Name")).toHaveValue("Everyday Checking");
+    const group = await screen.findByRole("region", { name: "Checking & savings" });
+    expect(within(group).getByRole("link", { name: /Everyday Checking/ })).toBeInTheDocument();
+    expect(within(group).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("starts a new account on a color no other account uses", async () => {
