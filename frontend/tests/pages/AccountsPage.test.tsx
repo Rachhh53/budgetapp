@@ -189,12 +189,13 @@ describe("accounts screen", () => {
     expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
   });
 
-  it("says Open on every account, so the way into its page is not a guess", async () => {
+  it("shows each account as a row that opens: a link with the hand cursor set outright", async () => {
     fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
     renderApp("/accounts");
 
     const row = await screen.findByRole("link", { name: /Everyday Checking/ });
-    expect(row).toHaveTextContent(/Open$/);
+    // The desktop shell gives a link no hand cursor by itself, so the row asks for one.
+    expect(row).toHaveClass("cursor-pointer");
     expect(row).toHaveAttribute("href", `/accounts/${CHECKING.id}`);
   });
 

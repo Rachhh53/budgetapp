@@ -1,4 +1,3 @@
-import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { type Account, holdsCash, useAccounts } from "../api/accounts";
@@ -239,7 +238,6 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
             <span className="text-sm text-muted">No balance yet</span>
           )}
         </span>
-        <OpenCue />
       </Link>
       <EditButton name={account.name} onClick={() => onEdit(account.id)} labelled />
     </li>
@@ -248,26 +246,10 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
 
 /**
  * A row that opens its page. The hand cursor and the highlight are set outright, since inside
- * the desktop shell a link shows neither by itself; the Open cue is what says so before any hover.
+ * the desktop shell a link shows neither by itself, and they are what says the row can be opened.
  */
 const ROW_LINK =
-  "group -mx-2 flex min-h-11 min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-3 hover:bg-bg/60";
-
-/**
- * Says in words that the row opens: its page is where balances, rates and history live, and a
- * name that happens to be clickable was not discoverable (Rachel, 2026-10-10). It sits inside
- * the row's link, looking like the button it acts as. On a phone it takes a line of its own.
- */
-function OpenCue() {
-  return (
-    <span className="flex basis-full justify-end sm:basis-auto">
-      <span className="inline-flex min-h-9 items-center gap-1 rounded-lg border border-line px-2.5 text-sm font-semibold text-accent-ink group-hover:border-(--accent)">
-        Open
-        <ChevronRight aria-hidden className="size-4" />
-      </span>
-    </span>
-  );
-}
+  "-mx-2 flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg px-2 py-3 hover:bg-bg/60";
 
 function AssetGroup({ assets, onEdit, wide }: { assets: Asset[]; onEdit: (id: number) => void; wide: boolean }) {
   const total = assets.reduce((sum, asset) => sum + (asset.valueCents ?? 0), 0);
@@ -317,7 +299,6 @@ function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => voi
             <span className="text-sm text-muted">No value yet</span>
           )}
         </span>
-        <OpenCue />
       </Link>
       <EditButton name={asset.name} onClick={() => onEdit(asset.id)} labelled />
     </li>
