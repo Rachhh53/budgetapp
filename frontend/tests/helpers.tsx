@@ -46,6 +46,13 @@ const nothingProjected: Handler = () => ({ status: 200, data: [] });
 const NO_PERFORMANCE = /^GET \/api\/accounts\/\d+\/performance$/;
 const nothingToCompare: Handler = () => ({ status: 200, data: { thisYear: null, balances: [] } });
 
+/** Any income source's year: nothing has arrived until a test says so. */
+const NO_YEAR = /^GET \/api\/income-sources\/\d+\/this-year$/;
+const nothingThisYear: Handler = () => ({
+  status: 200,
+  data: { year: 2026, soFarCents: 0, paychecksSoFar: 0, wholeYearCents: 0, paychecksInYear: 0, estimate: false },
+});
+
 /**
  * Replaces `fetch` with a tiny fake backend. Routes are keyed `"METHOD /path"` and are laid
  * over a fresh install; anything else answers 404, in the same envelope the real backend uses.
@@ -56,7 +63,7 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
     const handler =
-      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : undefined);
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;

@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { type Account, useAccounts } from "../api/accounts";
-import { type IncomeSource, type PayTerms, useDeletePayChange, useIncomeSources } from "../api/income";
+import { useAccounts } from "../api/accounts";
+import { type IncomeSource, type PayTerms, useDeletePayChange, useIncomeSources, useIncomeThisYear } from "../api/income";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton } from "../components/EditButton";
@@ -17,9 +17,10 @@ import { formatRate } from "../lib/rates";
 type FormState = { terms?: PayTerms; payChange?: boolean } | null;
 
 /**
- * One income source: its schedule, what each paycheck comes to and where it goes, the
- * employer's match with a nudge when some of it is going unclaimed, its pay history, and the
- * paychecks coming up. The Income screen is the overview; this is where the detail lives.
+ * One income source, laid out like an account's page: the big figures first (what a paycheck
+ * brings home, and what the year adds up to), then a card per topic — schedule, what comes out
+ * of every paycheck, the employer's match, pay history — beside the paychecks coming up.
+ * The Income screen is the overview; this is where the detail lives.
  */
 export function IncomeDetailPage() {
   const id = Number(useParams().id);
@@ -49,6 +50,7 @@ export function IncomeDetailPage() {
   }
 
   const allAccounts = accounts.data ?? [];
+  const accountName = (accountId: number | null) => allAccounts.find((account) => account.id === accountId)?.name;
 
   return (
     <>
@@ -80,12 +82,24 @@ export function IncomeDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className="space-y-4">
-          <SourceCard source={source} accounts={allAccounts} />
-          <PayHistory source={source} onEditTerms={(terms) => setForm({ terms })} />
+      <div className="space-y-4">
+        <Figures source={source} />
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <div className="space-y-4">
+            <Card title="Schedule">
+              <dl className="grid gap-4 sm:grid-cols-3">
+                <Fact term="Paid">{describeSchedule(source.schedule)}</Fact>
+                <Fact term="On a weekend or holiday">{WEEKEND_LABELS[source.schedule.weekendRule]}</Fact>
+                <Fact term="Deposits to">{accountName(source.depositAccountId) ?? "An account that was removed"}</Fact>
+              </dl>
+            </Card>
+            <DeductionsCard source={source} accountName={accountName} />
+            <MatchCard source={source} accountName={accountName} />
+            <PayHistory source={source} onEditTerms={(terms) => setForm({ terms })} />
+          </div>
+          <UpcomingPaychecks sourceId={source.id} />
         </div>
-        <UpcomingPaychecks sourceId={source.id} />
       </div>
 
       {form && (
@@ -103,93 +117,163 @@ export function IncomeDetailPage() {
   );
 }
 
-function SourceCard({ source, accounts }: { source: IncomeSource; accounts: Account[] }) {
-  const accountName = (id: number | null) => accounts.find((account) => account.id === id)?.name;
+/** The figures an account page opens with, for income: a paycheck, and the year it adds up to. */
+function Figures({ source }: { source: IncomeSource }) {
+  const year = useIncomeThisYear(source.id);
+  const current = source.payHistory.find((entry) => entry.current);
 
   return (
-    <section
-      aria-label={source.name}
-      className={`rounded-card bg-surface p-5 md:p-6 ${source.primary ? "border-2 border-accent" : "border border-line"}`}
-    >
-      <dl className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
-        <Fact term="Schedule">{describeSchedule(source.schedule)}</Fact>
-        <Fact term="Weekend or holiday">{WEEKEND_LABELS[source.schedule.weekendRule]}</Fact>
-        <Fact term="Deposits to">{accountName(source.depositAccountId) ?? "An account that was removed"}</Fact>
-        <Fact term={source.grossCents === null ? "Net per paycheck" : "Gross · net per paycheck"}>
-          {source.grossCents !== null && (
-            <>
-              <Amount cents={source.grossCents} className="-ml-2" /> ·{" "}
-            </>
-          )}
-          <Amount cents={source.netCents} estimate={source.netIsEstimate} className={source.grossCents === null ? "-ml-2" : ""} />
-        </Fact>
-      </dl>
-
-      {source.deductions.length > 0 && (
-        <div className="mt-4">
-          <h2 className="border-b border-line pb-2 font-semibold">Goes to your accounts</h2>
-          <ul className="divide-y divide-line">
-            {source.deductions.map((deduction, index) => (
-              // Deductions have no id of their own; their order is their identity.
-              <li key={index} className="flex items-center justify-between gap-3 py-2">
-                <span className="min-w-0">
-                  {deduction.name}
-                  {deduction.percentBp !== null && ` · ${formatRate(deduction.percentBp)} of gross pay`}
-                  {deduction.toAccountId !== null && ` → ${accountName(deduction.toAccountId) ?? "an account that was removed"}`}
-                </span>
-                <Amount cents={deduction.amountCents} className="shrink-0 font-semibold" />
-              </li>
-            ))}
-          </ul>
+    <Card>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <p className="text-muted">Take-home</p>
+          <Amount cents={source.netCents} estimate={source.netIsEstimate} className="-ml-2 text-3xl font-bold" />
+          <p className="text-muted">
+            a paycheck
+            {current?.effectiveDate && ` · since ${formatDate(current.effectiveDate)}`}
+            {source.netIsEstimate && " · an estimate until you type the real amount into a paycheck"}
+          </p>
         </div>
-      )}
+        <div>
+          <p className="text-muted">Gross</p>
+          {source.grossCents === null ? (
+            <p className="mt-1 font-medium">Not entered.</p>
+          ) : (
+            <p data-amount className="text-2xl font-bold tabular-nums">
+              {formatCents(source.grossCents)}
+            </p>
+          )}
+          <p className="text-muted">a paycheck, before anything comes out</p>
+        </div>
+        {year.isError ? (
+          <p role="alert" className="text-danger sm:col-span-2">
+            {year.error.message}
+          </p>
+        ) : (
+          <>
+            <Stat
+              label="So far this year"
+              cents={year.data?.soFarCents}
+              note={year.data ? `take-home from ${paychecks(year.data.paychecksSoFar)} in ${year.data.year}` : "Adding it up…"}
+            />
+            <Stat
+              label="Whole year"
+              cents={year.data?.wholeYearCents}
+              note={
+                year.data
+                  ? `take-home expected from ${paychecks(year.data.paychecksInYear)} in ${year.data.year}${year.data.estimate ? ", some of them estimates" : ""}`
+                  : "Adding it up…"
+              }
+            />
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
 
-      {source.match && (
-        <div className="mt-4">
-          <h2 className="border-b border-line pb-2 font-semibold">Employer match</h2>
+function paychecks(count: number): string {
+  return count === 1 ? "1 paycheck" : `${count} paychecks`;
+}
+
+function Stat({ label, cents, note }: { label: string; cents: number | undefined; note: string }) {
+  return (
+    <div>
+      <p className="text-muted">{label}</p>
+      <p data-amount className="text-2xl font-bold tabular-nums">
+        {cents === undefined ? "—" : formatCents(cents)}
+      </p>
+      <p className="text-muted">{note}</p>
+    </div>
+  );
+}
+
+type AccountName = (accountId: number | null) => string | undefined;
+
+/** What is taken out of each paycheck before it lands, and which of it goes to the user's own accounts. */
+function DeductionsCard({ source, accountName }: { source: IncomeSource; accountName: AccountName }) {
+  const total = source.deductions.reduce((sum, deduction) => sum + deduction.amountCents, 0);
+  return (
+    <Card title="Coming out of every paycheck">
+      {source.deductions.length === 0 ? (
+        <p className="text-muted">
+          Nothing is set to come out. If a 401(k), HSA or anything else is taken out before your pay reaches you, choose Edit and add it
+          under "Goes to your accounts".
+        </p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {source.deductions.map((deduction, index) => (
+            // Deductions have no id of their own; their order is their identity.
+            <li key={index} className="flex items-center justify-between gap-3 py-2">
+              <span className="min-w-0">
+                {deduction.name}
+                {deduction.percentBp !== null && ` · ${formatRate(deduction.percentBp)} of gross pay`}
+                {deduction.toAccountId !== null && ` → ${accountName(deduction.toAccountId) ?? "an account that was removed"}`}
+              </span>
+              <Amount cents={deduction.amountCents} className="shrink-0 font-semibold" />
+            </li>
+          ))}
+          <li className="flex items-center justify-between gap-3 py-2 font-semibold">
+            <span>Each paycheck</span>
+            <Amount cents={total} className="shrink-0" />
+          </li>
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+/** The employer's match, with a nudge when some of it is going unclaimed. */
+function MatchCard({ source, accountName }: { source: IncomeSource; accountName: AccountName }) {
+  const { match, matchFigures } = source;
+  return (
+    <Card title="Employer match">
+      {match === null ? (
+        <p className="text-muted">
+          No employer match is set up. If your employer adds to a retirement account when you do, choose Edit and add it under "Employer
+          match".
+        </p>
+      ) : (
+        <>
           <div className="flex items-center justify-between gap-3 py-2">
             <span className="min-w-0">
-              {source.match.mode === "fixed"
+              {match.mode === "fixed"
                 ? "The same amount every paycheck"
-                : `${formatRate(source.match.matchBp ?? 0)} of what you put in, up to ${formatRate(source.match.capBpOfGross ?? 0)} of gross pay`}
-              {` → ${accountName(source.match.toAccountId) ?? "an account that was removed"}`}
+                : `${formatRate(match.matchBp ?? 0)} of what you put in, up to ${formatRate(match.capBpOfGross ?? 0)} of gross pay`}
+              {` → ${accountName(match.toAccountId) ?? "an account that was removed"}`}
             </span>
-            {source.matchFigures && <Amount cents={source.matchFigures.perPaycheckCents} className="shrink-0 font-semibold" />}
+            {matchFigures && <Amount cents={matchFigures.perPaycheckCents} className="shrink-0 font-semibold" />}
           </div>
-          {source.matchFigures === null && (
+          {matchFigures === null && (
             <p className="text-sm text-muted">Add the gross amount per paycheck and the match can be worked out.</p>
           )}
-          {source.match.contributionWithinCap && (
+          {match.contributionWithinCap && (
             <p className="text-sm text-muted">
-              No gross amount is entered, so this takes your word that what you put in is within the{" "}
-              {formatRate(source.match.capBpOfGross ?? 0)} of pay that is matched. Add the gross amount and it is checked for you.
+              No gross amount is entered, so this takes your word that what you put in is within the {formatRate(match.capBpOfGross ?? 0)}{" "}
+              of pay that is matched. Add the gross amount and it is checked for you.
             </p>
           )}
           {/* Said in words with the amounts: money the employer would add that is not being claimed. */}
-          {source.matchFigures && source.matchFigures.contributeMoreCents > 0 && (
+          {matchFigures && matchFigures.contributeMoreCents > 0 && (
             <p role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
               <span className="font-semibold">Under the cap.</span> Putting in{" "}
               <span data-amount className="font-semibold tabular-nums">
-                {formatCents(source.matchFigures.contributeMoreCents)}
+                {formatCents(matchFigures.contributeMoreCents)}
               </span>{" "}
               more each paycheck would earn the whole match of{" "}
               <span data-amount className="font-semibold tabular-nums">
-                {formatCents(source.matchFigures.mostPossibleCents)}
+                {formatCents(matchFigures.mostPossibleCents)}
               </span>
               :{" "}
               <span data-amount className="font-semibold tabular-nums">
-                {formatCents(source.matchFigures.mostPossibleCents - source.matchFigures.perPaycheckCents)}
+                {formatCents(matchFigures.mostPossibleCents - matchFigures.perPaycheckCents)}
               </span>{" "}
               more from your employer every time.
             </p>
           )}
-        </div>
+        </>
       )}
-
-      {source.netIsEstimate && (
-        <p className="mt-4 text-sm text-muted">This amount stays an estimate until you type the real one into a paycheck.</p>
-      )}
-    </section>
+    </Card>
   );
 }
 
@@ -256,7 +340,7 @@ function isAhead(entry: PayTerms, source: IncomeSource): boolean {
 
 function Fact({ term, children }: { term: string; children: ReactNode }) {
   return (
-    <div>
+    <div className="min-w-0">
       <dt className="text-sm text-muted">{term}</dt>
       <dd className="font-semibold">{children}</dd>
     </div>

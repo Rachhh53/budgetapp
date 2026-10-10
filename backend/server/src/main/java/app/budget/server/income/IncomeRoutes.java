@@ -58,6 +58,7 @@ public final class IncomeRoutes {
         routes.put("/api/income-sources/{id}", this::update);
         routes.delete("/api/income-sources/{id}", this::delete);
         routes.delete("/api/income-sources/{id}/pay-changes/{changeId}", this::deletePayChange);
+        routes.get("/api/income-sources/{id}/this-year", this::thisYear);
         routes.put("/api/income-sources/{id}/paychecks/{scheduledDate}", this::editPaycheck);
         routes.get("/api/paychecks", this::paychecks);
     }
@@ -158,6 +159,18 @@ public final class IncomeRoutes {
         }
     }
 
+    /**
+     * What a source brings home in the calendar year of today, counting each paycheck in the
+     * year it arrives. Raises and typed-over paychecks are in the figures, since they are in the
+     * paychecks.
+     *
+     * @param soFarCents     take-home from the paychecks that have arrived, today's included
+     * @param wholeYearCents take-home from every paycheck of the year, those still to come included
+     * @param estimate       at least one paycheck still to come is an estimate
+     */
+    public record ThisYear(
+            int year, long soFarCents, int paychecksSoFar, long wholeYearCents, int paychecksInYear, boolean estimate) {}
+
     /** Request body for typing over one paycheck's amount. */
     public record PaycheckInput(Long netCents) {}
 
@@ -201,6 +214,25 @@ public final class IncomeRoutes {
             income.updateFrom(id, fields, from);
         }
         ApiResponse.ok(ctx, view(id));
+    }
+
+    private void thisYear(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        if (income.find(id).isEmpty()) {
+            throw ApiException.notFound();
+        }
+        LocalDate today = LocalDate.now(clock);
+        List<PayCalendar.Paycheck> inYear = calendar.paychecks(today.withDayOfYear(1), today.withDayOfYear(today.lengthOfYear())).stream()
+                .filter(paycheck -> paycheck.incomeSourceId() == id)
+                .toList();
+        List<PayCalendar.Paycheck> arrived = inYear.stream().filter(paycheck -> !paycheck.payDate().isAfter(today)).toList();
+        ApiResponse.ok(ctx, new ThisYear(
+                today.getYear(),
+                arrived.stream().mapToLong(PayCalendar.Paycheck::netCents).sum(),
+                arrived.size(),
+                inYear.stream().mapToLong(PayCalendar.Paycheck::netCents).sum(),
+                inYear.size(),
+                inYear.stream().anyMatch(paycheck -> paycheck.payDate().isAfter(today) && paycheck.estimate())));
     }
 
     private void deletePayChange(Context ctx) {

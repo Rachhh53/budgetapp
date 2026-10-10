@@ -212,7 +212,7 @@ describe("income screen: employer match", () => {
     withInvestments();
     renderApp("/income/1");
 
-    const salary = await screen.findByRole("region", { name: "Brightwater Health" });
+    const salary = await screen.findByRole("region", { name: "Employer match" });
     expect(salary).toHaveTextContent("50.00% of what you put in, up to 6.00% of gross pay → Brightwater 401(k)");
     const hint = within(salary).getByRole("status");
     expect(hint).toHaveTextContent("Under the cap.");
@@ -223,7 +223,7 @@ describe("income screen: employer match", () => {
     withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [AT_THE_CAP] }) });
     renderApp("/income/1");
 
-    const salary = await screen.findByRole("region", { name: "Brightwater Health" });
+    const salary = await screen.findByRole("region", { name: "Employer match" });
     expect(salary).toHaveTextContent("$108.00");
     expect(within(salary).queryByRole("status")).not.toBeInTheDocument();
   });

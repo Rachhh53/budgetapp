@@ -217,6 +217,30 @@ export function useDeleteIncomeSource(id: number) {
   });
 }
 
+/**
+ * What a source brings home in this calendar year, counting each paycheck in the year it
+ * arrives. Raises and typed-over paychecks are already in the figures.
+ */
+export interface IncomeThisYear {
+  year: number;
+  /** Take-home from the paychecks that have arrived, today's included. */
+  soFarCents: number;
+  paychecksSoFar: number;
+  /** Take-home from every paycheck of the year, those still to come included. */
+  wholeYearCents: number;
+  paychecksInYear: number;
+  /** At least one paycheck still to come is an estimate. */
+  estimate: boolean;
+}
+
+/** Kept under the pay key, so it follows every change to a schedule, an amount or a single paycheck. */
+export function useIncomeThisYear(sourceId: number) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "income-this-year", sourceId],
+    queryFn: () => api.get<IncomeThisYear>(`/api/income-sources/${sourceId}/this-year`),
+  });
+}
+
 /** Removes one change of pay, so the amounts before it carry on. */
 export function useDeletePayChange(sourceId: number) {
   const refresh = useRefreshIncome();

@@ -162,17 +162,48 @@ describe("income screen", () => {
     expect(screen.getByText("Primary · its paydays define your pay periods")).toBeInTheDocument();
     // The way back to the overview sits above the name (the sidebar has its own Income link too).
     expect(screen.getAllByRole("link", { name: "Income" }).every((link) => link.getAttribute("href") === "/income")).toBe(true);
-    const salary = screen.getByRole("region", { name: "Northwind Health" });
-    expect(salary).toHaveTextContent("Twice a month · 1st & 15th");
-    expect(salary).toHaveTextContent("Previous business day");
-    expect(salary).toHaveTextContent("Everyday Checking");
-    expect(salary).toHaveTextContent("$3,600.00 · $2,486.20");
-    expect(salary).toHaveTextContent("401(k) → Retirement");
-    expect(salary).toHaveTextContent("$150.00");
+    // Laid out like an account's page: a card per topic.
+    const schedule = screen.getByRole("region", { name: "Schedule" });
+    expect(schedule).toHaveTextContent("Twice a month · 1st & 15th");
+    expect(schedule).toHaveTextContent("Previous business day");
+    expect(schedule).toHaveTextContent("Everyday Checking");
+    const out = screen.getByRole("region", { name: "Coming out of every paycheck" });
+    expect(out).toHaveTextContent("401(k) → Retirement");
+    expect(out).toHaveTextContent("Each paycheck$150.00");
+    // Nothing set up is said in words, with where to add it.
+    expect(screen.getByRole("region", { name: "Employer match" })).toHaveTextContent("No employer match is set up.");
     // Only this source's paychecks are listed beside it.
     const upcoming = screen.getByRole("region", { name: "Upcoming paychecks" });
     await within(upcoming).findAllByRole("listitem");
     expect(upcoming).not.toHaveTextContent("Riverside Bakery");
+  });
+
+  it("opens a source's page on its figures: a paycheck, and what the year adds up to", async () => {
+    withIncome({
+      "GET /api/income-sources/1/this-year": () => ({
+        status: 200,
+        data: { year: 2026, soFarCents: 4723780, paychecksSoFar: 19, wholeYearCents: 5966880, paychecksInYear: 24, estimate: false },
+      }),
+    });
+    renderApp("/income/1");
+
+    await screen.findByRole("heading", { level: 1, name: "Northwind Health" });
+    const main = screen.getByRole("main");
+    expect(main).toHaveTextContent("Take-home$2,486.20a paycheck");
+    expect(main).toHaveTextContent("Gross$3,600.00a paycheck, before anything comes out");
+    expect(await within(main).findByText("take-home from 19 paychecks in 2026")).toBeInTheDocument();
+    expect(main).toHaveTextContent("So far this year$47,237.80");
+    expect(main).toHaveTextContent("Whole year$59,668.80take-home expected from 24 paychecks in 2026");
+  });
+
+  it("says so kindly when the year cannot be added up, and still shows the rest", async () => {
+    withIncome({
+      "GET /api/income-sources/1/this-year": () => ({ status: 500, error: "Something went wrong on our side. Please try again." }),
+    });
+    renderApp("/income/1");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our side. Please try again.");
+    expect(screen.getByRole("region", { name: "Schedule" })).toBeInTheDocument();
   });
 
   it("says so kindly when the income source is not there", async () => {

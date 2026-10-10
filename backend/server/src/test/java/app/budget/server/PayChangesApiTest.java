@@ -210,6 +210,38 @@ class PayChangesApiTest extends ApiTestBase {
     }
 
     @Test
+    void thisYearRequiresASessionAndASourceThatExists() throws Exception {
+        assertThat(server.get("/api/income-sources/" + salary + "/this-year", null).status()).isEqualTo(401);
+        assertThat(server.get("/api/income-sources/999/this-year", cookie).status()).isEqualTo(404);
+    }
+
+    @Test
+    void thisYearAddsUpWhatHasArrivedAndWhatTheWholeYearBrings() throws Exception {
+        JsonNode year = server.get("/api/income-sources/" + salary + "/this-year", cookie).data();
+
+        // Paid on the 1st and 15th since January: 19 paychecks by October 1, today's included, of 24.
+        assertThat(year.get("year").asInt()).isEqualTo(2026);
+        assertThat(year.get("paychecksSoFar").asInt()).isEqualTo(19);
+        assertThat(year.get("soFarCents").asLong()).isEqualTo(19 * 248620L);
+        assertThat(year.get("paychecksInYear").asInt()).isEqualTo(24);
+        assertThat(year.get("wholeYearCents").asLong()).isEqualTo(24 * 248620L);
+        assertThat(year.get("estimate").asBoolean()).isFalse();
+    }
+
+    @Test
+    void thisYearFollowsARaiseAndAPaycheckTypedOver() throws Exception {
+        // A raise from July: 12 paychecks at the old amount, 12 at the new one.
+        change(pay(400000, 270000, ",\"effectiveFrom\":\"2026-07-01\""));
+        // And one paycheck still to come typed over.
+        server.put("/api/income-sources/" + salary + "/paychecks/2026-12-15", "{\"netCents\":300000}", cookie);
+
+        JsonNode year = server.get("/api/income-sources/" + salary + "/this-year", cookie).data();
+
+        assertThat(year.get("soFarCents").asLong()).isEqualTo(12 * 248620L + 7 * 270000L);
+        assertThat(year.get("wholeYearCents").asLong()).isEqualTo(12 * 248620L + 11 * 270000L + 300000L);
+    }
+
+    @Test
     void refusesADateOutsideTheYearsTheAppCovers() throws Exception {
         Reply reply = change(pay(400000, 270000, ",\"effectiveFrom\":\"1800-01-01\""));
 
