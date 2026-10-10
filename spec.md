@@ -478,6 +478,20 @@ Also in this branch: **Hide amounts** (blurs every number on every screen; remem
 
 ### Phase 3 — Buckets, savings, save-ups (`milestone/3-buckets-savings`)
 
+**Status: complete on this branch as of 2026-10-09**, after a round of hands-on feedback on the installed app. Everything the earlier phases list as waiting for Phase 3 (bucket moves, save-ups, bucket splits, buckets on the home screen, the low-balance flag) is built here. Last verified with 104 engine, 304 server and 229 frontend tests passing; the installer was last built from `8364c26`.
+
+What the branch holds beyond the five tracked features below, each with its dated decision note further down this section:
+- **Accounts**: one with no balance entered is added up from $0; the Accounts screens show today's balance; a Transactions card (a page at a time, folds away); "Unallocated balance" wording on the account page.
+- **Buckets**: goals with a goal date, suggested amounts and stop-at-goal; a bucket's own recurring amount set up in its form; building a balance from an earlier day; a bucket can never be overdrawn, while an account can and says so loudly.
+- **Spending from a bucket**: one-off entries and recurring items from an account with buckets say where the money comes out of.
+- **Recurring items**: grouped form; changing an item's kind (or "Archive this and add a new item"); pausing until a date or until resumed; archived filter and sortable columns.
+- **Pay period screen**: an account tab for every account; what "Coming in" is made of; goal progress and Stop saving; overdrawn and over-full alerts; check numbers; categories and tags on the dot instead of on the row.
+- **Money fields**: sums typed in, and a calculator beside each.
+
+Migrations on this branch: `V5` buckets, interest and rates · `V6` bucket goal date · `V7` stop at goal · `V8` repair of items whose kind was changed · `V9` item pauses · `V10` item paid from a bucket · `V11` check numbers. All of them have run on Rachel's installed database, so none may be edited: anything further is a new migration.
+
+Still open, not part of the tracked features: interest credited on the day of an entered balance is added on top of it; no running balance per line in Transactions; category and tag names are hover-only on a phone; none of the screens changed on 2026-10-09 were checked by eye at 375px.
+
 | Feature | Status | Notes |
 |---|---|---|
 | Add buckets, recurring bucket moves and bucket splits on money in | Done | `/api/buckets` (add, change, archive, delete, move money by hand); `bucket_move` items; a transfer can land in a bucket; "Set some aside in a bucket" on money in and transfers in the + Add item form. The home screen's panel is now **Accounts & buckets**: in buckets, available after buckets, and each bucket with its change this period and goal bar. The fifth figure is **Available after buckets**. A bucket used by a recurring item cannot be archived or deleted. |

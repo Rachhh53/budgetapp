@@ -49,6 +49,8 @@ into your shell or IDE run configuration.
 | Ctrl+Z | undo the last change (left alone while typing in a field) |
 | ← / → | previous / next pay period, on the home screen |
 | Enter / Esc / Tab | while typing over an amount: save / cancel / save and move on |
+| `+` `-` in an amount | a sum typed into any amount (`4005+3751`) is worked out when the field is left |
+| digits, `+ - * /`, Enter, Backspace, Esc | in a money field's calculator: type the sum, work it out, delete a digit, cancel |
 
 ## Build the installer
 
