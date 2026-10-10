@@ -875,8 +875,14 @@ describe("+ Add item", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     expect(within(dialog).getByRole("radio", { name: "Money in" })).toBeChecked();
     expect(within(dialog).getByRole("combobox", { name: "Into" })).toBeInTheDocument();
+    // Grouped like the recurring item form, the amount first and large.
+    for (const section of ["Amount", "What it is", "When and where to", "Tags and notes"]) {
+      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
+    }
+    expect(within(dialog).getByRole("textbox", { name: "Amount" })).toHaveClass("text-2xl");
 
     await userEvent.click(within(dialog).getByRole("radio", { name: "Transfer" }));
+    expect(within(dialog).getByRole("group", { name: "When, from and to" })).toBeInTheDocument();
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "200");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Top up savings");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));

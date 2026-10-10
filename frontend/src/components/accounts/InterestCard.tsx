@@ -16,6 +16,7 @@ import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { Card } from "../Card";
 import { DaySelect } from "../DaySelect";
 import { EditButton } from "../EditButton";
+import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { Picker } from "../Picker";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
@@ -199,56 +200,68 @@ function InterestForm({ detail, onClose }: { detail: AccountDetail; onClose: () 
   return (
     <Modal title={`Edit interest — ${account.name}`} icon={Percent} tone={account.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor={`${id}-rate`} className={LABEL}>
-              APY (%)
-            </label>
-            <input
-              id={`${id}-rate`}
-              value={rate}
-              onChange={(event) => setRate(event.target.value)}
-              inputMode="decimal"
-              autoComplete="off"
-              placeholder="4.10"
-              required
-              className={`${INPUT} tabular-nums`}
-            />
+        <FormSection title="Rate">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor={`${id}-rate`} className={LABEL}>
+                APY (%)
+              </label>
+              <input
+                id={`${id}-rate`}
+                value={rate}
+                onChange={(event) => setRate(event.target.value)}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="4.10"
+                required
+                // The form's main figure, sized like the amount at the top of the other forms.
+                className={`${INPUT} min-h-14 text-2xl font-semibold tabular-nums`}
+              />
+            </div>
+            <div>
+              <label htmlFor={`${id}-from`} className={LABEL}>
+                Rate applies from
+              </label>
+              <input
+                id={`${id}-from`}
+                type="date"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+                required
+                className={`${INPUT} min-h-14`}
+              />
+            </div>
           </div>
-          <div>
-            <label htmlFor={`${id}-from`} className={LABEL}>
-              Rate applies from
-            </label>
-            <input id={`${id}-from`} type="date" value={from} onChange={(event) => setFrom(event.target.value)} required className={INPUT} />
-          </div>
-        </div>
-        <p className={HINT}>
-          When the bank changes the rate, enter the new one with the date it starts. The old rate stays in the history, ending the day
-          before, and earlier months keep it.
-        </p>
+          <p className={HINT}>
+            When the bank changes the rate, enter the new one with the date it starts. The old rate stays in the history, ending the day
+            before, and earlier months keep it.
+          </p>
+        </FormSection>
 
-        <DaySelect id={`${id}-day`} label="Credited on" value={creditDay} onChange={setCreditDay} />
-        <div>
-          <label htmlFor={`${id}-destination`} className={LABEL}>
-            Interest goes
-          </label>
-          <select
-            id={`${id}-destination`}
-            value={destination}
-            onChange={(event) => setDestination(event.target.value as InterestDestination)}
-            className={INPUT}
-          >
-            {choices.map((option) => (
-              <option key={option} value={option}>
-                {DESTINATION_LABELS[option]}
-              </option>
-            ))}
-          </select>
-          {bucketOptions.length === 0 && <p className={HINT}>Add a bucket to this account to send interest into one.</p>}
-        </div>
-        {destination === "bucket" && (
-          <Picker label="Bucket" noun="bucket" placeholder="Choose or type a bucket" options={bucketOptions} value={bucketId} onChange={setBucketId} />
-        )}
+        <FormSection title="When and where it goes">
+          <DaySelect id={`${id}-day`} label="Credited on" value={creditDay} onChange={setCreditDay} />
+          <div>
+            <label htmlFor={`${id}-destination`} className={LABEL}>
+              Interest goes
+            </label>
+            <select
+              id={`${id}-destination`}
+              value={destination}
+              onChange={(event) => setDestination(event.target.value as InterestDestination)}
+              className={INPUT}
+            >
+              {choices.map((option) => (
+                <option key={option} value={option}>
+                  {DESTINATION_LABELS[option]}
+                </option>
+              ))}
+            </select>
+            {bucketOptions.length === 0 && <p className={HINT}>Add a bucket to this account to send interest into one.</p>}
+          </div>
+          {destination === "bucket" && (
+            <Picker label="Bucket" noun="bucket" placeholder="Choose or type a bucket" options={bucketOptions} value={bucketId} onChange={setBucketId} />
+          )}
+        </FormSection>
 
         {failure && (
           <p role="alert" className="text-danger">
