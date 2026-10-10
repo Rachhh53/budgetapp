@@ -112,12 +112,13 @@ public final class AccountsRepository {
                 .execute()) > 0;
     }
 
-    /** True when a paycheck is deposited to, or a deduction goes into, this account. */
+    /** True when a paycheck is deposited to, or a deduction or employer match goes into, this account. */
     public boolean isUsedByIncome(long id) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
                         SELECT EXISTS (SELECT 1 FROM income_sources WHERE deposit_account_id = :id)
                             OR EXISTS (SELECT 1 FROM paycheck_deductions WHERE to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)
                         """)
                 .bind("id", id)
                 .mapTo(Boolean.class)
@@ -180,6 +181,35 @@ public final class AccountsRepository {
                 .bind("amount", amountCents)
                 .bind("note", note)
                 .execute());
+    }
+
+    /** A balance for one account, as part of several entered together. */
+    public record NewBalance(long accountId, long amountCents) {}
+
+    /** Records several accounts' balances for the same day, all of them or none. */
+    public void saveBalances(LocalDate date, List<NewBalance> balances) {
+        jdbi.useTransaction(handle -> {
+            for (NewBalance balance : balances) {
+                handle.createUpdate("""
+                                INSERT INTO balance_entries (account_id, date, amount, note)
+                                VALUES (:accountId, :date, :amount, NULL)
+                                ON CONFLICT (account_id, date) DO UPDATE SET amount = excluded.amount
+                                """)
+                        .bind("accountId", balance.accountId())
+                        .bind("date", date.toString())
+                        .bind("amount", balance.amountCents())
+                        .execute();
+            }
+        });
+    }
+
+    /** True when an employer match is paid into this account. */
+    public boolean receivesEmployerMatch(long id) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)")
+                .bind("id", id)
+                .mapTo(Boolean.class)
+                .one());
     }
 
     public boolean deleteBalance(long accountId, long entryId) {

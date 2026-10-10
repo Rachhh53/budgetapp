@@ -9,6 +9,7 @@ import app.budget.engine.buckets.BucketProjector.InterestRule;
 import app.budget.engine.buckets.BucketProjector.PeriodBuckets;
 import app.budget.engine.interest.InterestTerms;
 import app.budget.engine.interest.InterestTerms.RateChange;
+import app.budget.engine.investments.GainLoss;
 import app.budget.engine.projection.BalanceAnchor;
 import app.budget.engine.projection.BalanceProjector;
 import app.budget.engine.projection.InterestCredit;
@@ -64,6 +65,11 @@ public final class Ledger {
     private static final Set<String> OWED = Set.of(Inputs.code(AccountType.CREDIT_CARD), Inputs.code(AccountType.LOAN));
 
     private static final String INTEREST_LABEL = "Interest";
+    private static final String GROWTH_LABEL = "Assumed growth";
+
+    /** What a transaction's {@code kind} says for savings interest, and for an investment's assumed growth. */
+    private static final String INTEREST_KIND = "interest";
+    private static final String GROWTH_KIND = "growth";
     private static final String BALANCE_LABEL = "Balance you entered";
     private static final String ONE_OFF_LABEL = "One-off entry";
 
@@ -125,7 +131,10 @@ public final class Ledger {
     /** One bucket across one pay period; {@code endingCents − startingCents} is what the period moved. */
     public record BucketPeriod(long bucketId, long accountId, long startingCents, long endingCents) {}
 
-    /** A month's estimated interest arriving in an account. */
+    /**
+     * A month's estimated interest arriving in a checking or savings account, or a month's
+     * assumed growth in an investment account: the same sum, from the rate the user gave.
+     */
     public record InterestLine(long accountId, LocalDate date, long amountCents, int rateBp) {}
 
     /**
@@ -284,8 +293,10 @@ public final class Ledger {
     /**
      * One thing that moved an account's balance, or a balance the user entered for it.
      *
-     * @param kind        {@code paycheck}, {@code interest}, {@code balance}, or the lower-case kind
-     *                    of the recurring item or one-off entry it came from
+     * @param kind        {@code paycheck}, {@code contribution} (taken out of a paycheck),
+     *                    {@code employer_match}, {@code interest}, {@code growth} (an investment's
+     *                    assumed growth), {@code balance}, or the lower-case kind of the recurring
+     *                    item or one-off entry it came from
      * @param amountCents what it did to the balance, signed; for {@code balance}, the balance entered
      * @param unpaid      true for something paid by hand that has not been ticked off yet
      */
@@ -305,9 +316,12 @@ public final class Ledger {
                 found.add(line);
             }
         }
+        boolean grows = isInvestment(account.type());
         for (InterestCredit credit : workings.projection(account.id()).interest()) {
             if (within(credit.date(), from, to)) {
-                found.add(new Transaction(credit.date(), INTEREST_LABEL, "interest", credit.amount().cents(), false));
+                found.add(new Transaction(
+                        credit.date(), grows ? GROWTH_LABEL : INTEREST_LABEL, grows ? GROWTH_KIND : INTEREST_KIND,
+                        credit.amount().cents(), false));
             }
         }
         for (BalanceEntry entry : accounts.balances(account.id())) {
@@ -317,6 +331,90 @@ public final class Ledger {
         }
         found.sort(Comparator.comparing(Transaction::date).reversed());
         return found;
+    }
+
+    /**
+     * One balance the user entered, set against the one before it.
+     *
+     * @param changeCents   how far it moved from the entry before; {@code null} for the first entry
+     * @param depositsCents what was put in between the two, less what was taken out
+     * @param growthCents   the change that deposits do not explain: a gain when positive, a loss when
+     *                      negative (spec §5.5). Only ever worked out from entered balances
+     */
+    public record BalanceChange(
+            long entryId, LocalDate date, long amountCents, Long changeCents, Long depositsCents, Long growthCents) {}
+
+    /**
+     * How an account has done this year.
+     *
+     * @param since         January 1, or the day of the first balance entered if that is later
+     * @param startCents    what it held at the start of that day
+     * @param nowCents      what it holds at the end of today
+     * @param changeCents   the difference between the two
+     * @param depositsCents what was put in since, less what was taken out
+     * @param growthCents   the rest of the change: interest, growth, and gains or losses
+     */
+    public record YearSoFar(
+            LocalDate since, long startCents, long nowCents, long changeCents, long depositsCents, long growthCents) {}
+
+    /**
+     * @param thisYear {@code null} for an account that is not added up at all (archived, with no balance)
+     * @param balances every balance entered, newest first
+     */
+    public record Performance(YearSoFar thisYear, List<BalanceChange> balances) {}
+
+    /**
+     * How {@code account} has changed: this year so far, and from each balance entered to the
+     * next. "Deposits" are everything set up that moved the account — paychecks and what is
+     * taken out of them, recurring items, one-off entries, transfers — but never interest or
+     * assumed growth, which are estimates: those belong to the part deposits do not explain.
+     */
+    public Performance performance(Account account) {
+        LocalDate today = pay.today();
+        List<BalanceEntry> entered = accounts.balances(account.id()).reversed();
+        LocalDate yearStart = today.withDayOfYear(1);
+        LocalDate earliest = entered.isEmpty() || entered.getFirst().date().isAfter(yearStart) ? yearStart : entered.getFirst().date();
+        Workings workings = workings(List.of(new PayPeriod(earliest, today, earliest)));
+        List<Transaction> lines = workings.lines().getOrDefault(account.id(), List.of());
+
+        List<BalanceChange> changes = new ArrayList<>();
+        for (int i = 0; i < entered.size(); i++) {
+            BalanceEntry entry = entered.get(i);
+            if (i == 0) {
+                changes.add(new BalanceChange(entry.id(), entry.date(), entry.amountCents(), null, null, null));
+                continue;
+            }
+            BalanceEntry before = entered.get(i - 1);
+            // A balance stands for the start of its day, so that day's own movements belong to what follows it.
+            long deposits = depositsWithin(lines, before.date(), entry.date().minusDays(1));
+            long growth = GainLoss.between(
+                    Money.ofCents(before.amountCents()), Money.ofCents(entry.amountCents()), Money.ofCents(deposits)).cents();
+            changes.add(new BalanceChange(
+                    entry.id(), entry.date(), entry.amountCents(), entry.amountCents() - before.amountCents(), deposits, growth));
+        }
+
+        List<AccountPeriod> now = accountPeriods(workings(List.of(new PayPeriod(today, today, today))), account);
+        YearSoFar thisYear = null;
+        if (!now.isEmpty()) {
+            // From the first balance entered, when that came after New Year: nothing is known before it.
+            BalanceEntry first = entered.isEmpty() ? null : entered.getFirst();
+            LocalDate since = first != null && first.date().isAfter(yearStart) ? first.date() : yearStart;
+            long start = first != null && first.date().equals(since)
+                    ? first.amountCents()
+                    : accountPeriods(workings(List.of(new PayPeriod(since.minusDays(1), since.minusDays(1), since.minusDays(1)))), account)
+                            .stream().findFirst().map(AccountPeriod::endingCents).orElse(0L);
+            long deposits = depositsWithin(lines, since, today);
+            long held = now.getFirst().endingCents();
+            thisYear = new YearSoFar(
+                    since, start, held, held - start, deposits,
+                    GainLoss.between(Money.ofCents(start), Money.ofCents(held), Money.ofCents(deposits)).cents());
+        }
+        return new Performance(thisYear, changes.reversed());
+    }
+
+    /** What the listed movements did to the balance within {@code from}–{@code to}, both inclusive. */
+    private static long depositsWithin(List<Transaction> lines, LocalDate from, LocalDate to) {
+        return lines.stream().filter(line -> within(line.date(), from, to)).mapToLong(Transaction::amountCents).sum();
     }
 
     /** What every open bucket holds at the end of {@code day}, by bucket id. */
@@ -488,6 +586,13 @@ public final class Ledger {
         for (Paycheck paycheck : pay.paychecks(from, last)) {
             add(movements, lines, types, paycheck.depositAccountId(), paycheck.payDate(), paycheck.netCents(), true, false,
                     paycheck.sourceName(), "paycheck");
+            // Taken out before take-home pay, or added by the employer: it lands in its own account on payday.
+            for (PayCalendar.Contribution contribution : paycheck.contributions()) {
+                if (types.containsKey(contribution.toAccountId())) {
+                    add(movements, lines, types, contribution.toAccountId(), paycheck.payDate(), contribution.amountCents(), true, false,
+                            contribution.label() + " · " + paycheck.sourceName(), contribution.kind());
+                }
+            }
         }
 
         Map<Long, StillToPay> stillToPay = new HashMap<>();
@@ -558,22 +663,30 @@ public final class Ledger {
 
         Map<Long, Settings> interestSettings = interest.allSettings();
         Map<Long, List<Rate>> apys = interest.allRates(RateKind.APY);
+        Map<Long, List<Rate>> growthRates = interest.allRates(RateKind.GROWTH);
+        // Checking and savings earn interest at their APY, on the day the user chose. An investment
+        // grows by the rate the user assumes, at the end of each month: the same sum, differently named.
+        Map<Long, InterestTerms> earning = new HashMap<>();
+        for (Account account : allAccounts) {
+            InterestTerms terms = cash.contains(account.id())
+                    ? interestTerms(interestSettings.get(account.id()), apys.get(account.id()))
+                    : isInvestment(account.type()) ? interestTerms(null, growthRates.get(account.id())) : null;
+            if (terms != null) {
+                earning.put(account.id(), terms);
+            }
+        }
         Map<Long, Projection> projections = new HashMap<>();
         entered.forEach((accountId, forAccount) -> {
             List<BalanceAnchor> anchors = forAccount.stream()
                     .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents())))
                     .toList();
-            InterestTerms terms = cash.contains(accountId)
-                    ? interestTerms(interestSettings.get(accountId), apys.get(accountId))
-                    : null;
+            InterestTerms terms = earning.get(accountId);
             projections.put(accountId, BalanceProjector.project(anchors, movements.getOrDefault(accountId, List.of()), periods, terms));
         });
         for (long accountId : builtFromZero) {
             List<Movement> counted = movements.getOrDefault(accountId, List.of());
             LocalDate since = counted.stream().map(Movement::date).min(Comparator.naturalOrder()).orElse(first);
-            InterestTerms terms = cash.contains(accountId)
-                    ? interestTerms(interestSettings.get(accountId), apys.get(accountId))
-                    : null;
+            InterestTerms terms = earning.get(accountId);
             projections.put(accountId, BalanceProjector.project(
                     List.of(new BalanceAnchor(since, Money.ZERO)), counted, periods, terms));
         }
@@ -640,9 +753,13 @@ public final class Ledger {
         return Stream.concat(starts, entries.earliestDate().stream()).min(Comparator.naturalOrder()).orElse(null);
     }
 
+    private static boolean isInvestment(String type) {
+        return Inputs.code(AccountType.INVESTMENT).equals(type);
+    }
+
     /**
-     * How an account earns interest; {@code null} when no APY has been entered for it. Until
-     * the user says otherwise, interest is credited on the last day of the month.
+     * How an account earns interest (or grows); {@code null} when no rate has been entered for
+     * it. Until the user says otherwise, it is credited on the last day of the month.
      */
     private static InterestTerms interestTerms(Settings settings, List<Rate> apys) {
         if (apys == null || apys.isEmpty()) {

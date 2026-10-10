@@ -1,16 +1,18 @@
 package app.budget.server.income;
 
 import app.budget.engine.schedule.ScheduleRule;
+import app.budget.server.api.Inputs;
 import app.budget.server.schedule.ScheduleRules;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
-/** Reads and writes income sources, their deductions and single-paycheck edits. */
+/** Reads and writes income sources, their deductions, employer match and single-paycheck edits. */
 public final class IncomeRepository {
 
     private static final String SELECT_SOURCE = """
@@ -40,12 +42,29 @@ public final class IncomeRepository {
             boolean netIsEstimate,
             boolean primary,
             ScheduleRule schedule,
-            List<Deduction> deductions) {}
+            List<Deduction> deductions,
+            Match match) {}
 
     /** @param toAccountId {@code null} when the money does not go to one of the user's accounts */
     public record Deduction(String name, long amountCents, Long toAccountId) {}
 
-    /** What the user can set on an income source. */
+    /**
+     * What the employer adds with each paycheck (spec §5.5).
+     *
+     * @param toAccountId  the account the match is paid into
+     * @param fixedCents   the amount every paycheck; set exactly when {@code mode} is {@code FIXED}
+     * @param matchBp      the share of the employee's contribution that is matched; for {@code FORMULA}
+     * @param capBpOfGross the share of gross pay beyond which contributions are not matched; for {@code FORMULA}
+     */
+    public record Match(long toAccountId, MatchMode mode, Long fixedCents, Integer matchBp, Integer capBpOfGross) {}
+
+    public enum MatchMode { FIXED, FORMULA }
+
+    /**
+     * What the user can set on an income source.
+     *
+     * @param match {@code null} when the employer adds nothing
+     */
     public record Fields(
             String name,
             long depositAccountId,
@@ -54,7 +73,8 @@ public final class IncomeRepository {
             boolean netIsEstimate,
             boolean primary,
             ScheduleRule schedule,
-            List<Deduction> deductions) {}
+            List<Deduction> deductions,
+            Match match) {}
 
     /** One paycheck whose amount was typed over. {@code projectedCents} is what it showed before. */
     public record PaycheckOverride(long incomeSourceId, LocalDate scheduledDate, long netCents, long projectedCents) {}
@@ -114,6 +134,7 @@ public final class IncomeRepository {
                     .mapTo(Long.class)
                     .one();
             insertDeductions(handle, id, fields.deductions());
+            saveMatch(handle, id, fields.match());
             return id;
         });
     }
@@ -147,6 +168,7 @@ public final class IncomeRepository {
                     .execute();
             handle.createUpdate("DELETE FROM paycheck_deductions WHERE income_source_id = :id").bind("id", id).execute();
             insertDeductions(handle, id, fields.deductions());
+            saveMatch(handle, id, fields.match());
         });
     }
 
@@ -238,7 +260,49 @@ public final class IncomeRepository {
                 .list();
         return new Source(
                 row.id(), row.name(), row.depositAccountId(), row.grossCents(), row.netCents(),
-                row.netIsEstimate(), row.primary(), ScheduleRules.load(handle, row.scheduleRuleId()), deductions);
+                row.netIsEstimate(), row.primary(), ScheduleRules.load(handle, row.scheduleRuleId()), deductions,
+                match(handle, row.id()));
+    }
+
+    private static Match match(Handle handle, long sourceId) {
+        return handle
+                .createQuery("""
+                        SELECT to_account_id, mode, fixed_amount, match_bp, cap_bp_of_gross
+                        FROM employer_match WHERE income_source_id = :id
+                        """)
+                .bind("id", sourceId)
+                .map((rs, ctx) -> {
+                    long fixed = rs.getLong("fixed_amount");
+                    Long fixedCents = rs.wasNull() ? null : fixed;
+                    int matchBp = rs.getInt("match_bp");
+                    Integer match = rs.wasNull() ? null : matchBp;
+                    int capBp = rs.getInt("cap_bp_of_gross");
+                    Integer cap = rs.wasNull() ? null : capBp;
+                    return new Match(
+                            rs.getLong("to_account_id"), MatchMode.valueOf(rs.getString("mode").toUpperCase(Locale.ROOT)),
+                            fixedCents, match, cap);
+                })
+                .findOne()
+                .orElse(null);
+    }
+
+    /** Replaces the source's match; {@code null} removes it. */
+    private static void saveMatch(Handle handle, long sourceId, Match match) {
+        handle.createUpdate("DELETE FROM employer_match WHERE income_source_id = :id").bind("id", sourceId).execute();
+        if (match == null) {
+            return;
+        }
+        handle.createUpdate("""
+                        INSERT INTO employer_match (income_source_id, to_account_id, mode, fixed_amount, match_bp, cap_bp_of_gross)
+                        VALUES (:sourceId, :toAccountId, :mode, :fixed, :matchBp, :capBp)
+                        """)
+                .bind("sourceId", sourceId)
+                .bind("toAccountId", match.toAccountId())
+                .bind("mode", Inputs.code(match.mode()))
+                .bind("fixed", match.fixedCents())
+                .bind("matchBp", match.matchBp())
+                .bind("capBp", match.capBpOfGross())
+                .execute();
     }
 
     private static void insertDeductions(Handle handle, long sourceId, List<Deduction> deductions) {

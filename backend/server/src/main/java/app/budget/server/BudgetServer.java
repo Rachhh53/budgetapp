@@ -7,6 +7,9 @@ import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.HostGuard;
 import app.budget.server.api.LowerCaseEnumSerializer;
+import app.budget.server.assets.AssetsRepository;
+import app.budget.server.assets.AssetsRoutes;
+import app.budget.server.assets.NetWorthCalculator;
 import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
 import app.budget.server.buckets.BucketsRepository;
@@ -101,6 +104,8 @@ public final class BudgetServer {
         InterestRepository interest = new InterestRepository(database.jdbi());
         ItemCalendar itemCalendar = new ItemCalendar(items, payCalendar);
         Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest);
+        AssetsRepository assets = new AssetsRepository(database.jdbi(), clock);
+        NetWorthCalculator netWorth = new NetWorthCalculator(assets, accounts, ledger);
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
@@ -131,6 +136,7 @@ public final class BudgetServer {
             new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags, buckets, ledger).register(routes);
             new EntriesRoutes(entries, accounts, categories, tags, buckets, ledger, clock).register(routes);
             new LedgerRoutes(ledger, payCalendar, accounts).register(routes);
+            new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
 

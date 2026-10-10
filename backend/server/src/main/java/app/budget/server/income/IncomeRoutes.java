@@ -1,10 +1,14 @@
 package app.budget.server.income;
 
+import app.budget.server.accounts.Account;
+import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
 import app.budget.server.income.IncomeRepository.Deduction;
+import app.budget.server.income.IncomeRepository.Match;
+import app.budget.server.income.IncomeRepository.MatchMode;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.schedule.ScheduleDto;
 import io.javalin.http.Context;
@@ -21,6 +25,12 @@ public final class IncomeRoutes {
 
     private static final int NAME_MAX = 80;
     private static final int MAX_DEDUCTIONS = 30;
+
+    /** 1,000%: beyond any real match, and a typo still fits so it can be shown and fixed. */
+    private static final int MAX_MATCH_BP = 100_000;
+
+    /** Nobody can be matched on more than all of their pay. */
+    private static final int MAX_CAP_BP = 10_000;
 
     private final IncomeRepository income;
     private final AccountsRepository accounts;
@@ -50,11 +60,24 @@ public final class IncomeRoutes {
             Boolean netIsEstimate,
             Boolean primary,
             ScheduleDto schedule,
-            List<DeductionInput> deductions) {}
+            List<DeductionInput> deductions,
+            MatchInput match) {}
 
     public record DeductionInput(String name, Long amountCents, Long toAccountId) {}
 
-    /** An income source as the API returns it. */
+    /**
+     * Request body for the employer's match; left out (or {@code null}) for none. {@code mode} is
+     * {@code fixed} (with {@code fixedCents}) or {@code formula} (with {@code matchBp} and
+     * {@code capBpOfGross}: 50% up to 6% of pay is 5000 and 600).
+     */
+    public record MatchInput(Long toAccountId, String mode, Long fixedCents, Integer matchBp, Integer capBpOfGross) {}
+
+    /**
+     * An income source as the API returns it.
+     *
+     * @param match        {@code null} when the employer adds nothing
+     * @param matchFigures what the match comes to per paycheck; {@code null} without a match
+     */
     public record SourceView(
             long id,
             String name,
@@ -64,12 +87,15 @@ public final class IncomeRoutes {
             boolean netIsEstimate,
             boolean primary,
             ScheduleDto schedule,
-            List<Deduction> deductions) {
+            List<Deduction> deductions,
+            Match match,
+            PayCalendar.MatchFigures matchFigures) {
 
         static SourceView of(Source source) {
             return new SourceView(
                     source.id(), source.name(), source.depositAccountId(), source.grossCents(), source.netCents(),
-                    source.netIsEstimate(), source.primary(), ScheduleDto.of(source.schedule()), source.deductions());
+                    source.netIsEstimate(), source.primary(), ScheduleDto.of(source.schedule()), source.deductions(),
+                    source.match(), PayCalendar.matchFigures(source).orElse(null));
         }
     }
 
@@ -149,7 +175,34 @@ public final class IncomeRoutes {
                 Boolean.TRUE.equals(input.netIsEstimate()),
                 Boolean.TRUE.equals(input.primary()),
                 input.schedule().toPayRule(),
-                deductions(input.deductions()));
+                deductions(input.deductions()),
+                match(input.match(), gross));
+    }
+
+    private Match match(MatchInput input, Long grossCents) {
+        if (input == null) {
+            return null;
+        }
+        Account account = input.toAccountId() == null ? null : accounts.find(input.toAccountId()).orElse(null);
+        // A match is retirement money: it goes into an investment account, never into spending money.
+        if (account == null || !Inputs.code(AccountType.INVESTMENT).equals(account.type())) {
+            throw ApiException.badRequest("Please choose the investment account the employer match is paid into.");
+        }
+        MatchMode mode = Inputs.choice(MatchMode.class, input.mode(), "how the match is worked out");
+        if (mode == MatchMode.FIXED) {
+            return new Match(account.id(), mode, Inputs.amount(input.fixedCents(), "The match amount"), null, null);
+        }
+        if (input.matchBp() == null || input.matchBp() < 0 || input.matchBp() > MAX_MATCH_BP) {
+            throw ApiException.badRequest("Please enter how much of your contribution is matched, between 0% and 1,000%.");
+        }
+        if (input.capBpOfGross() == null || input.capBpOfGross() < 0 || input.capBpOfGross() > MAX_CAP_BP) {
+            throw ApiException.badRequest("Please enter how much of your pay is matched up to, between 0% and 100%.");
+        }
+        if (grossCents == null) {
+            throw ApiException.badRequest(
+                    "A match worked out from your pay needs the gross amount of a paycheck. Please fill that in as well.");
+        }
+        return new Match(account.id(), mode, null, input.matchBp(), input.capBpOfGross());
     }
 
     private List<Deduction> deductions(List<DeductionInput> inputs) {
