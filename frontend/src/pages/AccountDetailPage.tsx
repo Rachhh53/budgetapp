@@ -124,7 +124,7 @@ export function AccountDetailPage() {
               <Stat label="Projected" cents={thisPeriod.endingCents} note={`at the end of this pay period, ${formatDate(thisPeriod.end)}`} />
             )}
             {thisPeriod && hasBuckets && (
-              <Stat label="Available after buckets" cents={thisPeriod.availableCents} note="at the end of this pay period" />
+              <Stat label="Unallocated balance" cents={thisPeriod.availableCents} note="at the end of this pay period" />
             )}
             {cash && currentRate && (
               <div>

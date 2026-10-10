@@ -117,7 +117,7 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
             />
             {showAvailable && (
               <Line
-                name="Available after buckets"
+                name="Unallocated balance"
                 dataKey="available"
                 stroke="var(--text-muted)"
                 strokeWidth={1.5}
@@ -143,7 +143,7 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
             <span data-amount className="tabular-nums">
               {formatCents(last.availableCents)}
             </span>{" "}
-            available after buckets, the dotted line)
+            unallocated, the dotted line)
           </>
         )}
         . Its lowest point on the way is{" "}

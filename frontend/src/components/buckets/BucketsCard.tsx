@@ -65,7 +65,7 @@ export function BucketsCard({ account }: { account: Account }) {
           </ul>
           <dl className="mt-2 space-y-1 border-t border-line pt-3">
             <Total label="In buckets" cents={setAside} />
-            {notInABucket !== null && <Total label="Not in a bucket" cents={notInABucket} />}
+            {notInABucket !== null && <Total label="Unallocated balance" cents={notInABucket} />}
             {balanceCents !== null && <Total label={today ? "Balance today" : "Balance you entered"} cents={balanceCents} strong />}
           </dl>
           {/* It can still happen after the fact: the balance drops, or a schedule keeps filling a bucket. */}

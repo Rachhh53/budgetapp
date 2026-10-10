@@ -266,11 +266,11 @@ describe("account detail screen", () => {
 
     const heading = await screen.findByRole("region", { name: "Where it's heading" });
     expect(within(heading).getByRole("figure")).toHaveTextContent(
-      "the projection, which reaches $4,125.00 by Oct 31, 2026 ($3,925.00 available after buckets, the dotted line)",
+      "the projection, which reaches $4,125.00 by Oct 31, 2026 ($3,925.00 unallocated, the dotted line)",
     );
     expect(within(heading).getByRole("figure")).toHaveTextContent("Its lowest point on the way is $313.90, in the pay period that starts Oct 1, 2026.");
     expect(screen.getByText("Projected").closest("div")).toHaveTextContent("$3,096.10");
-    expect(screen.getByText("Available after buckets").closest("div")).toHaveTextContent("$2,896.10");
+    expect(screen.getAllByText("Unallocated balance")[0]!.closest("div")).toHaveTextContent("$2,896.10");
     expect(screen.getByText(/flagged when this account is projected to dip below/)).toHaveTextContent("$500.00");
   });
 
@@ -291,7 +291,7 @@ describe("account detail screen", () => {
       expect(within(buckets).queryByRole("button", { name: /move money/i })).not.toBeInTheDocument();
       // 200.00 in buckets + 1,505.10 not in one = the 1,705.10 entered.
       expect(within(buckets).getByText("In buckets").closest("div")).toHaveTextContent("$200.00");
-      expect(within(buckets).getByText("Not in a bucket").closest("div")).toHaveTextContent("$1,505.10");
+      expect(within(buckets).getByText("Unallocated balance").closest("div")).toHaveTextContent("$1,505.10");
       expect(within(buckets).getByText("Balance you entered").closest("div")).toHaveTextContent("$1,705.10");
       // Archived buckets are tucked away until opened.
       expect(within(buckets).getByText("Archived buckets (1)")).toBeInTheDocument();
