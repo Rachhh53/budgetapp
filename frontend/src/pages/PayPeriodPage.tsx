@@ -123,6 +123,7 @@ export function PayPeriodPage() {
     accountName: (id) => names.get(id) ?? "an account",
     bucketName: (id) => (id === null ? undefined : bucketNames.get(id)),
     isChecking: (id) => accounts.data.some((account) => account.id === id && account.type === "checking"),
+    isInvestment: (id) => accounts.data.some((account) => account.id === id && account.type === "investment"),
     categories: categories.data,
     tags: tags.data,
     items: items.data,
@@ -181,7 +182,13 @@ export function PayPeriodPage() {
           <ManualPanel occurrences={lists.manual} carriedOver={detail.carriedOver} oneOffs={lists.oneOffs} context={context} />
         </div>
         <div className="flex flex-col gap-3 lg:order-1 lg:min-h-0 lg:overflow-y-auto">
-          <IncomePanel paychecks={detail.paychecks} moneyIn={lists.moneyIn} interest={detail.interest} context={context} />
+          {/* An investment's assumed growth is not income: it shows on that account's own tab instead. */}
+          <IncomePanel
+            paychecks={detail.paychecks}
+            moneyIn={lists.moneyIn}
+            interest={detail.interest.filter((line) => !context.isInvestment(line.accountId))}
+            context={context}
+          />
           <AutoPanel occurrences={lists.auto} context={context} />
           <BudgetsPanel occurrences={lists.budgets} context={context} />
         </div>
@@ -195,6 +202,7 @@ export function PayPeriodPage() {
             periodStart={detail.start}
             periodEnd={detail.end}
             primaryAccountId={detail.primaryAccountId}
+            interest={detail.interest}
           />
         </div>
       </div>
@@ -219,6 +227,8 @@ interface RowContext {
   bucketName: (id: number | null) => string | undefined;
   /** True for a checking account: the only kind a check can be written on. */
   isChecking: (id: number) => boolean;
+  /** True for an investment account, whose "interest" is growth the user assumes. */
+  isInvestment: (id: number) => boolean;
   categories: readonly Category[];
   tags: readonly Tag[];
   items: readonly Item[];
@@ -431,7 +441,7 @@ interface Part {
  * arriving and interest. The total itself comes from the backend; if these do not add up to
  * it, the difference is listed too, so the list always sums to the figure above it.
  */
-function comingInto(balance: AccountPeriod, detail: PeriodDetail): Part[] {
+function comingInto(balance: AccountPeriod, detail: PeriodDetail, grows = false): Part[] {
   const here = balance.accountId;
   const parts: Part[] = [
     ...detail.paychecks
@@ -443,7 +453,15 @@ function comingInto(balance: AccountPeriod, detail: PeriodDetail): Part[] {
     ...[...detail.carriedOver, ...detail.occurrences]
       .filter((occurrence) => !occurrence.skipped && occurrence.payToAccountId === here)
       .map((occurrence) => ({ label: `${occurrence.name} (transfer)`, cents: occurrence.amountCents })),
-    ...detail.interest.filter((line) => line.accountId === here).map((line) => ({ label: "Interest (estimate)", cents: line.amountCents })),
+    // What a paycheck sends straight here instead of to its deposit account: a deduction, or the employer's match.
+    ...detail.paychecks.flatMap((paycheck) =>
+      paycheck.contributions
+        .filter((contribution) => contribution.toAccountId === here)
+        .map((contribution) => ({ label: `${contribution.label} · ${paycheck.sourceName}`, cents: contribution.amountCents })),
+    ),
+    ...detail.interest
+      .filter((line) => line.accountId === here)
+      .map((line) => ({ label: grows ? "Assumed growth (your assumption)" : "Interest (estimate)", cents: line.amountCents })),
   ];
   const rest = balance.inCents - parts.reduce((sum, part) => sum + part.cents, 0);
   if (rest !== 0) {
@@ -969,6 +987,7 @@ function AccountsPanel({
   periodStart,
   periodEnd,
   primaryAccountId,
+  interest,
 }: {
   balances: readonly AccountPeriod[];
   accounts: readonly Account[];
@@ -978,6 +997,7 @@ function AccountsPanel({
   periodStart: string;
   periodEnd: string;
   primaryAccountId: number | null;
+  interest: readonly InterestLine[];
 }) {
   const id = useId();
   // Every account gets a tab, so one never seems to have gone missing: an account with no balance
@@ -1046,6 +1066,7 @@ function AccountsPanel({
   // Only when it differs from the period itself; otherwise the lines mean the whole period, as they read.
   // This period ends before the first balance entered for the account: it stands at that balance, with nothing counted yet.
   const beforeFirst = balance.startingOn > periodEnd;
+  const assumed = interest.filter((line) => line.accountId === shown.account.id).reduce((sum, line) => sum + line.amountCents, 0);
   const since = balance.entered && balance.startingOn > periodStart ? ` since ${formatDay(balance.startingOn)}` : "";
   const held = bucketPeriods.flatMap((period) => {
     const bucket = buckets.find((candidate) => candidate.id === period.bucketId);
@@ -1087,6 +1108,16 @@ function AccountsPanel({
           </>
         )}
       </dl>
+      {/* An investment's "coming in" can include growth nobody has seen yet: say how much of it is only assumed. */}
+      {shown.account.type === "investment" && assumed > 0 && (
+        <p className="mt-1 text-sm text-muted">
+          Coming in includes{" "}
+          <span data-amount className="font-semibold tabular-nums">
+            {formatCents(assumed)}
+          </span>{" "}
+          of assumed growth: your own assumption, not a real gain.
+        </p>
+      )}
       {/* Said in words and set apart, not just coloured: an overdrawn account is the thing to see first. */}
       {!owed && balance.lowestCents < 0 && (
         <p role="alert" className="mt-2 rounded-lg border-2 border-danger p-3 font-semibold text-danger">

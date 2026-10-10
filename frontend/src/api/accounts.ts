@@ -92,6 +92,36 @@ export interface AccountPoint {
   availableCents: number;
 }
 
+/** One balance entered, set against the one before it. The three figures are `null` for the first entry. */
+export interface BalanceChange {
+  entryId: number;
+  date: string;
+  amountCents: number;
+  changeCents: number | null;
+  /** What was put in between the two, less what was taken out. */
+  depositsCents: number | null;
+  /** The change that deposits do not explain: a gain when positive, a loss when negative. */
+  growthCents: number | null;
+}
+
+/** How an account has done this year, from New Year or from its first entered balance if that is later. */
+export interface YearSoFar {
+  since: string;
+  startCents: number;
+  nowCents: number;
+  changeCents: number;
+  depositsCents: number;
+  /** The rest of the change: interest, growth, and gains or losses. */
+  growthCents: number;
+}
+
+export interface AccountPerformance {
+  /** `null` for an account that is not added up at all. */
+  thisYear: YearSoFar | null;
+  /** Every balance entered, newest first. */
+  balances: BalanceChange[];
+}
+
 export const ACCOUNTS_KEY = ["accounts"] as const;
 const detailKey = (id: number) => [...ACCOUNTS_KEY, id] as const;
 
@@ -108,6 +138,24 @@ export function useAccountProjection(id: number) {
   return useQuery({
     queryKey: [...detailKey(id), "projection"],
     queryFn: () => api.get<AccountPoint[]>(`/api/accounts/${id}/projection`),
+  });
+}
+
+/** This year so far, and each entered balance against the one before. Under PAY_KEY: anything that moves money changes it. */
+export function useAccountPerformance(id: number) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "performance", id],
+    queryFn: () => api.get<AccountPerformance>(`/api/accounts/${id}/performance`),
+  });
+}
+
+/** "Update balances": several accounts' balances for one day, saved together so one Undo takes them all back. */
+export function useSaveBalances() {
+  const refresh = useRefreshAccounts();
+  return useMutation({
+    mutationFn: (input: { date: string; balances: { accountId: number; amountCents: number }[] }) =>
+      api.put<{ saved: number }>("/api/account-balances", input),
+    onSuccess: refresh,
   });
 }
 

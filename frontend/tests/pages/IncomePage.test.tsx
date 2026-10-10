@@ -37,6 +37,8 @@ const SALARY: IncomeSource = {
     manualDates: [],
   },
   deductions: [{ name: "401(k)", amountCents: 15000, toAccountId: 2 }],
+  match: null,
+  matchFigures: null,
 };
 const BAKERY: IncomeSource = {
   id: 2,
@@ -56,6 +58,8 @@ const BAKERY: IncomeSource = {
     manualDates: [],
   },
   deductions: [],
+  match: null,
+  matchFigures: null,
 };
 
 const PAYCHECKS: Paycheck[] = [
@@ -68,6 +72,7 @@ const PAYCHECKS: Paycheck[] = [
     netCents: 248620,
     estimate: false,
     projectedCents: null,
+    contributions: [],
   },
   {
     incomeSourceId: 2,
@@ -78,6 +83,7 @@ const PAYCHECKS: Paycheck[] = [
     netCents: 31840,
     estimate: true,
     projectedCents: null,
+    contributions: [],
   },
   {
     incomeSourceId: 1,
@@ -88,6 +94,7 @@ const PAYCHECKS: Paycheck[] = [
     netCents: 248620,
     estimate: false,
     projectedCents: null,
+    contributions: [],
   },
 ];
 
@@ -238,6 +245,7 @@ describe("income screen", () => {
           manualDates: [],
         },
         deductions: [{ name: "401(k)", amountCents: 15000, toAccountId: 2 }],
+        match: null,
       },
     ]);
   });

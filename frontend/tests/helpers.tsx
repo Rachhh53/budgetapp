@@ -21,11 +21,30 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/categories": () => ({ status: 200, data: [] }),
   "GET /api/tags": () => ({ status: 200, data: [] }),
   "GET /api/holidays": () => ({ status: 200, data: [] }),
+  "GET /api/assets": () => ({ status: 200, data: [] }),
+  "GET /api/net-worth": () => ({ status: 200, data: NOTHING_OWNED }),
+};
+
+/** Net worth before anything is entered. */
+export const NOTHING_OWNED = {
+  date: "2026-10-09",
+  netWorthCents: 0,
+  assetsCents: 0,
+  liabilitiesCents: 0,
+  cashCents: 0,
+  investmentsCents: 0,
+  propertyCents: 0,
+  cardsCents: 0,
+  loansCents: 0,
 };
 
 /** Any account's chart and transactions: on a fresh install there is nothing to show, whichever account it is. */
 const NO_PROJECTION = /^GET \/api\/accounts\/\d+\/(projection|transactions)(\?.*)?$/;
 const nothingProjected: Handler = () => ({ status: 200, data: [] });
+
+/** Any account's year so far and balance-by-balance changes: nothing to say until a test gives some. */
+const NO_PERFORMANCE = /^GET \/api\/accounts\/\d+\/performance$/;
+const nothingToCompare: Handler = () => ({ status: 200, data: { thisYear: null, balances: [] } });
 
 /**
  * Replaces `fetch` with a tiny fake backend. Routes are keyed `"METHOD /path"` and are laid
@@ -37,7 +56,7 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
     const handler =
-      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : undefined);
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;

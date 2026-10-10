@@ -29,6 +29,31 @@ export interface Deduction {
   toAccountId: number | null;
 }
 
+export const MATCH_MODES = ["fixed", "formula"] as const;
+export type MatchMode = (typeof MATCH_MODES)[number];
+
+/** What the employer adds with each paycheck. Rates are basis points: 50% up to 6% of pay is 5000 and 600. */
+export interface EmployerMatch {
+  /** The investment account the match is paid into. */
+  toAccountId: number;
+  mode: MatchMode;
+  /** The amount every paycheck; set exactly when `mode` is `fixed`. */
+  fixedCents: number | null;
+  /** The share of what is contributed that is matched; for `formula`. */
+  matchBp: number | null;
+  /** The share of gross pay beyond which contributions are not matched; for `formula`. */
+  capBpOfGross: number | null;
+}
+
+/** What a match comes to per paycheck, worked out by the backend. */
+export interface MatchFigures {
+  perPaycheckCents: number;
+  /** What the employer would add if contributions reached the cap. */
+  mostPossibleCents: number;
+  /** How much more to contribute per paycheck to earn all of it; zero at or over the cap. */
+  contributeMoreCents: number;
+}
+
 export interface IncomeSource {
   id: number;
   name: string;
@@ -41,9 +66,21 @@ export interface IncomeSource {
   primary: boolean;
   schedule: Schedule;
   deductions: Deduction[];
+  /** `null` when the employer adds nothing. */
+  match: EmployerMatch | null;
+  /** `null` without a match. */
+  matchFigures: MatchFigures | null;
 }
 
-export type IncomeSourceInput = Omit<IncomeSource, "id">;
+export type IncomeSourceInput = Omit<IncomeSource, "id" | "matchFigures">;
+
+/** Money a paycheck puts straight into another account: a deduction that names one, or the employer's match. */
+export interface Contribution {
+  toAccountId: number;
+  label: string;
+  kind: "contribution" | "employer_match";
+  amountCents: number;
+}
 
 export interface Paycheck {
   incomeSourceId: number;
@@ -58,6 +95,8 @@ export interface Paycheck {
   estimate: boolean;
   /** What the app showed before the amount was typed over; `null` if untouched. */
   projectedCents: number | null;
+  /** What goes straight to other accounts with this paycheck, never passing through the deposit account. */
+  contributions: Contribution[];
 }
 
 export interface PayPeriod {

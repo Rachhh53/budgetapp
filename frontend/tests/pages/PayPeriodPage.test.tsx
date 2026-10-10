@@ -36,6 +36,7 @@ const PAYCHECK: Paycheck = {
   netCents: 248620,
   estimate: false,
   projectedCents: null,
+  contributions: [],
 };
 
 const ELECTRIC: Occurrence = {
@@ -238,6 +239,41 @@ function withPeriod(detail: PeriodDetail = OCTOBER, overrides: Parameters<typeof
 async function panel(name: string): Promise<HTMLElement> {
   return screen.findByRole("region", { name });
 }
+
+describe("pay period screen: investments", () => {
+  const RETIREMENT: Account = { ...CHECKING, id: 4, name: "Brightwater 401(k)", type: "investment" };
+  const WITH_RETIREMENT: PeriodDetail = {
+    ...OCTOBER,
+    paychecks: [
+      {
+        ...PAYCHECK,
+        contributions: [
+          { toAccountId: 4, label: "401(k)", kind: "contribution", amountCents: 15000 },
+          { toAccountId: 4, label: "Employer match", kind: "employer_match", amountCents: 7500 },
+        ],
+      },
+    ],
+    interest: [{ accountId: 4, date: "2026-10-14", amountCents: 22871, rateBp: 700 }],
+    accounts: [
+      ...OCTOBER.accounts,
+      { accountId: 4, startingCents: 4000000, startingOn: "2026-10-01", entered: true, inCents: 45371, outCents: 0, endingCents: 4045371, lowestCents: 4000000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 4045371, lowBalance: false, builtFromZero: false },
+    ],
+  };
+
+  it("keeps an investment's assumed growth out of Income, and says on its tab how much is only assumed", async () => {
+    withPeriod(WITH_RETIREMENT, { "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, VISA, RETIREMENT] }) });
+    renderApp();
+
+    const income = await panel("Income");
+    expect(within(income).queryByText("Interest")).not.toBeInTheDocument();
+    expect(income).not.toHaveTextContent("$228.71");
+
+    const accounts = await panel("Accounts & buckets");
+    await userEvent.click(within(accounts).getByRole("tab", { name: "Brightwater 401(k)" }));
+    expect(within(accounts).getByRole("tabpanel")).toHaveTextContent("+$453.71");
+    expect(accounts).toHaveTextContent("Coming in includes $228.71 of assumed growth: your own assumption, not a real gain.");
+  });
+});
 
 describe("pay period screen", () => {
   it("points to Income when there is no paycheck to build periods from", async () => {

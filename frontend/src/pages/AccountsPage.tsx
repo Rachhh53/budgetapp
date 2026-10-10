@@ -1,24 +1,36 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { type Account, holdsCash, useAccounts } from "../api/accounts";
+import { type Asset, type NetWorth, useAssets, useNetWorth } from "../api/assets";
 import { type AccountBalance, useAccountBalances } from "../api/periods";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { ACCOUNT_GROUPS, accountSubtitle } from "../components/accounts/labels";
+import { UpdateBalancesForm } from "../components/accounts/UpdateBalancesForm";
 import { Amount } from "../components/Amount";
+import { AssetForm } from "../components/assets/AssetForm";
+import { ASSET_KIND_LABELS } from "../components/assets/labels";
 import { Card } from "../components/Card";
 import { EditButton } from "../components/EditButton";
-import { BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
 import { formatDay } from "../lib/dates";
+import { formatCents } from "../lib/money";
+
+const GROUP = "rounded-card border border-line bg-surface p-5 md:p-6";
 
 /**
- * Accounts (design/accounts.png): every account grouped by kind, each with the last balance
- * the user entered. Net worth, buckets, rates and home value join this screen in Phases 3–5.
+ * Accounts (design/accounts.png): net worth, everything owned and everything owed, then every
+ * account grouped by kind and the homes and other assets, each with what it stands at today.
  */
 export function AccountsPage() {
   const accounts = useAccounts();
+  const assets = useAssets();
+  const netWorth = useNetWorth();
   const [adding, setAdding] = useState(false);
-  // Kept as an id, so the open form always shows the account as it is now.
+  const [addingAsset, setAddingAsset] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  // Kept as ids, so an open form always shows the account or asset as it is now.
   const [editingId, setEditingId] = useState<number>();
+  const [editingAssetId, setEditingAssetId] = useState<number>();
 
   const all = accounts.data ?? [];
   const active = all.filter((account) => !account.archived);
@@ -28,16 +40,34 @@ export function AccountsPage() {
     (group) => group.accounts.length > 0,
   );
 
+  const everyAsset = assets.data ?? [];
+  const owned = everyAsset.filter((asset) => !asset.archived);
+  const archivedAssets = everyAsset.filter((asset) => asset.archived);
+  const editingAsset = everyAsset.find((asset) => asset.id === editingAssetId);
+  const nothingYet = accounts.data !== undefined && assets.data !== undefined && all.length === 0 && everyAsset.length === 0;
+  // The assets group is one more card in the grid, so it counts when deciding which card is left alone on the last row.
+  const cards = groups.length + (owned.length > 0 ? 1 : 0);
+
   return (
     <>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Everything you own and owe</p>
           <h1 className={PAGE_TITLE}>Accounts</h1>
         </div>
-        <button type="button" onClick={() => setAdding(true)} className={BUTTON_PRIMARY}>
-          + Add account
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          {active.length > 0 && (
+            <button type="button" onClick={() => setUpdating(true)} className={BUTTON_SECONDARY}>
+              Update balances
+            </button>
+          )}
+          <button type="button" onClick={() => setAddingAsset(true)} className={BUTTON_SECONDARY}>
+            + Add home or asset
+          </button>
+          <button type="button" onClick={() => setAdding(true)} className={BUTTON_PRIMARY}>
+            + Add account
+          </button>
+        </div>
       </div>
 
       {accounts.isPending && <p className="text-muted">Loading your accounts…</p>}
@@ -46,18 +76,30 @@ export function AccountsPage() {
           {accounts.error.message}
         </p>
       )}
+      {assets.isError && (
+        <p role="alert" className="text-danger">
+          {assets.error.message}
+        </p>
+      )}
 
-      {accounts.data && all.length === 0 && (
+      {nothingYet && (
         <Card>
           <p className="font-medium">No accounts yet.</p>
           <p className="mt-1 text-muted">
-            Add the accounts you'd like to keep an eye on — checking, savings, cards, investments or loans. Nothing
-            connects to your bank; you enter the balances yourself.
+            Add the accounts you'd like to keep an eye on — checking, savings, cards, investments or loans — and a home or anything
+            else you own. Nothing connects to your bank; you enter the balances yourself.
           </p>
         </Card>
       )}
 
-      {active.length > 0 && (
+      {!nothingYet && netWorth.isError && (
+        <p role="alert" className="mb-4 text-danger">
+          {netWorth.error.message}
+        </p>
+      )}
+      {!nothingYet && netWorth.data && <NetWorthSummary worth={netWorth.data} />}
+
+      {cards > 0 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {groups.map((group, index) => (
             <AccountGroup
@@ -66,20 +108,24 @@ export function AccountsPage() {
               accounts={group.accounts}
               onEdit={setEditingId}
               // A group left alone on the last row takes the whole width instead of sitting in half of it.
-              wide={groups.length % 2 === 1 && index === groups.length - 1}
+              wide={cards % 2 === 1 && index === cards - 1}
             />
           ))}
+          {owned.length > 0 && <AssetGroup assets={owned} onEdit={setEditingAssetId} wide={cards % 2 === 1} />}
         </div>
       )}
 
-      {archived.length > 0 && (
+      {(archived.length > 0 || archivedAssets.length > 0) && (
         <details className="mt-4 rounded-card border border-line bg-surface p-5">
           <summary className="min-h-11 cursor-pointer content-center font-semibold">
-            Archived accounts ({archived.length})
+            {archivedAssets.length === 0 ? "Archived accounts" : archived.length === 0 ? "Archived assets" : "Archived accounts and assets"} ({archived.length + archivedAssets.length})
           </summary>
           <ul className="mt-2 divide-y divide-line">
             {archived.map((account) => (
               <AccountRow key={account.id} account={account} today={undefined} onEdit={setEditingId} />
+            ))}
+            {archivedAssets.map((asset) => (
+              <AssetRow key={asset.id} asset={asset} onEdit={setEditingAssetId} />
             ))}
           </ul>
         </details>
@@ -87,7 +133,41 @@ export function AccountsPage() {
 
       {adding && <AccountForm accounts={all} onClose={() => setAdding(false)} />}
       {editing && <AccountForm account={editing} accounts={all} onClose={() => setEditingId(undefined)} />}
+      {updating && <UpdateBalancesForm accounts={all} onClose={() => setUpdating(false)} />}
+      {addingAsset && <AssetForm assets={everyAsset} accounts={all} onClose={() => setAddingAsset(false)} />}
+      {editingAsset && <AssetForm asset={editingAsset} assets={everyAsset} accounts={all} onClose={() => setEditingAssetId(undefined)} />}
     </>
+  );
+}
+
+/** Net worth with what it is made of, in words as well as figures so the sum can be followed. */
+function NetWorthSummary({ worth }: { worth: NetWorth }) {
+  return (
+    <section aria-label="Net worth" className={`${GROUP} mb-4`}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div>
+          <p className="text-muted">Net worth</p>
+          <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(worth.netWorthCents)}</p>
+          <p className="text-muted">today · what you own less what you owe</p>
+        </div>
+        <div>
+          <p className="text-muted">You own</p>
+          <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(worth.assetsCents)}</p>
+          <p className="text-muted">
+            <span data-amount>{formatCents(worth.cashCents)}</span> cash · <span data-amount>{formatCents(worth.investmentsCents)}</span>{" "}
+            invested · <span data-amount>{formatCents(worth.propertyCents)}</span> home & assets
+          </p>
+        </div>
+        <div>
+          <p className="text-muted">You owe</p>
+          <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(worth.liabilitiesCents)}</p>
+          <p className="text-muted">
+            <span data-amount>{formatCents(worth.cardsCents)}</span> on cards · <span data-amount>{formatCents(worth.loansCents)}</span> in
+            loans
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -109,7 +189,7 @@ function AccountGroup({
   // Adding in cents keeps the total exact.
   const total = accounts.reduce((sum, account) => sum + (held(account)?.balanceCents ?? account.latestBalance?.amountCents ?? 0), 0);
   return (
-    <section aria-labelledby={headingId} className={`rounded-card border border-line bg-surface p-5 md:p-6 ${wide ? "lg:col-span-2" : ""}`}>
+    <section aria-labelledby={headingId} className={`${GROUP} ${wide ? "lg:col-span-2" : ""}`}>
       <div className="flex items-baseline justify-between gap-3 border-b border-line pb-3">
         <h2 id={headingId} className="text-lg font-semibold">
           {title}
@@ -141,7 +221,10 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
               {today.balanceCents < 0 && holdsCash(account.type) ? (
                 <span className="block pr-2 text-sm font-semibold text-danger">Overdrawn today</span>
               ) : (
-                <span className="block pr-2 text-sm text-muted">today</span>
+                <span className="block pr-2 text-sm text-muted">
+                  {/* The mockup's "last entered" date: how fresh the real number behind today's figure is. */}
+                  today{account.latestBalance ? ` · entered ${formatDay(account.latestBalance.date)}` : ""}
+                </span>
               )}
             </>
           ) : account.latestBalance ? (
@@ -155,6 +238,60 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
         </span>
       </Link>
       <EditButton name={account.name} onClick={() => onEdit(account.id)} labelled />
+    </li>
+  );
+}
+
+function AssetGroup({ assets, onEdit, wide }: { assets: Asset[]; onEdit: (id: number) => void; wide: boolean }) {
+  const total = assets.reduce((sum, asset) => sum + (asset.valueCents ?? 0), 0);
+  return (
+    <section aria-labelledby="group-home-assets" className={`${GROUP} ${wide ? "lg:col-span-2" : ""}`}>
+      <div className="flex items-baseline justify-between gap-3 border-b border-line pb-3">
+        <h2 id="group-home-assets" className="text-lg font-semibold">
+          Home & assets
+        </h2>
+        <Amount cents={total} className="text-muted" />
+      </div>
+      <ul className="divide-y divide-line">
+        {assets.map((asset) => (
+          <AssetRow key={asset.id} asset={asset} onEdit={onEdit} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => void }) {
+  return (
+    <li className="flex items-center gap-2">
+      <Link to={`/assets/${asset.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
+        <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: asset.color }} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-semibold">{asset.name}</span>
+          <span className="block truncate text-sm text-muted">
+            {ASSET_KIND_LABELS[asset.kind]}
+            {asset.linkedLoanAccountId !== null && asset.equityCents !== null && (
+              <>
+                {" · equity "}
+                <span data-amount>{formatCents(asset.equityCents)}</span>
+              </>
+            )}
+          </span>
+        </span>
+        <span className="shrink-0 text-right">
+          {asset.valueCents !== null ? (
+            <>
+              <Amount cents={asset.valueCents} estimate={asset.estimate} className="font-semibold" />
+              <span className="block pr-2 text-sm text-muted">
+                {asset.latestValue ? `entered ${formatDay(asset.latestValue.date)}` : ""}
+              </span>
+            </>
+          ) : (
+            <span className="text-sm text-muted">No value yet</span>
+          )}
+        </span>
+      </Link>
+      <EditButton name={asset.name} onClick={() => onEdit(asset.id)} labelled />
     </li>
   );
 }

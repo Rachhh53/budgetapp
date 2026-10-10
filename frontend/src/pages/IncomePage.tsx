@@ -8,13 +8,16 @@ import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule, WEEKEND_LABELS } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { formatCents } from "../lib/money";
+import { formatRate } from "../lib/rates";
 
 /** What the form is open for: a new source, an existing one, or closed. */
 type FormState = { source?: IncomeSource } | null;
 
 /**
  * Income (design/income.png): each source with its schedule and where the money goes, and
- * the paychecks coming up. Pay stubs and employer match join this screen in Phases 4 and 9.
+ * the paychecks coming up, with the employer's match and a nudge when some of it is going
+ * unclaimed. Pay stubs join this screen in Phase 9.
  */
 export function IncomePage() {
   const sources = useIncomeSources();
@@ -137,6 +140,42 @@ function SourceCard({ source, accounts, onEdit }: { source: IncomeSource; accoun
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {source.match && (
+        <div className="mt-4">
+          <h3 className="border-b border-line pb-2 font-semibold">Employer match</h3>
+          <div className="flex items-center justify-between gap-3 py-2">
+            <span className="min-w-0">
+              {source.match.mode === "fixed"
+                ? "The same amount every paycheck"
+                : `${formatRate(source.match.matchBp ?? 0)} of what you put in, up to ${formatRate(source.match.capBpOfGross ?? 0)} of gross pay`}
+              {` → ${accountName(source.match.toAccountId) ?? "an account that was removed"}`}
+            </span>
+            {source.matchFigures && <Amount cents={source.matchFigures.perPaycheckCents} className="shrink-0 font-semibold" />}
+          </div>
+          {source.matchFigures === null && (
+            <p className="text-sm text-muted">Add the gross amount per paycheck and the match can be worked out.</p>
+          )}
+          {/* Said in words with the amounts: money the employer would add that is not being claimed. */}
+          {source.matchFigures && source.matchFigures.contributeMoreCents > 0 && (
+            <p role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+              <span className="font-semibold">Under the cap.</span> Putting in{" "}
+              <span data-amount className="font-semibold tabular-nums">
+                {formatCents(source.matchFigures.contributeMoreCents)}
+              </span>{" "}
+              more each paycheck would earn the whole match of{" "}
+              <span data-amount className="font-semibold tabular-nums">
+                {formatCents(source.matchFigures.mostPossibleCents)}
+              </span>
+              :{" "}
+              <span data-amount className="font-semibold tabular-nums">
+                {formatCents(source.matchFigures.mostPossibleCents - source.matchFigures.perPaycheckCents)}
+              </span>{" "}
+              more from your employer every time.
+            </p>
+          )}
         </div>
       )}
 

@@ -15,6 +15,9 @@ const KIND_LABELS: Record<string, string> = {
   money_in: "Money in",
   money_out: "Money out",
   interest: "Interest",
+  contribution: "From a paycheck",
+  employer_match: "Employer match",
+  growth: "Assumed, not actual",
   balance: "Balance",
 };
 

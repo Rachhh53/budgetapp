@@ -4,6 +4,7 @@ import type { Account } from "../../api/accounts";
 import {
   type IncomeSource,
   type IncomeSourceInput,
+  type MatchMode,
   PAY_FREQUENCIES,
   type PayFrequency,
   useDeleteIncomeSource,
@@ -13,15 +14,30 @@ import {
 } from "../../api/income";
 import { todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
+import { parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker, TextPicker } from "../Picker";
+import { Segmented } from "../Segmented";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { FREQUENCY_LABELS, WEEKEND_LABELS } from "./schedule";
 
 const DEDUCTION_SUGGESTIONS = ["401(k)", "Roth 401(k)", "403(b)", "HSA", "FSA", "Pension"] as const;
+
+/** Whether the employer adds anything, and how it is worked out. */
+type MatchChoice = "none" | MatchMode;
+
+const MATCH_OPTIONS: readonly { value: MatchChoice; label: string }[] = [
+  { value: "none", label: "No match" },
+  { value: "fixed", label: "Same amount" },
+  { value: "formula", label: "Share of what I put in" },
+];
+
+/** The most that can be matched, as the backend takes it: 1,000% of a contribution, up to all of gross pay. */
+const MAX_MATCH_BP = 100_000;
+const MAX_CAP_BP = 10_000;
 
 interface DeductionRow {
   /** Stable key for React; never sent to the backend. */
@@ -72,12 +88,21 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
       toAccountId: deduction.toAccountId === null ? null : String(deduction.toAccountId),
     })),
   );
+  const match = source?.match ?? null;
+  const [matchChoice, setMatchChoice] = useState<MatchChoice>(match?.mode ?? "none");
+  const [matchAccountId, setMatchAccountId] = useState<string | null>(match ? String(match.toAccountId) : null);
+  const [matchFixed, setMatchFixed] = useState(match?.fixedCents != null ? centsToInput(match.fixedCents) : "");
+  const [matchPercent, setMatchPercent] = useState(match?.matchBp != null ? rateToInput(match.matchBp) : "");
+  const [capPercent, setCapPercent] = useState(match?.capBpOfGross != null ? rateToInput(match.capBpOfGross) : "");
   const [problem, setProblem] = useState<string>();
 
   // Archived accounts are left out, unless this source already points at one.
-  const inUse = new Set([depositAccountId, ...deductions.map((deduction) => deduction.toAccountId)]);
-  const accountOptions = accounts
-    .filter((account) => !account.archived || inUse.has(String(account.id)))
+  const inUse = new Set([depositAccountId, matchAccountId, ...deductions.map((deduction) => deduction.toAccountId)]);
+  const offered = accounts.filter((account) => !account.archived || inUse.has(String(account.id)));
+  const accountOptions = offered.map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
+  // A match is retirement money: it can only go into an investment account.
+  const investmentOptions = offered
+    .filter((account) => account.type === "investment")
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
 
   const updateDeduction = (key: number, change: Partial<DeductionRow>) =>
@@ -109,6 +134,32 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         toAccountId: deduction.toAccountId === null ? null : Number(deduction.toAccountId),
       });
     }
+    let matchInput: IncomeSourceInput["match"] = null;
+    if (matchChoice !== "none") {
+      if (matchAccountId === null) {
+        return "Please choose the investment account the employer match is paid into.";
+      }
+      if (matchChoice === "fixed") {
+        const fixedCents = parseDollars(matchFixed);
+        if (fixedCents === null || fixedCents < 0) {
+          return "Please enter the match as an amount like 75.00.";
+        }
+        matchInput = { toAccountId: Number(matchAccountId), mode: "fixed", fixedCents, matchBp: null, capBpOfGross: null };
+      } else {
+        const matchBp = parseRate(matchPercent);
+        const capBpOfGross = parseRate(capPercent);
+        if (matchBp === null || matchBp > MAX_MATCH_BP) {
+          return "Please enter how much of what you put in is matched, as a percentage like 50.";
+        }
+        if (capBpOfGross === null || capBpOfGross > MAX_CAP_BP) {
+          return "Please enter how much of your pay is matched up to, as a percentage like 6.";
+        }
+        if (grossCents === null) {
+          return "A match worked out from your pay needs the gross amount of a paycheck. Please fill that in as well.";
+        }
+        matchInput = { toAccountId: Number(matchAccountId), mode: "formula", fixedCents: null, matchBp, capBpOfGross };
+      }
+    }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly";
     return {
       name,
@@ -129,6 +180,7 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         manualDates: frequency === "manual_dates" ? pickedDates : [],
       },
       deductions: parsedDeductions,
+      match: matchInput,
     };
   };
 
@@ -344,6 +396,70 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
           >
             + Add a deduction
           </button>
+        </fieldset>
+
+        <fieldset className="space-y-3 rounded-lg border border-line p-4">
+          <legend className="px-1 font-semibold">Employer match</legend>
+          <p className="text-sm text-muted">What your employer adds to a retirement account with each paycheck, on top of what you put in.</p>
+          <Segmented legend="Does your employer add anything?" options={MATCH_OPTIONS} value={matchChoice} onChange={setMatchChoice} />
+          {matchChoice !== "none" && (
+            <div>
+              <Picker
+                label="Paid into"
+                noun="investment account"
+                placeholder="Choose or type an investment account"
+                options={investmentOptions}
+                value={matchAccountId}
+                onChange={setMatchAccountId}
+              />
+              {investmentOptions.length === 0 && (
+                <p className={HINT}>
+                  There is no investment account yet. Add one on the Accounts screen first, with a label such as 401(k).
+                </p>
+              )}
+            </div>
+          )}
+          {matchChoice === "fixed" && <MoneyField label="Match per paycheck" value={matchFixed} onChange={setMatchFixed} />}
+          {matchChoice === "formula" && (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor={`${id}-match-percent`} className={LABEL}>
+                    They match (%)
+                  </label>
+                  <input
+                    id={`${id}-match-percent`}
+                    value={matchPercent}
+                    onChange={(event) => setMatchPercent(event.target.value)}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="e.g. 50"
+                    className={`${INPUT} tabular-nums`}
+                  />
+                  <p className={HINT}>Of what you put in.</p>
+                </div>
+                <div>
+                  <label htmlFor={`${id}-match-cap`} className={LABEL}>
+                    Up to (% of gross pay)
+                  </label>
+                  <input
+                    id={`${id}-match-cap`}
+                    value={capPercent}
+                    onChange={(event) => setCapPercent(event.target.value)}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="e.g. 6"
+                    className={`${INPUT} tabular-nums`}
+                  />
+                  <p className={HINT}>Contributions beyond this are not matched.</p>
+                </div>
+              </div>
+              <p className={HINT}>
+                "50% up to 6%" is 50 and 6. What you put in is whatever the deductions above send to the same account, and the gross
+                amount per paycheck is needed to work it out.
+              </p>
+            </>
+          )}
         </fieldset>
 
         <div>
