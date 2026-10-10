@@ -238,7 +238,7 @@ For an occurrence due on **D**, with **P** = the period containing D:
 ### 5.4 Savings interest
 - On the account's credit day: estimated interest = balance × ((1 + APY)^(1/12) − 1), credited to the chosen destination, shown as an estimate.
 - A user-entered balance replaces the projection from that date.
-- As built: the balance is the one at the start of the credit day; the rate is the one in force that day; an account earns interest once it has an APY in its rate history, from its first entered balance on. Interest counts as money in. `proportional` gives each bucket its share of the account (bucket ÷ the larger of the balance and all buckets, HALF_EVEN); the rest stays unassigned. The estimate cannot be typed over — entering the real balance is how it is corrected.
+- As built: the balance is the one at the start of the credit day; the rate is the one in force that day; an account earns interest once it has an APY in its rate history, from its first entered balance on. Interest counts as money in. `proportional` gives each bucket its share of the account (bucket ÷ the larger of the balance and all buckets, HALF_EVEN); the rest stays unassigned. The estimate cannot be typed over — entering the real balance is how it is corrected. A balance entered **on** a credit day is taken to hold that month's interest already: the estimate is not added on top of it or listed under Income, but a bucket still gets its share, worked out on what the account was projected to hold before that balance. On the day of the very first balance there is nothing earlier to work it out on, so nothing is credited.
 
 ### 5.5 Investments
 - Contributions: paycheck deductions, employer match, transfers.
@@ -490,7 +490,7 @@ What the branch holds beyond the five tracked features below, each with its date
 
 Migrations on this branch: `V5` buckets, interest and rates · `V6` bucket goal date · `V7` stop at goal · `V8` repair of items whose kind was changed · `V9` item pauses · `V10` item paid from a bucket · `V11` check numbers. All of them have run on Rachel's installed database, so none may be edited: anything further is a new migration.
 
-Still open, not part of the tracked features: interest credited on the day of an entered balance is added on top of it; no running balance per line in Transactions; category and tag names are hover-only on a phone; none of the screens changed on 2026-10-09 were checked by eye at 375px.
+Still open, not part of the tracked features (interest credited on the day of an entered balance being added on top of it was fixed on `milestone/4-investments-networth`, §5.4): no running balance per line in Transactions; category and tag names are hover-only on a phone; none of the screens changed on 2026-10-09 were checked by eye at 375px.
 
 | Feature | Status | Notes |
 |---|---|---|

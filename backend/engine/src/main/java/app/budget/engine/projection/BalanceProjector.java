@@ -105,6 +105,11 @@ public final class BalanceProjector {
      * goes, so that every month is estimated on a balance that includes the months before.
      * A month that falls before a later entered balance is still estimated (a bucket may be
      * owed its share), but that entered balance, not the estimate, is what the account holds.
+     *
+     * <p>The same goes for a credit day the user entered a balance for: people type in the
+     * balance they see once the interest has posted, so the estimate is not added on top of
+     * it. It is worked out on what the account was projected to hold before that balance; on
+     * the day of the very first balance there is nothing earlier to work it out on.
      */
     private static List<InterestCredit> creditInterest(
             InterestTerms terms, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied, LocalDate through) {
@@ -114,13 +119,20 @@ public final class BalanceProjector {
             if (apy.isEmpty()) {
                 continue;
             }
-            Money balance = balanceAtStartOf(day, entered, applied);
+            boolean inEnteredBalance = entered.containsKey(day);
+            Map.Entry<LocalDate, Money> anchor = inEnteredBalance ? entered.lowerEntry(day) : entered.floorEntry(day);
+            if (anchor == null) {
+                continue;
+            }
+            Money balance = rolledForward(anchor, day, applied);
             Money amount = SavingsInterest.forMonth(balance, apy.get());
             if (amount.isZero()) {
                 continue;
             }
-            applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
-            credits.add(new InterestCredit(day, amount, balance, apy.get()));
+            if (!inEnteredBalance) {
+                applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
+            }
+            credits.add(new InterestCredit(day, amount, balance, apy.get(), inEnteredBalance));
         }
         return credits;
     }
@@ -144,7 +156,11 @@ public final class BalanceProjector {
 
     /** The balance {@code date} starts with: the latest one entered on or before it, plus everything applied since. */
     private static Money balanceAtStartOf(LocalDate date, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied) {
-        Map.Entry<LocalDate, Money> anchor = entered.floorEntry(date);
+        return rolledForward(entered.floorEntry(date), date, applied);
+    }
+
+    /** An entered balance with everything applied from its day up to, but not on, {@code date}. */
+    private static Money rolledForward(Map.Entry<LocalDate, Money> anchor, LocalDate date, TreeMap<LocalDate, List<Money>> applied) {
         Money balance = anchor.getValue();
         for (List<Money> day : applied.subMap(anchor.getKey(), true, date, false).values()) {
             for (Money amount : day) {

@@ -819,6 +819,24 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
+        void aBalanceEnteredOnTheCreditDayIsNotToppedUpWithThatDaysInterest() throws Exception {
+            addRate(savings, 410, "2026-01-01");
+            enterBalance(savings, "2026-09-01", 498000);
+            long emergency = bucket(savings, "Emergency fund", 0);
+            interest("{\"creditDay\":1,\"destination\":\"bucket\",\"destinationBucketId\":%d}".formatted(emergency));
+
+            JsonNode period = period("2026-10-01");
+
+            // The 5,000.00 typed in for October 1 is what the account holds: nothing is listed or added.
+            assertThat(period.get("interest")).isEmpty();
+            assertThat(account(period, savings).get("inCents").asLong()).isZero();
+            assertThat(account(period, savings).get("endingCents").asLong()).isEqualTo(500000);
+            // The bucket is still owed the month's interest, worked out on September's 4,980.00: 16.70.
+            assertThat(moves(period, "interest")).containsExactly("2026-10-01 1670");
+            assertThat(bucketIn(period, emergency).get("endingCents").asLong()).isEqualTo(1670);
+        }
+
+        @Test
         void interestCanGoIntoOneBucket() throws Exception {
             addRate(savings, 410, "2026-01-01");
             long emergency = bucket(savings, "Emergency fund", 0);

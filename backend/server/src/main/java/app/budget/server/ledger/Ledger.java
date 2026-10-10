@@ -225,9 +225,11 @@ public final class Ledger {
         for (Account account : accounts.all()) {
             for (AccountPeriod figures : accountPeriods(workings, account)) {
                 accountPeriods.add(figures);
-                // Interest dated before a balance entered this period is already in that balance.
+                // Interest dated before a balance entered this period, or on the day of one, is already in that balance.
                 for (InterestCredit credit : workings.projection(account.id()).interest()) {
-                    if (!credit.date().isBefore(figures.startingOn()) && !credit.date().isAfter(period.end())) {
+                    if (!credit.inEnteredBalance()
+                            && !credit.date().isBefore(figures.startingOn())
+                            && !credit.date().isAfter(period.end())) {
                         interestLines.add(new InterestLine(account.id(), credit.date(), credit.amount().cents(), credit.apy().value()));
                     }
                 }
