@@ -37,6 +37,8 @@ export interface Occurrence {
   saveUpBucketId: number | null;
   /** The bucket of the paying account it comes out of; `null` for money not in a bucket. */
   fromBucketId: number | null;
+  /** The check this one was paid with; `null` when none was written. */
+  checkNumber: string | null;
 }
 
 /**
@@ -128,6 +130,8 @@ export interface OccurrenceEdit {
   paidDate?: string;
   /** An empty code clears it. */
   confirmationCode?: string;
+  /** An empty number clears it. Only for something paid from a checking account. */
+  checkNumber?: string;
 }
 
 /** What one account holds (or owes) at the end of today, and what of that is outside its buckets. */

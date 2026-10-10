@@ -22,6 +22,8 @@ export interface EntryInput {
   /** Where a transfer goes; `null` otherwise. */
   toAccountId: number | null;
   note: string | null;
+  /** The check it was paid with, when it left a checking account that way; `null` otherwise. */
+  checkNumber: string | null;
   tagIds: number[];
   /**
    * The buckets this touches. A bucket in the account the money leaves is where it comes out

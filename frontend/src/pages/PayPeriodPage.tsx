@@ -24,7 +24,7 @@ import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { ItemForm } from "../components/items/ItemForm";
-import { ConfirmationCode } from "../components/period/ConfirmationCode";
+import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
@@ -122,6 +122,7 @@ export function PayPeriodPage() {
   const context: RowContext = {
     accountName: (id) => names.get(id) ?? "an account",
     bucketName: (id) => (id === null ? undefined : bucketNames.get(id)),
+    isChecking: (id) => accounts.data.some((account) => account.id === id && account.type === "checking"),
     categories: categories.data,
     tags: tags.data,
     items: items.data,
@@ -216,6 +217,8 @@ interface RowContext {
   accountName: (id: number) => string;
   /** `undefined` for no bucket, or one that has since been archived or removed. */
   bucketName: (id: number | null) => string | undefined;
+  /** True for a checking account: the only kind a check can be written on. */
+  isChecking: (id: number) => boolean;
   categories: readonly Category[];
   tags: readonly Tag[];
   items: readonly Item[];
@@ -881,7 +884,7 @@ function oneOffDetail(entry: Entry, context: RowContext): string {
       ? context.accountName(entry.accountId)
       : `${context.accountName(entry.accountId)} → ${context.accountName(entry.toAccountId)}`;
   // The category is on the coloured dot, not here: after an account it reads like one of its buckets.
-  return ["One-off", formatDay(entry.date), where].join(" · ");
+  return ["One-off", formatDay(entry.date), where, entry.checkNumber && `Check #${entry.checkNumber}`].filter(Boolean).join(" · ");
 }
 
 /** A bill paid by hand: tick it when it is paid, and keep the confirmation code with it. */
@@ -934,6 +937,14 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
             code={occurrence.confirmationCode}
             onSave={(confirmationCode) => edit.mutate({ occurrence, edit: { confirmationCode } })}
           />
+          {context.isChecking(occurrence.payFromAccountId) && (
+            <ConfirmationCode
+              name={occurrence.name}
+              code={occurrence.checkNumber}
+              wording={CHECK_NUMBER}
+              onSave={(checkNumber) => edit.mutate({ occurrence, edit: { checkNumber } })}
+            />
+          )}
           {edit.error && (
             <span role="alert" className="text-sm text-danger">
               {edit.error.message}

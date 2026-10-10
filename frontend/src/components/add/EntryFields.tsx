@@ -52,6 +52,7 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
   const [categoryId, setCategoryId] = useState<number | null>(entry?.categoryId ?? null);
   const [tagIds, setTagIds] = useState<number[]>(entry?.tagIds ?? []);
   const [note, setNote] = useState(entry?.note ?? "");
+  const [checkNumber, setCheckNumber] = useState(entry?.checkNumber ?? "");
   const [settingAside, setSettingAside] = useState((entry?.bucketSplits.length ?? 0) > 0);
   // What to set aside in each bucket, as typed, by bucket id.
   const [aside, setAside] = useState<Record<number, string>>(
@@ -81,6 +82,9 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
 
   const amountCents = parseDollars(amount);
+  // A check can only be written on a checking account, for money that leaves it.
+  const paidFromChecking =
+    kind !== "money_in" && accounts.some((account) => String(account.id) === accountId && account.type === "checking");
 
   /** Turns the form into a request, or explains what still needs attention. */
   const toInput = (): EntryInput | string => {
@@ -132,6 +136,7 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
       accountId: Number(accountId),
       toAccountId: kind === "transfer" && toAccountId !== null ? Number(toAccountId) : null,
       note: note.trim() === "" ? null : note,
+      checkNumber: paidFromChecking && checkNumber.trim() !== "" ? checkNumber.trim() : null,
       tagIds,
       bucketSplits,
     };
@@ -225,6 +230,22 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
             </div>
           )}
           <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
+          {paidFromChecking && (
+            <div>
+              <label htmlFor={`${id}-check-number`} className={LABEL}>
+                Check number (optional)
+              </label>
+              <input
+                id={`${id}-check-number`}
+                value={checkNumber}
+                onChange={(event) => setCheckNumber(event.target.value)}
+                maxLength={20}
+                inputMode="numeric"
+                autoComplete="off"
+                className={INPUT}
+              />
+            </div>
+          )}
         </div>
 
         {payingBuckets.length > 0 && (

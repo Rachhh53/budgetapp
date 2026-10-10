@@ -531,6 +531,26 @@ class ItemsApiTest extends ApiTestBase {
         }
 
         @Test
+        void keepsTheCheckNumberOneOccurrenceWasPaidWith() throws Exception {
+            JsonNode paid = edit("2026-10-16", "{\"paid\":true,\"checkNumber\":\" 1043 \"}").data();
+            assertThat(paid.get("checkNumber").asText()).isEqualTo("1043");
+            // Another edit leaves it alone; sending it empty clears it; other occurrences never had one.
+            assertThat(edit("2026-10-16", "{\"note\":\"Mailed\"}").data().get("checkNumber").asText()).isEqualTo("1043");
+            assertThat(edit("2026-11-16", "{\"note\":\"\"}").data().get("checkNumber").isNull()).isTrue();
+            assertThat(edit("2026-10-16", "{\"checkNumber\":\"\"}").data().get("checkNumber").isNull()).isTrue();
+
+            Reply tooLong = edit("2026-10-16", "{\"checkNumber\":\"" + "1".repeat(21) + "\"}");
+            assertThat(tooLong.status()).isEqualTo(400);
+
+            // A card has no checks.
+            long onCard = created("/api/items",
+                    "{\"name\":\"Gym\",\"kind\":\"bill\",\"amountCents\":3000,\"payFromAccountId\":%d,\"schedule\":%s}".formatted(visa, MONTHLY_5TH));
+            Reply refused = server.put("/api/items/" + onCard + "/occurrences/2026-10-05", "{\"checkNumber\":\"7\"}", cookie);
+            assertThat(refused.status()).isEqualTo(400);
+            assertThat(refused.error()).isEqualTo("A check number can be kept for something paid from a checking account.");
+        }
+
+        @Test
         void typingOverOneAmountKeepsWhatWasProjectedAndLeavesTheOthersAlone() throws Exception {
             Reply reply = edit("2026-10-16", "{\"amountCents\":15250}");
 

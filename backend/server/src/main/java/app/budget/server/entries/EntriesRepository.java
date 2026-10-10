@@ -17,7 +17,8 @@ import org.jdbi.v3.core.statement.SqlStatement;
 public final class EntriesRepository {
 
     private static final String SELECT = """
-            SELECT id, kind, date, amount, is_estimate, description, payee, category_id, account_id, to_account_id, note
+            SELECT id, kind, date, amount, is_estimate, description, payee, category_id, account_id, to_account_id, note,
+                   check_number
             FROM entries
             """;
 
@@ -39,6 +40,7 @@ public final class EntriesRepository {
      * @param accountId    the account it leaves (money out, transfer) or arrives in (money in)
      * @param toAccountId  where a transfer goes; {@code null} otherwise
      * @param bucketSplits how much of the money arriving goes into which buckets; the rest stays unassigned
+     * @param checkNumber  the check it was paid with, when it left a checking account that way; {@code null} otherwise
      */
     public record Entry(
             long id,
@@ -53,7 +55,8 @@ public final class EntriesRepository {
             Long toAccountId,
             String note,
             List<Long> tagIds,
-            List<Split> bucketSplits) {}
+            List<Split> bucketSplits,
+            String checkNumber) {}
 
     /** What the user can set on an entry. */
     public record Fields(
@@ -68,7 +71,8 @@ public final class EntriesRepository {
             Long toAccountId,
             String note,
             List<Long> tagIds,
-            List<Split> bucketSplits) {}
+            List<Split> bucketSplits,
+            String checkNumber) {}
 
     /** Entries dated within {@code from}–{@code to}, oldest first. */
     public List<Entry> between(LocalDate from, LocalDate to) {
@@ -110,9 +114,9 @@ public final class EntriesRepository {
             long id = bind(handle.createQuery("""
                             INSERT INTO entries
                                 (kind, date, amount, is_estimate, description, payee, category_id, account_id,
-                                 to_account_id, note, created_at)
+                                 to_account_id, note, check_number, created_at)
                             VALUES (:kind, :date, :amount, :estimate, :description, :payee, :categoryId, :accountId,
-                                    :toAccountId, :note, :now)
+                                    :toAccountId, :note, :checkNumber, :now)
                             RETURNING id
                             """), fields)
                     .bind("now", clock.instant().toString())
@@ -131,7 +135,8 @@ public final class EntriesRepository {
                             UPDATE entries
                             SET kind = :kind, date = :date, amount = :amount, is_estimate = :estimate,
                                 description = :description, payee = :payee, category_id = :categoryId,
-                                account_id = :accountId, to_account_id = :toAccountId, note = :note
+                                account_id = :accountId, to_account_id = :toAccountId, note = :note,
+                                check_number = :checkNumber
                             WHERE id = :id
                             """), fields)
                     .bind("id", id)
@@ -159,7 +164,8 @@ public final class EntriesRepository {
                 .bind("categoryId", fields.categoryId())
                 .bind("accountId", fields.accountId())
                 .bind("toAccountId", fields.toAccountId())
-                .bind("note", fields.note());
+                .bind("note", fields.note())
+                .bind("checkNumber", fields.checkNumber());
     }
 
     private static void replaceTags(Handle handle, long entryId, List<Long> tagIds) {
@@ -198,7 +204,7 @@ public final class EntriesRepository {
                     .list();
             entries.add(new Entry(
                     row.id(), row.kind(), row.date(), row.amountCents(), row.estimate(), row.description(), row.payee(),
-                    row.categoryId(), row.accountId(), row.toAccountId(), row.note(), tagIds, splits));
+                    row.categoryId(), row.accountId(), row.toAccountId(), row.note(), tagIds, splits, row.checkNumber()));
         }
         return entries;
     }
@@ -218,7 +224,8 @@ public final class EntriesRepository {
                 nullableLong(rs, "to_account_id"),
                 rs.getString("note"),
                 List.of(),
-                List.of());
+                List.of(),
+                rs.getString("check_number"));
     }
 
     private static Long nullableLong(ResultSet rs, String column) throws SQLException {

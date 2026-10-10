@@ -1,5 +1,6 @@
 package app.budget.server.entries;
 
+import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
@@ -30,6 +31,7 @@ public final class EntriesRoutes {
     private static final int MAX_TAGS = 20;
     private static final String CHOOSE_TAGS = "Please choose tags from the list.";
     private static final int MAX_SPLITS = 20;
+    private static final int CHECK_NUMBER_MAX = 20;
     private static final String CHOOSE_BUCKETS = "Please choose each bucket once, from the list.";
 
     private final EntriesRepository entries;
@@ -77,7 +79,8 @@ public final class EntriesRoutes {
             Long toAccountId,
             String note,
             List<Long> tagIds,
-            List<SplitInput> bucketSplits) {}
+            List<SplitInput> bucketSplits,
+            String checkNumber) {}
 
     /** Part of money coming in to set aside in one bucket. */
     public record SplitInput(Long bucketId, Long amountCents) {}
@@ -163,7 +166,17 @@ public final class EntriesRoutes {
                 toAccountId,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
                 tagIds,
-                splits(input.bucketSplits(), kind, amount, input.accountId(), toAccountId == null ? input.accountId() : toAccountId));
+                splits(input.bucketSplits(), kind, amount, input.accountId(), toAccountId == null ? input.accountId() : toAccountId),
+                // Only money leaving a checking account can have been paid by check; the form sends whatever was last typed.
+                kind != EntryKind.MONEY_IN && isChecking(input.accountId())
+                        ? Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)
+                        : null);
+    }
+
+    private boolean isChecking(long accountId) {
+        return accounts.find(accountId)
+                .filter(account -> account.type().equals(Inputs.code(AccountType.CHECKING)))
+                .isPresent();
     }
 
     /**

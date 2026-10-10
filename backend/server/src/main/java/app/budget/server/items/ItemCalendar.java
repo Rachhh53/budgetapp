@@ -60,6 +60,7 @@ public final class ItemCalendar {
      * @param bucketId       the bucket a bucket move, or a transfer, puts this money in
      * @param saveUpBucketId the bucket this bill is saved up for in
      * @param fromBucketId   the bucket of the paying account it comes out of; {@code null} for money not in a bucket
+     * @param checkNumber    the check this one was paid with; {@code null} when none was written
      */
     public record Occurrence(
             long itemId,
@@ -85,14 +86,15 @@ public final class ItemCalendar {
             boolean skipped,
             Long bucketId,
             Long saveUpBucketId,
-            Long fromBucketId) {
+            Long fromBucketId,
+            String checkNumber) {
 
         /** This occurrence at another amount: for a bucket move that only has room for part of itself. */
         public Occurrence withAmount(long cents) {
             return new Occurrence(
                     itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, cents, estimate, projectedCents,
                     autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
-                    skipped, bucketId, saveUpBucketId, fromBucketId);
+                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber);
         }
 
         /** This occurrence with its money going into no bucket: for one dated before its bucket was opened. */
@@ -100,7 +102,7 @@ public final class ItemCalendar {
             return new Occurrence(
                     itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, amountCents, estimate, projectedCents,
                     autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
-                    skipped, null, saveUpBucketId, fromBucketId);
+                    skipped, null, saveUpBucketId, fromBucketId, checkNumber);
         }
     }
 
@@ -238,7 +240,8 @@ public final class ItemCalendar {
                 edit.skipped(),
                 terms.bucketId(),
                 terms.saveUpBucketId(),
-                terms.fromBucketId());
+                terms.fromBucketId(),
+                edit.checkNumber());
     }
 
     private static OccurrencePlanner.Version<Terms> planned(Version version) {

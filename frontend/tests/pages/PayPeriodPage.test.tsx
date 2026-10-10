@@ -63,6 +63,7 @@ const ELECTRIC: Occurrence = {
   bucketId: null,
   saveUpBucketId: null,
   fromBucketId: null,
+  checkNumber: null,
 };
 const VISA_PAYMENT: Occurrence = {
   ...ELECTRIC,
@@ -150,6 +151,7 @@ const VET: Entry = {
   accountId: 1,
   toAccountId: null,
   note: null,
+  checkNumber: null,
   tagIds: [],
   bucketSplits: [],
 };
@@ -554,6 +556,27 @@ describe("pay period screen", () => {
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/5/occurrences/2026-10-13")).toEqual([{ paid: false }]));
   });
 
+  it("keeps a check number for a bill paid from a checking account, and offers none for a card", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, checkNumber: "1043" }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add check number for Electric" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Check number for Electric" }), "1043{Enter}");
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([{ checkNumber: "1043" }]));
+  });
+
+  it("shows the check number a bill was paid with", async () => {
+    withPeriod({ ...OCTOBER, occurrences: [{ ...ELECTRIC, checkNumber: "1043" }], entries: [{ ...VET, checkNumber: "1042" }] });
+    renderApp();
+
+    expect(await screen.findByRole("button", { name: "Edit check number for Electric" })).toBeInTheDocument();
+    expect(screen.getByText("1043")).toBeInTheDocument();
+    expect(screen.getByText("One-off · Oct 3 · Everyday Checking · Check #1042")).toBeInTheDocument();
+  });
+
   it("adds a confirmation code where the bill stands", async () => {
     const fetchMock = withPeriod(OCTOBER, {
       "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: ELECTRIC, changed: true }),
@@ -721,6 +744,8 @@ describe("+ Add item", () => {
     expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Birthday gift for Mom");
+    // Paid from a checking account, so a check number can be kept with it.
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Check number (optional)" }), "1042");
     const date = within(dialog).getByLabelText("Date");
     await userEvent.clear(date);
     await userEvent.type(date, "2026-10-09");
@@ -742,6 +767,7 @@ describe("+ Add item", () => {
         accountId: 1,
         toAccountId: null,
         note: null,
+        checkNumber: "1042",
         tagIds: [],
         bucketSplits: [],
       },

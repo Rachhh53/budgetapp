@@ -39,6 +39,7 @@ public final class ItemsRoutes {
     private static final int NAME_MAX = 80;
     private static final int NOTE_MAX = 500;
     private static final int CODE_MAX = 60;
+    private static final int CHECK_NUMBER_MAX = 20;
     private static final int MAX_TAGS = 20;
     private static final String CHOOSE_TAGS = "Please choose tags from the list.";
     private static final int MAX_DAYS_AFTER_PAYDAY = 60;
@@ -116,7 +117,7 @@ public final class ItemsRoutes {
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
-     * confirmation code or note clears it.
+     * confirmation code, check number or note clears it.
      *
      * @param periodStart first day of the pay period to move this occurrence into
      */
@@ -128,7 +129,8 @@ public final class ItemsRoutes {
             LocalDate paidDate,
             String confirmationCode,
             String note,
-            Boolean skipped) {}
+            Boolean skipped,
+            String checkNumber) {}
 
     /**
      * An item as the API returns it: the version in force today, plus what it works out to.
@@ -310,6 +312,13 @@ public final class ItemsRoutes {
             throw ApiException.badRequest("Please choose the pay period from the list.");
         }
 
+        // A check can only have been written on a checking account.
+        if (input.checkNumber() != null && !input.checkNumber().isBlank() && accounts.find(current.payFromAccountId())
+                .filter(account -> account.type().equals(Inputs.code(AccountType.CHECKING)))
+                .isEmpty()) {
+            throw ApiException.badRequest("A check number can be kept for something paid from a checking account.");
+        }
+
         Override stored = items.overrides(scheduledDate, scheduledDate).stream()
                 .filter(edit -> edit.itemId() == id)
                 .findFirst()
@@ -330,7 +339,10 @@ public final class ItemsRoutes {
                 input.note() == null ? stored.note() : Inputs.optionalText(input.note(), "the note", NOTE_MAX),
                 input.skipped() == null ? stored.skipped() : input.skipped(),
                 // Kept from the first time the amount is typed over, so the original stays on record.
-                stored.projectedCents() != null || amount == null ? stored.projectedCents() : (Long) current.amountCents()));
+                stored.projectedCents() != null || amount == null ? stored.projectedCents() : (Long) current.amountCents(),
+                input.checkNumber() == null
+                        ? stored.checkNumber()
+                        : Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)));
         ApiResponse.ok(ctx, calendar.find(item, scheduledDate).orElseThrow(ApiException::notFound));
     }
 

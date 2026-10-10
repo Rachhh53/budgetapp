@@ -97,6 +97,7 @@ public final class ItemsRepository {
      * @param originalDueDate the date the schedule names for this occurrence
      * @param periodOverride  first day of the pay period it was moved into
      * @param projectedCents  what the app showed before the amount was first typed over
+     * @param checkNumber     the check it was paid with, when it is paid from a checking account that way
      */
     public record Override(
             long itemId,
@@ -109,11 +110,12 @@ public final class ItemsRepository {
             String confirmationCode,
             String note,
             boolean skipped,
-            Long projectedCents) {
+            Long projectedCents,
+            String checkNumber) {
 
         /** An occurrence nobody has touched yet. */
         public static Override untouched(long itemId, LocalDate originalDueDate) {
-            return new Override(itemId, originalDueDate, null, null, null, false, null, null, null, false, null);
+            return new Override(itemId, originalDueDate, null, null, null, false, null, null, null, false, null, null);
         }
     }
 
@@ -326,15 +328,15 @@ public final class ItemsRepository {
                 .createUpdate("""
                         INSERT INTO occurrence_overrides
                             (item_id, original_due_date, amount, due_date, period_override, paid, paid_date,
-                             confirmation_code, note, skipped, projected_amount)
+                             confirmation_code, note, skipped, projected_amount, check_number)
                         VALUES (:itemId, :originalDueDate, :amount, :dueDate, :periodOverride, :paid, :paidDate,
-                                :confirmationCode, :note, :skipped, :projected)
+                                :confirmationCode, :note, :skipped, :projected, :checkNumber)
                         ON CONFLICT (item_id, original_due_date) DO UPDATE SET
                             amount = excluded.amount, due_date = excluded.due_date,
                             period_override = excluded.period_override, paid = excluded.paid,
                             paid_date = excluded.paid_date, confirmation_code = excluded.confirmation_code,
                             note = excluded.note, skipped = excluded.skipped,
-                            projected_amount = excluded.projected_amount
+                            projected_amount = excluded.projected_amount, check_number = excluded.check_number
                         """)
                 .bind("itemId", edit.itemId())
                 .bind("originalDueDate", edit.originalDueDate().toString())
@@ -347,6 +349,7 @@ public final class ItemsRepository {
                 .bind("note", edit.note())
                 .bind("skipped", edit.skipped())
                 .bind("projected", edit.projectedCents())
+                .bind("checkNumber", edit.checkNumber())
                 .execute());
     }
 
@@ -472,7 +475,8 @@ public final class ItemsRepository {
                 rs.getString("confirmation_code"),
                 rs.getString("note"),
                 rs.getBoolean("skipped"),
-                nullableLong(rs, "projected_amount"));
+                nullableLong(rs, "projected_amount"),
+                rs.getString("check_number"));
     }
 
     private static Long nullableLong(ResultSet rs, String column) throws SQLException {

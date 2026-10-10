@@ -531,6 +531,10 @@ Pausing a recurring item (decided 2026-10-09; Rachel: "sometimes I pause my emer
 
 Categories and tags on the pay period screen (decided 2026-10-09; Rachel: a category after an account "looks like it could be an account bucket name"): their names are not written on a row. The coloured dot beside the row carries them — "Category: Pets · Tags: …" on hover, and as text for screen readers — so the words after an account are only ever an account or a bucket.
 
+Check numbers (decided 2026-10-09; Rachel: "if I choose to pay from a checking account, I should be able to enter the check number"): money leaving a **checking** account can carry the number of the check it was paid with — a one-off Money out or Transfer ("Check number (optional)" in the add form, shown on its row as "Check #1042") and one occurrence of a bill paid by hand ("+ Add check number" beside its confirmation code). Up to 20 characters; `entries.check_number` and `occurrence_overrides.check_number` (migration `V11`). Not offered for savings accounts, cards or money coming in.
+
+Wording on the account page (Rachel, 2026-10-09): what an account has outside its buckets is called **Unallocated balance** there (the stat, the chart's dotted line and the Buckets card), not "Available after buckets" or "Not in a bucket". The pay period screen keeps "Available after buckets".
+
 ### Carried forward into later phases
 
 | Feature | Notes |
