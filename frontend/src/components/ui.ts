@@ -23,12 +23,18 @@ export const PAGE_TITLE = "text-2xl font-bold md:text-3xl";
 /**
  * The top of a detail page (an account, an asset, an income source, a recurring item): the way
  * back, the name and the page's buttons. From `sm` up it stays put while the page scrolls under
- * it, so the name and the way back are always in view; the negative margins carry its background
- * out over the page's own padding, edge to edge. On a phone it scrolls away with the page: there
- * its buttons stack, and frozen it would take a quarter of the screen.
+ * it, so the name and the way back are always in view. On a phone it scrolls away with the page:
+ * there its buttons stack, and frozen it would take a quarter of the screen.
+ *
+ * The page scrolls inside `main`, which has padding, and a sticky element is held against the
+ * inside of that padding, not the edge of the scroller. So each size carries the padding three
+ * times, and all three must match `main` in `AppShell` (p-4, md:p-8, md:short:p-5): a negative
+ * margin lifts the header over the padding, its own padding puts the words back where they were,
+ * and a negative `top` of the same size holds it flush with the top once the page scrolls. Without
+ * that last one it hangs a little way down, with the page showing above it.
  */
 export const DETAIL_HEADER =
-  "mb-4 flex flex-col gap-3 sm:sticky sm:top-0 sm:z-10 sm:-mx-4 sm:-mt-4 sm:flex-row sm:items-end sm:justify-between sm:border-b sm:border-line sm:bg-bg sm:px-4 sm:pt-4 sm:pb-3 md:-mx-8 md:-mt-8 md:mb-6 md:px-8 md:pt-5 md:short:-mx-5 md:short:-mt-5 md:short:px-5 md:short:pt-3";
+  "mb-4 flex flex-col gap-3 sm:sticky sm:-top-4 sm:z-10 sm:-mx-4 sm:-mt-4 sm:flex-row sm:items-end sm:justify-between sm:border-b sm:border-line sm:bg-bg sm:px-4 sm:pt-4 sm:pb-3 md:-top-8 md:-mx-8 md:-mt-8 md:mb-6 md:px-8 md:pt-8 md:short:-top-5 md:short:-mx-5 md:short:-mt-5 md:short:px-5 md:short:pt-5";
 
 /**
  * A list row that opens its own page (an account, an asset, an income source). The hand cursor
