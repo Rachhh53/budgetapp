@@ -60,33 +60,6 @@ class AccountsApiTest extends ApiTestBase {
         }
 
         @Test
-        void takesTheFirstBalanceWhileAddingAndUndoesBothTogether() throws Exception {
-            Reply created = server.post("/api/accounts",
-                    "{\"name\":\"Maple Street mortgage\",\"type\":\"loan\",\"color\":\"#0f766e\","
-                            + "\"balanceCents\":28500000,\"balanceDate\":\"2026-01-01\"}", cookie);
-
-            assertThat(created.status()).isEqualTo(201);
-            assertThat(created.data().get("account").get("latestBalance").get("amountCents").asLong()).isEqualTo(28_500_000);
-            assertThat(created.data().get("balances")).hasSize(1);
-            assertThat(created.data().get("balances").get(0).get("date").asText()).isEqualTo("2026-01-01");
-
-            // One change: undoing it takes the account and its balance away together.
-            assertThat(server.post("/api/undo", "", cookie).status()).isEqualTo(200);
-            assertThat(server.get("/api/accounts", cookie).data()).isEmpty();
-        }
-
-        @Test
-        void refusesAFirstBalanceFromTheFutureWithoutAddingTheAccount() throws Exception {
-            Reply reply = server.post("/api/accounts",
-                    "{\"name\":\"Car loan\",\"type\":\"loan\",\"color\":\"#0f766e\","
-                            + "\"balanceCents\":100,\"balanceDate\":\"2999-01-01\"}", cookie);
-
-            assertThat(reply.status()).isEqualTo(400);
-            assertThat(reply.error()).isEqualTo("A balance needs a date of today or earlier.");
-            assertThat(server.get("/api/accounts", cookie).data()).isEmpty();
-        }
-
-        @Test
         void asksForANameKindly() throws Exception {
             Reply reply = server.post("/api/accounts", "{\"name\":\"  \",\"type\":\"checking\",\"color\":\"#0f766e\"}", cookie);
 

@@ -51,12 +51,6 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
     account?.lowBalanceThresholdCents != null ? centsToInput(account.lowBalanceThresholdCents) : "",
   );
   const [apy, setApy] = useState("");
-  const today = todayIso();
-  const [balance, setBalance] = useState("");
-  const [balanceDate, setBalanceDate] = useState(today);
-  const [balanceError, setBalanceError] = useState<string>();
-  // A card or loan is entered as what is owed, like everywhere else balances are typed.
-  const owed = type === "credit_card" || type === "loan";
   const [problem, setProblem] = useState<string>();
   const saveRate = useSaveRateFor();
   // Set once a new account is in but its rate was refused: adding again would make a second account.
@@ -82,17 +76,9 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
       setProblem("Please enter a rate like 4.10.");
       return;
     }
-    // The first balance can be given while adding; afterwards it is Update balance on the account's page.
-    const balanceCents = !account && balance.trim() !== "" ? parseDollars(balance) : undefined;
-    if (balanceCents === null) {
-      setBalanceError(AMOUNT_HELP);
-      return;
-    }
-    setBalanceError(undefined);
     setProblem(undefined);
     save.mutate(
       {
-        ...(balanceCents !== undefined && { balanceCents, balanceDate }),
         name,
         type,
         subtypeLabel: subtypeLabel || null,
@@ -177,37 +163,6 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
             onChange={setInstitution}
           />
         </FormSection>
-
-        {!account && (
-          <FormSection title={owed ? "What you owe" : "What it holds"}>
-            <MoneyField
-              label={owed ? "Amount owed (optional)" : "Balance (optional)"}
-              value={balance}
-              onChange={setBalance}
-              error={balanceError}
-              hint={
-                owed
-                  ? "What the statement or website says you owe. You can leave it empty and add it later."
-                  : "What the bank's website or statement shows. You can leave it empty and add it later."
-              }
-            />
-            <div>
-              <label htmlFor={`${id}-balance-date`} className={LABEL}>
-                As of
-              </label>
-              <input
-                id={`${id}-balance-date`}
-                type="date"
-                value={balanceDate}
-                max={today}
-                onChange={(event) => setBalanceDate(event.target.value)}
-                required
-                className={INPUT}
-              />
-              <p className={HINT}>Today or earlier.</p>
-            </div>
-          </FormSection>
-        )}
 
         <FormSection title="How it looks">
           <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
