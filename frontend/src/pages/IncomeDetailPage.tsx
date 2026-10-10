@@ -8,7 +8,7 @@ import { EditButton, EditPageButton } from "../components/EditButton";
 import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule, WEEKEND_LABELS } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
-import { BUTTON_LINK, BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -54,7 +54,7 @@ export function IncomeDetailPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
+      <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
             <Link to="/income" className="text-accent-ink underline">

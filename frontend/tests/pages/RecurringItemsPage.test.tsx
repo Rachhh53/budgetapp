@@ -136,6 +136,11 @@ async function rowFor(name: string): Promise<HTMLElement> {
   return link.closest<HTMLElement>('[role="row"]')!;
 }
 
+/** Goes on to the next screen of the add form, which asks for a new item a screen at a time. */
+async function next(dialog: HTMLElement) {
+  await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+}
+
 /** Chooses an entry in a type-to-filter picker by typing its start and pressing Enter. */
 async function pick(dialog: HTMLElement, label: string, text: string) {
   await userEvent.type(within(dialog).getByRole("combobox", { name: label }), `${text}{Enter}`);
@@ -261,7 +266,9 @@ describe("recurring items screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Streaming");
+    await next(dialog);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "15");
+    await next(dialog);
     // Nothing to ask until an account with buckets is chosen.
     expect(within(dialog).queryByRole("combobox", { name: "Comes out of" })).not.toBeInTheDocument();
     await pick(dialog, "Paid from", "Every");
@@ -269,12 +276,15 @@ describe("recurring items screen", () => {
     // Only that account's buckets are offered.
     expect(within(from).queryByRole("option", { name: /Emergency fund/ })).not.toBeInTheDocument();
 
-    // It has to be said: nothing is sent until it is.
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
-    expect(calls(fetchMock)).not.toContain("POST /api/items");
+    // It has to be said: the form goes no further until it is.
+    await next(dialog);
+    expect(from).toBeInvalid();
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 3 of 5");
 
     await userEvent.selectOptions(from, within(from).getByRole("option", { name: /Holiday gifts/ }));
     expect(within(dialog).getByText(/Each time, the bucket and the account both go down/)).toBeInTheDocument();
+    await next(dialog);
+    await next(dialog);
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/items")).toHaveLength(1));
@@ -406,16 +416,28 @@ describe("recurring items screen", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "+ Add item" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 5");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Electric");
-    await pick(dialog, "Paid from", "Every");
+    await next(dialog);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "140");
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "It's an estimate" }));
+    await next(dialog);
+    await pick(dialog, "Paid from", "Every");
+    // Going back keeps what was typed.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    expect(within(dialog).getByRole("textbox", { name: "Amount each time" })).toHaveValue("140");
+    await next(dialog);
+    expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
+    await next(dialog);
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Day of the month" }), "16th");
     await userEvent.click(within(dialog).getByRole("radio", { name: "One period early" }));
-    // The form is laid out as named groups.
-    for (const section of ["Amount", "What it is", "Where it's paid from", "Schedule", "Saving up", "Tags and notes"]) {
-      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
-    }
+    // One named group at a time, and nothing is sent until the last screen.
+    expect(within(dialog).getByRole("group", { name: "Schedule" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("group", { name: "Amount" })).not.toBeInTheDocument();
+    await next(dialog);
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 5 of 5");
+    expect(within(dialog).getByRole("group", { name: "Tags and notes" })).toBeInTheDocument();
+    expect(calls(fetchMock)).not.toContain("POST /api/items");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -461,15 +483,20 @@ describe("recurring items screen", () => {
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
     await userEvent.click(within(dialog).getByRole("radio", { name: "Budget" }));
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Groceries");
-    await pick(dialog, "Paid from", "Every");
+    await next(dialog);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "300");
+    await next(dialog);
+    await pick(dialog, "Paid from", "Every");
+    // A budget is not paid automatically, so it is not asked.
+    expect(within(dialog).queryByRole("checkbox", { name: "Autopay" })).not.toBeInTheDocument();
+    await next(dialog);
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "How often" }), "Every paycheck");
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Dated" }), "3 days after payday");
 
-    // A budget is not paid automatically and belongs to its own paycheck, so neither is asked.
-    expect(within(dialog).queryByRole("checkbox", { name: "Autopay" })).not.toBeInTheDocument();
+    // Every paycheck's budget belongs to its own paycheck, so which one pays is not asked.
     expect(within(dialog).queryByRole("radio", { name: "One period early" })).not.toBeInTheDocument();
 
+    await next(dialog);
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -577,12 +604,16 @@ describe("recurring items screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Car insurance");
-    await pick(dialog, "Paid from", "Every");
+    await next(dialog);
     await userEvent.click(within(dialog).getByRole("radio", { name: "Yearly total" }));
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Per year" }), "1,200");
+    await next(dialog);
+    await pick(dialog, "Paid from", "Every");
+    await next(dialog);
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "How often" }), "Yearly");
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Month" }), "March");
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Day of the month" }), "12th");
+    await next(dialog);
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -603,19 +634,27 @@ describe("recurring items screen", () => {
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
 
     await userEvent.click(within(dialog).getByRole("radio", { name: "Card payment" }));
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "To savings");
+    await next(dialog);
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "200");
+    await next(dialog);
     await userEvent.click(within(dialog).getByRole("combobox", { name: "Card" }));
     expect(within(within(dialog).getByRole("listbox", { name: "Card" })).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "VisaEnter",
     ]);
 
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
     await userEvent.click(within(dialog).getByRole("radio", { name: "Transfer" }));
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "To savings");
+    await next(dialog);
+    await next(dialog);
     await pick(dialog, "From", "Every");
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "200");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+    await next(dialog);
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the account this money goes to.");
 
     await pick(dialog, "To", "Rainy");
+    await next(dialog);
+    await next(dialog);
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -630,13 +669,19 @@ describe("recurring items screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Electric");
+    await next(dialog);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "lots");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the account this is paid from.");
-
-    await pick(dialog, "Paid from", "Every");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+    // Each screen is checked before the next one opens.
+    await next(dialog);
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter an amount like 1,250.00.");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 2 of 5");
+
+    await userEvent.clear(within(dialog).getByRole("textbox", { name: "Amount each time" }));
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "140");
+    await next(dialog);
+    await next(dialog);
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the account this is paid from.");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 3 of 5");
     expect(calls(fetchMock).some((call) => call.startsWith("POST"))).toBe(false);
   });
 
@@ -665,8 +710,12 @@ describe("recurring items screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
     const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Electric");
-    await pick(dialog, "Paid from", "Every");
+    await next(dialog);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "140");
+    await next(dialog);
+    await pick(dialog, "Paid from", "Every");
+    await next(dialog);
+    await next(dialog);
 
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Category (optional)" }), "Utilities");
     await userEvent.click(within(dialog).getByRole("option", { name: 'Add "Utilities" as a new category' }));

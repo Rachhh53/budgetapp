@@ -10,7 +10,7 @@ import { EditButton, EditPageButton } from "../components/EditButton";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
 import { PauseControls } from "../components/items/PauseItem";
-import { BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 
@@ -70,7 +70,7 @@ export function RecurringItemDetailPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
+      <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
             <Link to="/recurring" className="text-accent-ink underline">

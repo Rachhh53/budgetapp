@@ -24,7 +24,7 @@ import { Amount } from "../components/Amount";
 import { BucketsCard } from "../components/buckets/BucketsCard";
 import { Card } from "../components/Card";
 import { EditPageButton } from "../components/EditButton";
-import { BUTTON_LINK, BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -89,7 +89,7 @@ export function AccountDetailPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
+      <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
             <Link to="/accounts" className="text-accent-ink underline">

@@ -21,6 +21,16 @@ export const HINT = "mt-1 text-sm text-muted";
 export const PAGE_TITLE = "text-2xl font-bold md:text-3xl";
 
 /**
+ * The top of a detail page (an account, an asset, an income source, a recurring item): the way
+ * back, the name and the page's buttons. From `sm` up it stays put while the page scrolls under
+ * it, so the name and the way back are always in view; the negative margins carry its background
+ * out over the page's own padding, edge to edge. On a phone it scrolls away with the page: there
+ * its buttons stack, and frozen it would take a quarter of the screen.
+ */
+export const DETAIL_HEADER =
+  "mb-4 flex flex-col gap-3 sm:sticky sm:top-0 sm:z-10 sm:-mx-4 sm:-mt-4 sm:flex-row sm:items-end sm:justify-between sm:border-b sm:border-line sm:bg-bg sm:px-4 sm:pt-4 sm:pb-3 md:-mx-8 md:-mt-8 md:mb-6 md:px-8 md:pt-5 md:short:-mx-5 md:short:-mt-5 md:short:px-5 md:short:pt-3";
+
+/**
  * A list row that opens its own page (an account, an asset, an income source). The hand cursor
  * and the highlight are set outright, since inside the desktop shell a link shows neither by
  * itself, and they are what says the row can be opened.

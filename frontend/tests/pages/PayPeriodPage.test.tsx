@@ -948,7 +948,10 @@ describe("+ Add item", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     expect(within(dialog).getByRole("radio", { name: "Recurring" })).toBeChecked();
-    expect(within(dialog).getByRole("group", { name: "Schedule" })).toBeInTheDocument();
+    // A screen at a time, so the dialog never outgrows the window: what it is comes first.
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 5");
+    expect(within(dialog).getByRole("group", { name: "What it is" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("group", { name: "Schedule" })).not.toBeInTheDocument();
   });
 
   it("opens Ctrl+N straight on the form on a screen without the button", async () => {

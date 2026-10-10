@@ -1,5 +1,5 @@
 import { CalendarClock } from "lucide-react";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { type Account, holdsCash } from "../../api/accounts";
 import { useBuckets, useSaveBucket } from "../../api/buckets";
@@ -68,6 +68,20 @@ const PART_TITLES: Record<ItemPart, string | null> = {
   details: "Details",
 };
 
+/**
+ * A new item is asked for a screen at a time, so no dialog is taller than the window, on a laptop
+ * or a phone, with or without the + Add form's own switch above it: what it is, its amount, the
+ * accounts, the schedule, then how it is filed. Each step is one of the parts an existing item is
+ * edited by.
+ */
+const STEPS: readonly (readonly ItemPart[])[] = [["item"], ["amount"], ["accounts"], ["schedule"], ["details"]];
+
+/** Something still to put right, and the part of the form it is in. */
+interface Problem {
+  problem: string;
+  part: ItemPart;
+}
+
 interface ItemFormProps {
   /** The item being changed; leave out to add a new one. */
   item?: Item;
@@ -84,6 +98,8 @@ interface ItemFormProps {
    * saving one part changes nothing in the others. Left out, the whole form shows.
    */
   part?: ItemPart;
+  /** Told which screen of a new item is showing (0 is the first), so whatever frames the form can make room for it. */
+  onStep?: (step: number) => void;
 }
 
 /**
@@ -123,7 +139,7 @@ export function ItemForm(props: ItemFormProps) {
 const NOT_IN_A_BUCKET = "none";
 
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
-export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink, part }: ItemFormProps) {
+export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink, part, onStep }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
   const replace = useReplaceItem(item?.id);
@@ -157,6 +173,17 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   // Where the money comes out of: a bucket's id, NOT_IN_A_BUCKET, or "" until it is chosen.
   const [chosenFrom, setChosenFrom] = useState<string>();
   const [problem, setProblem] = useState<string>();
+  // Which screen of a new item is showing. An existing item is edited a part at a time instead.
+  const [step, setStep] = useState(0);
+  const formRef = useRef<HTMLFormElement>(null);
+  // A new step starts at its top, for the keyboard and for screen readers. Not on the first one: the dialog places focus itself.
+  useEffect(() => {
+    if (step > 0) {
+      formRef.current?.focus();
+    }
+    onStep?.(step);
+    // Only a change of step is news; the callback itself may be a new function on every render.
+  }, [step]);
   const addBucket = useSaveBucket();
   const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
 
@@ -221,28 +248,34 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
 
   /** Turns the form into a request, or explains what still needs attention. */
-  const toInput = (): ItemInput | string => {
+  const toInput = (): ItemInput | Problem => {
+    const amountCents = parseDollars(amount);
+    if (amountCents === null || amountCents < 0) {
+      return { part: "amount", problem: AMOUNT_HELP };
+    }
     const moveInto = isBucketMove ? openBuckets.find((bucket) => String(bucket.id) === bucketId) : undefined;
     if (isBucketMove && moveInto === undefined) {
-      return "Please choose the bucket this money goes into.";
+      return { part: "accounts", problem: "Please choose the bucket this money goes into." };
     }
     // A bucket move stays inside the bucket's own account.
     const paidFrom = moveInto !== undefined ? String(moveInto.accountId) : payFrom;
     if (paidFrom === null) {
-      return kind === "transfer" ? "Please choose the account this money comes from." : "Please choose the account this is paid from.";
+      return {
+        part: "accounts",
+        problem: kind === "transfer" ? "Please choose the account this money comes from." : "Please choose the account this is paid from.",
+      };
     }
     if (movesMoney && payTo === null) {
-      return kind === "card_payment" ? "Please choose the card this payment goes to." : "Please choose the account this money goes to.";
+      return {
+        part: "accounts",
+        problem: kind === "card_payment" ? "Please choose the card this payment goes to." : "Please choose the account this money goes to.",
+      };
     }
     if (movesMoney && payTo === payFrom) {
-      return "Please choose two different accounts.";
-    }
-    const amountCents = parseDollars(amount);
-    if (amountCents === null || amountCents < 0) {
-      return AMOUNT_HELP;
+      return { part: "accounts", problem: "Please choose two different accounts." };
     }
     if (payingBuckets.length > 0 && comesFrom === "") {
-      return "Please say where this comes out of: one of the buckets, or money that is not in a bucket.";
+      return { part: "accounts", problem: "Please say where this comes out of: one of the buckets, or money that is not in a bucket." };
     }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months";
     return {
@@ -283,19 +316,32 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const input = toInput();
-    if (typeof input === "string") {
-      setProblem(input);
-      return;
+    const lastStep = item !== undefined || step === STEPS.length - 1;
+    if ("problem" in input) {
+      // On the way through a new item, only what this screen asks is held against it; the rest is still to come.
+      if (lastStep || STEPS[step]?.includes(input.part)) {
+        if (!item) {
+          setStep(STEPS.findIndex((parts) => parts.includes(input.part)));
+        }
+        setProblem(input.problem);
+        return;
+      }
     }
     setProblem(undefined);
-    save.mutate(input, { onSuccess: onClose });
+    if (!lastStep) {
+      setStep(step + 1);
+      return;
+    }
+    if (!("problem" in input)) {
+      save.mutate(input, { onSuccess: onClose });
+    }
   };
 
   /** Archives this item and adds the form as a new one from today, leaving the old one's past alone. */
   const addAsNew = () => {
     const input = toInput();
-    if (typeof input === "string") {
-      setProblem(input);
+    if ("problem" in input) {
+      setProblem(input.problem);
       return;
     }
     setProblem(undefined);
@@ -307,11 +353,15 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const kindChanged = item !== undefined && kind !== item.kind;
   const failure = problem ?? save.error?.message ?? replace.error?.message;
   // A different type can need a second account (a transfer's "To"), so the accounts come along with it.
-  const shows = (asked: ItemPart) => part === undefined || part === asked || (asked === "accounts" && part === "item" && kindChanged);
+  const shows = (asked: ItemPart) =>
+    item === undefined
+      ? (STEPS[step]?.includes(asked) ?? false)
+      : part === undefined || part === asked || (asked === "accounts" && part === "item" && kindChanged);
 
   return (
     <>
       <form
+        ref={formRef}
         onSubmit={submit}
         // A picker opens its list and clears its text when focused. Where one is the first field, the dialog
         // would open with the choice already made hidden, so focus rests on the form instead.
@@ -319,6 +369,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
         tabIndex={-1}
         className="space-y-4 outline-none"
       >
+        {!item && (
+          <p role="status" className="text-sm font-semibold text-muted">
+            Step {step + 1} of {STEPS.length}
+          </p>
+        )}
         {shows("item") && (
           <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
         )}
@@ -349,11 +404,15 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                 label={amountMode === "annual" ? "Per year" : "Amount each time"}
                 value={amount}
                 onChange={setAmount}
-                hint={amountMode === "annual" ? "Shared out evenly over the schedule below." : undefined}
+                hint={amountMode === "annual" ? "Shared out evenly over its schedule." : undefined}
                 required
                 hero
               />
-              <label className="mt-1 flex min-h-11 items-center gap-3">
+            </div>
+            {/* Side by side where there is room, so the amount is one glance, not three rows. */}
+            <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 sm:items-end">
+              <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+              <label className="flex min-h-11 items-center gap-3">
                 <input
                   type="checkbox"
                   checked={estimate}
@@ -363,12 +422,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                 <span>It's an estimate</span>
               </label>
             </div>
-            <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
           </FormSection>
         )}
 
         {(shows("item") || shows("details")) && (
-          <FormSection title={part === "details" ? "Category" : "What it is"}>
+          <FormSection title={shows("item") ? "What it is" : "Category"}>
             {shows("item") && (
               <div>
                 <label htmlFor={`${id}-name`} className={LABEL}>
@@ -481,8 +539,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
 
         {shows("schedule") && (
           <FormSection title="Schedule">
-            {/* How often, and the day or date that goes with it, side by side where there is room. */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* How often beside the day or date that goes with it, on a phone too: it keeps the schedule to one screen. */}
+            <div className="grid grid-cols-2 items-end gap-4">
               <div>
                 <label htmlFor={`${id}-frequency`} className={LABEL}>
                   How often
@@ -726,8 +784,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
               </>
             )}
             <p className={HINT}>
-              Changes you save now apply from today on; anything dated before today keeps what it had. A different start date is the
-              exception, and applies from that date.
+              Changes you save now apply from today on; anything dated before today keeps what it had.
+              {shows("schedule") && " A different start date is the exception, and applies from that date."}
             </p>
             {pageLink && part === undefined && (
               <p className={HINT}>
@@ -748,11 +806,24 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
         )}
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
-            Cancel
-          </button>
+          {!item && step > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                setProblem(undefined);
+                setStep(step - 1);
+              }}
+              className={BUTTON_SECONDARY}
+            >
+              Back
+            </button>
+          ) : (
+            <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+              Cancel
+            </button>
+          )}
           <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
-            {save.isPending ? "Saving…" : item ? "Save changes" : "Add item"}
+            {save.isPending ? "Saving…" : item ? "Save changes" : step < STEPS.length - 1 ? "Next" : "Add item"}
           </button>
         </div>
       </form>

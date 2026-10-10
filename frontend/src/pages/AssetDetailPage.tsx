@@ -9,7 +9,7 @@ import { Card } from "../components/Card";
 import { EditPageButton } from "../components/EditButton";
 import { Modal } from "../components/Modal";
 import { AMOUNT_HELP, MoneyField } from "../components/MoneyField";
-import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
+import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents, parseDollars } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -54,7 +54,7 @@ export function AssetDetailPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
+      <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
             <Link to="/accounts" className="text-accent-ink underline">

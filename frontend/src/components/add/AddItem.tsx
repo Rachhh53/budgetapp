@@ -135,6 +135,9 @@ function AddItemForm({
   const categories = useCategories();
   const tags = useTags();
   const [kind, setKind] = useState<AddKind>(initialKind);
+  // Past its first screen, a recurring item has been chosen: the switch steps aside so each screen fits the window.
+  const [recurringStep, setRecurringStep] = useState(0);
+  const choosing = kind !== "recurring" || recurringStep === 0;
 
   const title = entry
     ? `Edit ${entry.description}`
@@ -147,9 +150,11 @@ function AddItemForm({
 
   return (
     <Modal title={title} icon={KIND_CHOICES.find((choice) => choice.value === kind)?.icon} onClose={onClose}>
-      <div className="mb-4">
-        <Segmented legend="What are you adding?" options={choices} value={kind} onChange={setKind} />
-      </div>
+      {choosing && (
+        <div className="mb-4">
+          <Segmented legend="What are you adding?" options={choices} value={kind} onChange={setKind} />
+        </div>
+      )}
       {failure && (
         <p role="alert" className="text-danger">
           {failure.message}
@@ -161,7 +166,7 @@ function AddItemForm({
       )}
       {accounts.data && categories.data && tags.data && accounts.data.length > 0 &&
         (kind === "recurring" ? (
-          <ItemFormBody accounts={accounts.data} categories={categories.data} tags={tags.data} onClose={onClose} />
+          <ItemFormBody accounts={accounts.data} categories={categories.data} tags={tags.data} onClose={onClose} onStep={setRecurringStep} />
         ) : (
           <EntryFields
             kind={kind}
