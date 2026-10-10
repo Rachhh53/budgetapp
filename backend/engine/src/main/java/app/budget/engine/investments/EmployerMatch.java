@@ -47,6 +47,17 @@ public record EmployerMatch(Mode mode, Money fixed, BasisPoints match, BasisPoin
         return matched.isNegative() ? Money.ZERO : matched.times(match.toFraction());
     }
 
+    /**
+     * The match on one paycheck when gross pay is not known, and the employee has confirmed that
+     * what they put in is within the matched share of it: all of it is matched.
+     */
+    public Money forContributionWithinCap(Money employee) {
+        if (mode == Mode.FIXED) {
+            return fixed;
+        }
+        return employee.isNegative() ? Money.ZERO : employee.times(match.toFraction());
+    }
+
     /** The most the employer would add to one paycheck: what contributing up to the cap earns. */
     public Money mostPossible(Money gross) {
         return mode == Mode.FIXED ? fixed : matchedUpTo(gross).times(match.toFraction());

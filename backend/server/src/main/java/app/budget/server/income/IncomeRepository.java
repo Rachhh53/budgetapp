@@ -45,8 +45,12 @@ public final class IncomeRepository {
             List<Deduction> deductions,
             Match match) {}
 
-    /** @param toAccountId {@code null} when the money does not go to one of the user's accounts */
-    public record Deduction(String name, long amountCents, Long toAccountId) {}
+    /**
+     * @param amountCents what it takes out of one paycheck; for a share of pay, worked out from the gross amount
+     * @param toAccountId {@code null} when the money does not go to one of the user's accounts
+     * @param percentBp   set when the user gave it as a share of gross pay ("6% of my pay"); {@code null} for a dollar amount
+     */
+    public record Deduction(String name, long amountCents, Long toAccountId, Integer percentBp) {}
 
     /**
      * What the employer adds with each paycheck (spec §5.5).
@@ -55,8 +59,11 @@ public final class IncomeRepository {
      * @param fixedCents   the amount every paycheck; set exactly when {@code mode} is {@code FIXED}
      * @param matchBp      the share of the employee's contribution that is matched; for {@code FORMULA}
      * @param capBpOfGross the share of gross pay beyond which contributions are not matched; for {@code FORMULA}
+     * @param contributionWithinCap the source has no gross amount, and the user confirmed that what
+     *                     they put in is within that share, so all of it is matched
      */
-    public record Match(long toAccountId, MatchMode mode, Long fixedCents, Integer matchBp, Integer capBpOfGross) {}
+    public record Match(
+            long toAccountId, MatchMode mode, Long fixedCents, Integer matchBp, Integer capBpOfGross, boolean contributionWithinCap) {}
 
     public enum MatchMode { FIXED, FORMULA }
 
@@ -248,14 +255,16 @@ public final class IncomeRepository {
     private static Source complete(Handle handle, SourceRow row) {
         List<Deduction> deductions = handle
                 .createQuery("""
-                        SELECT name, amount, to_account_id FROM paycheck_deductions
+                        SELECT name, amount, to_account_id, percent_bp FROM paycheck_deductions
                         WHERE income_source_id = :id ORDER BY sort_order, id
                         """)
                 .bind("id", row.id())
                 .map((rs, ctx) -> {
                     long toAccount = rs.getLong("to_account_id");
                     Long toAccountId = rs.wasNull() ? null : toAccount;
-                    return new Deduction(rs.getString("name"), rs.getLong("amount"), toAccountId);
+                    int percent = rs.getInt("percent_bp");
+                    Integer percentBp = rs.wasNull() ? null : percent;
+                    return new Deduction(rs.getString("name"), rs.getLong("amount"), toAccountId, percentBp);
                 })
                 .list();
         return new Source(
@@ -267,7 +276,7 @@ public final class IncomeRepository {
     private static Match match(Handle handle, long sourceId) {
         return handle
                 .createQuery("""
-                        SELECT to_account_id, mode, fixed_amount, match_bp, cap_bp_of_gross
+                        SELECT to_account_id, mode, fixed_amount, match_bp, cap_bp_of_gross, contribution_within_cap
                         FROM employer_match WHERE income_source_id = :id
                         """)
                 .bind("id", sourceId)
@@ -280,7 +289,7 @@ public final class IncomeRepository {
                     Integer cap = rs.wasNull() ? null : capBp;
                     return new Match(
                             rs.getLong("to_account_id"), MatchMode.valueOf(rs.getString("mode").toUpperCase(Locale.ROOT)),
-                            fixedCents, match, cap);
+                            fixedCents, match, cap, rs.getBoolean("contribution_within_cap"));
                 })
                 .findOne()
                 .orElse(null);
@@ -293,8 +302,9 @@ public final class IncomeRepository {
             return;
         }
         handle.createUpdate("""
-                        INSERT INTO employer_match (income_source_id, to_account_id, mode, fixed_amount, match_bp, cap_bp_of_gross)
-                        VALUES (:sourceId, :toAccountId, :mode, :fixed, :matchBp, :capBp)
+                        INSERT INTO employer_match
+                            (income_source_id, to_account_id, mode, fixed_amount, match_bp, cap_bp_of_gross, contribution_within_cap)
+                        VALUES (:sourceId, :toAccountId, :mode, :fixed, :matchBp, :capBp, :withinCap)
                         """)
                 .bind("sourceId", sourceId)
                 .bind("toAccountId", match.toAccountId())
@@ -302,6 +312,7 @@ public final class IncomeRepository {
                 .bind("fixed", match.fixedCents())
                 .bind("matchBp", match.matchBp())
                 .bind("capBp", match.capBpOfGross())
+                .bind("withinCap", match.contributionWithinCap())
                 .execute();
     }
 
@@ -309,13 +320,14 @@ public final class IncomeRepository {
         for (int i = 0; i < deductions.size(); i++) {
             Deduction deduction = deductions.get(i);
             handle.createUpdate("""
-                            INSERT INTO paycheck_deductions (income_source_id, name, amount, to_account_id, sort_order)
-                            VALUES (:sourceId, :name, :amount, :toAccountId, :sortOrder)
+                            INSERT INTO paycheck_deductions (income_source_id, name, amount, to_account_id, percent_bp, sort_order)
+                            VALUES (:sourceId, :name, :amount, :toAccountId, :percentBp, :sortOrder)
                             """)
                     .bind("sourceId", sourceId)
                     .bind("name", deduction.name())
                     .bind("amount", deduction.amountCents())
                     .bind("toAccountId", deduction.toAccountId())
+                    .bind("percentBp", deduction.percentBp())
                     .bind("sortOrder", i)
                     .execute();
         }

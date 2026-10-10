@@ -36,7 +36,7 @@ const SALARY: IncomeSource = {
     weekendRule: "previous_business_day",
     manualDates: [],
   },
-  deductions: [{ name: "401(k)", amountCents: 15000, toAccountId: 2 }],
+  deductions: [{ name: "401(k)", amountCents: 15000, toAccountId: 2, percentBp: null }],
   match: null,
   matchFigures: null,
 };

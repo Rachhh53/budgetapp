@@ -24,10 +24,18 @@ export interface Schedule {
 
 export interface Deduction {
   name: string;
+  /** What it takes out of one paycheck. For a share of pay, the backend works it out from the gross amount. */
   amountCents: number;
   /** `null` when the money does not go to one of the user's accounts. */
   toAccountId: number | null;
+  /** Set when it was given as a share of gross pay (6% is 600); `null` for a dollar amount. */
+  percentBp: number | null;
 }
+
+/** A deduction as it is sent: a dollar amount, or a share of gross pay, never both. */
+export type DeductionInput =
+  | { name: string; toAccountId: number | null; amountCents: number }
+  | { name: string; toAccountId: number | null; percentBp: number };
 
 export const MATCH_MODES = ["fixed", "formula"] as const;
 export type MatchMode = (typeof MATCH_MODES)[number];
@@ -43,6 +51,11 @@ export interface EmployerMatch {
   matchBp: number | null;
   /** The share of gross pay beyond which contributions are not matched; for `formula`. */
   capBpOfGross: number | null;
+  /**
+   * There is no gross amount to check against, and the user confirmed that what they put in is
+   * within that share, so all of it is matched. Always false once gross pay is entered.
+   */
+  contributionWithinCap: boolean;
 }
 
 /** What a match comes to per paycheck, worked out by the backend. */
@@ -72,7 +85,7 @@ export interface IncomeSource {
   matchFigures: MatchFigures | null;
 }
 
-export type IncomeSourceInput = Omit<IncomeSource, "id" | "matchFigures">;
+export type IncomeSourceInput = Omit<IncomeSource, "id" | "matchFigures" | "deductions"> & { deductions: DeductionInput[] };
 
 /** Money a paycheck puts straight into another account: a deduction that names one, or the employer's match. */
 export interface Contribution {

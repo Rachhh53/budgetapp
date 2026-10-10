@@ -92,10 +92,15 @@ public final class PayCalendar {
      */
     public record MatchFigures(long perPaycheckCents, long mostPossibleCents, long contributeMoreCents) {}
 
-    /** The figures for a source's match; empty when it has none, or when a formula has no gross pay to work from. */
+    /**
+     * The figures for a source's match; empty when it has none. A formula with no gross pay to
+     * work from stands only on the user's word that their contribution is within the matched
+     * share: all of it is then matched, and that is also the most it is known to come to.
+     */
     public static Optional<MatchFigures> matchFigures(Source source) {
         Match match = source.match();
-        if (match == null || (match.mode() == MatchMode.FORMULA && source.grossCents() == null)) {
+        boolean grossUnknown = match != null && match.mode() == MatchMode.FORMULA && source.grossCents() == null;
+        if (match == null || (grossUnknown && !match.contributionWithinCap())) {
             return Optional.empty();
         }
         EmployerMatch terms = match.mode() == MatchMode.FIXED
@@ -107,6 +112,10 @@ public final class PayCalendar {
                 .filter(deduction -> deduction.toAccountId() != null && deduction.toAccountId() == match.toAccountId())
                 .map(deduction -> Money.ofCents(deduction.amountCents()))
                 .reduce(Money.ZERO, Money::plus);
+        if (grossUnknown) {
+            long matched = terms.forContributionWithinCap(employee).cents();
+            return Optional.of(new MatchFigures(matched, matched, 0));
+        }
         return Optional.of(new MatchFigures(
                 terms.forPaycheck(gross, employee).cents(),
                 terms.mostPossible(gross).cents(),

@@ -62,13 +62,13 @@ const SALARY: IncomeSource = {
     weekendRule: "previous_business_day",
     manualDates: [],
   },
-  deductions: [{ name: "401(k)", amountCents: 15000, toAccountId: 2 }],
-  match: { toAccountId: 2, mode: "formula", fixedCents: null, matchBp: 5000, capBpOfGross: 600 },
+  deductions: [{ name: "401(k)", amountCents: 15000, toAccountId: 2, percentBp: null }],
+  match: { toAccountId: 2, mode: "formula", fixedCents: null, matchBp: 5000, capBpOfGross: 600, contributionWithinCap: false },
   matchFigures: { perPaycheckCents: 7500, mostPossibleCents: 10800, contributeMoreCents: 6600 },
 };
 const AT_THE_CAP: IncomeSource = {
   ...SALARY,
-  deductions: [{ name: "401(k)", amountCents: 21600, toAccountId: 2 }],
+  deductions: [{ name: "401(k)", amountCents: 21600, toAccountId: 2, percentBp: null }],
   matchFigures: { perPaycheckCents: 10800, mostPossibleCents: 10800, contributeMoreCents: 0 },
 };
 
@@ -239,7 +239,7 @@ describe("income screen: employer match", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const match = within(dialog).getByRole("group", { name: "Employer match" });
     expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("none");
-    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A share of what I put in");
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A percentage of what I put in");
     // Checking is not offered: a match only goes into an investment account.
     await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "every{Enter}");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -247,15 +247,17 @@ describe("income screen: employer match", () => {
 
     await userEvent.clear(within(match).getByRole("combobox", { name: "Paid into" }));
     await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "bright{Enter}");
-    await userEvent.type(within(match).getByLabelText("They match (%)"), "50");
+    await userEvent.type(within(match).getByLabelText("They match (% of what I put in)"), "50");
     await userEvent.type(within(match).getByLabelText("Up to (% of gross pay)"), "6");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[0]).toMatchObject({
       grossCents: 360000,
-      match: { toAccountId: 2, mode: "formula", fixedCents: null, matchBp: 5000, capBpOfGross: 600 },
+      match: { toAccountId: 2, mode: "formula", fixedCents: null, matchBp: 5000, capBpOfGross: 600, contributionWithinCap: false },
     });
+    // Gross pay is there to check against, so nobody is asked to confirm anything.
+    expect(within(match).queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("sets up a match that is the same amount every paycheck, and takes one off again", async () => {
@@ -267,8 +269,8 @@ describe("income screen: employer match", () => {
     let match = within(dialog).getByRole("group", { name: "Employer match" });
     // The form opens on the match as it is.
     expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("formula");
-    expect(within(match).getByLabelText("They match (%)")).toHaveValue("50.00");
-    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "The same amount every paycheck");
+    expect(within(match).getByLabelText("They match (% of what I put in)")).toHaveValue("50.00");
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "The same dollar amount every paycheck");
     await userEvent.type(within(match).getByRole("textbox", { name: "Match per paycheck" }), "75");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -285,23 +287,89 @@ describe("income screen: employer match", () => {
     expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[1]).toMatchObject({ match: null });
   });
 
-  it("needs the gross amount before a match can be worked out from pay", async () => {
+  it("without gross pay, asks to confirm the contribution is within the matched share instead of guessing", async () => {
+    const takeHomeOnly: IncomeSource = { ...SALARY, grossCents: null, match: null, matchFigures: null };
+    const fetchMock = withInvestments({
+      "GET /api/income-sources": () => ({ status: 200, data: [takeHomeOnly] }),
+      "PUT /api/income-sources/1": () => ({ status: 200, data: takeHomeOnly, changed: true }),
+    });
+    renderApp("/income");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit income source" });
+    const match = within(dialog).getByRole("group", { name: "Employer match" });
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A percentage of what I put in");
+    await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "bright{Enter}");
+    await userEvent.type(within(match).getByLabelText("They match (% of what I put in)"), "50");
+    await userEvent.type(within(match).getByLabelText("Up to (% of gross pay)"), "6");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "Please fill in the gross amount per paycheck, or tick the box to confirm that what you put in is within the 6.00% that is matched.",
+    );
+    expect(calls(fetchMock)).not.toContain("PUT /api/income-sources/1");
+
+    await userEvent.click(within(match).getByRole("checkbox", { name: "What I put in is within the 6% of my pay that is matched" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[0]).toMatchObject({
+      grossCents: null,
+      match: { mode: "formula", matchBp: 5000, capBpOfGross: 600, contributionWithinCap: true },
+    });
+  });
+
+  it("takes a contribution as a percent of gross pay, and says what that comes to", async () => {
+    const fetchMock = withInvestments({ "PUT /api/income-sources/1": () => ({ status: 200, data: SALARY, changed: true }) });
+    renderApp("/income");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit income source" });
+    const deductions = within(dialog).getByRole("group", { name: "Goes to your accounts" });
+    // It opens as the dollar amount it was saved as.
+    expect(within(deductions).getByLabelText("Given as")).toHaveValue("dollars");
+    await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent of gross pay");
+    await userEvent.type(within(deductions).getByLabelText("Percent of gross pay"), "6");
+    expect(within(deductions).getByText("About $216.00 a paycheck.")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[0]).toMatchObject({
+      deductions: [{ name: "401(k)", percentBp: 600, toAccountId: 2 }],
+    });
+  });
+
+  it("asks for gross pay before taking a contribution as a percent of it", async () => {
     const takeHomeOnly: IncomeSource = { ...SALARY, grossCents: null, match: null, matchFigures: null };
     const fetchMock = withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [takeHomeOnly] }) });
     renderApp("/income");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    const match = within(dialog).getByRole("group", { name: "Employer match" });
-    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A share of what I put in");
-    await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "bright{Enter}");
-    await userEvent.type(within(match).getByLabelText("They match (%)"), "50");
-    await userEvent.type(within(match).getByLabelText("Up to (% of gross pay)"), "6");
+    const deductions = within(dialog).getByRole("group", { name: "Goes to your accounts" });
+    await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent of gross pay");
+    await userEvent.type(within(deductions).getByLabelText("Percent of gross pay"), "6");
+    expect(within(deductions).getByText("Fill in the gross amount per paycheck above, so this can be worked out.")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     expect(within(dialog).getByRole("alert")).toHaveTextContent(
-      "A match worked out from your pay needs the gross amount of a paycheck. Please fill that in as well.",
+      "A deduction given as a percent of your pay needs the gross amount per paycheck. Please fill that in as well.",
     );
     expect(calls(fetchMock)).not.toContain("PUT /api/income-sources/1");
+  });
+
+  it("shows a contribution that is a percent of pay as one, and says when a match rests on a confirmation", async () => {
+    const byPercent: IncomeSource = {
+      ...SALARY,
+      grossCents: null,
+      deductions: [{ name: "401(k)", amountCents: 21600, toAccountId: 2, percentBp: 600 }],
+      match: { toAccountId: 2, mode: "formula", fixedCents: null, matchBp: 10000, capBpOfGross: 600, contributionWithinCap: true },
+      matchFigures: { perPaycheckCents: 21600, mostPossibleCents: 21600, contributeMoreCents: 0 },
+    };
+    withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [byPercent] }) });
+    renderApp("/income");
+
+    expect(await screen.findByText(/401\(k\) · 6\.00% of gross pay → Brightwater 401\(k\)/)).toBeInTheDocument();
+    expect(screen.getByText(/takes your word that what you put in is within the 6\.00% of pay that is matched/)).toBeInTheDocument();
   });
 });

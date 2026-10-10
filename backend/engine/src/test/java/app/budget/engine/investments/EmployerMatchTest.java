@@ -62,6 +62,17 @@ class EmployerMatchTest {
     }
 
     @Test
+    void withoutGrossPayAContributionConfirmedWithinTheCapIsMatchedInFull() {
+        EmployerMatch dollarForDollar = EmployerMatch.formula(BasisPoints.of(10_000), BasisPoints.of(600));
+        EmployerMatch half = EmployerMatch.formula(BasisPoints.of(5_000), BasisPoints.of(600));
+
+        assertThat(dollarForDollar.forContributionWithinCap(Money.ofCents(21_600))).isEqualTo(Money.ofCents(21_600));
+        assertThat(half.forContributionWithinCap(Money.ofCents(15_000))).isEqualTo(Money.ofCents(7_500));
+        assertThat(half.forContributionWithinCap(Money.ZERO)).isEqualTo(Money.ZERO);
+        assertThat(EmployerMatch.fixed(Money.ofCents(5_000)).forContributionWithinCap(Money.ofCents(1))).isEqualTo(Money.ofCents(5_000));
+    }
+
+    @Test
     void negativeTermsAreRefused() {
         assertThatThrownBy(() -> EmployerMatch.fixed(Money.ofCents(-1))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> EmployerMatch.formula(BasisPoints.of(-1), BasisPoints.of(600))).isInstanceOf(IllegalArgumentException.class);

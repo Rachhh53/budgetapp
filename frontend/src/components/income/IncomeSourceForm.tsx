@@ -2,6 +2,7 @@ import { Banknote, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import {
+  type DeductionInput,
   type IncomeSource,
   type IncomeSourceInput,
   type MatchMode,
@@ -13,8 +14,8 @@ import {
   type WeekendRule,
 } from "../../api/income";
 import { todayIso } from "../../lib/dates";
-import { centsToInput, parseDollars } from "../../lib/money";
-import { parseRate, rateToInput } from "../../lib/rates";
+import { centsToInput, formatCents, parseDollars } from "../../lib/money";
+import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
@@ -30,9 +31,16 @@ type MatchChoice = "none" | MatchMode;
 
 const MATCH_OPTIONS: readonly { value: MatchChoice; label: string }[] = [
   { value: "none", label: "No match" },
-  { value: "fixed", label: "The same amount every paycheck" },
-  { value: "formula", label: "A share of what I put in" },
+  // The usual way a match is written comes first: "100% up to 6%".
+  { value: "formula", label: "A percentage of what I put in" },
+  { value: "fixed", label: "The same dollar amount every paycheck" },
 ];
+
+/** How a deduction is given: dollars a paycheck, or a share of gross pay. */
+type DeductionUnit = "dollars" | "percent";
+
+const GROSS_NEEDED_FOR_PERCENT =
+  "A deduction given as a percent of your pay needs the gross amount per paycheck. Please fill that in as well.";
 
 /** The most that can be matched, as the backend takes it: 1,000% of a contribution, up to all of gross pay. */
 const MAX_MATCH_BP = 100_000;
@@ -42,7 +50,11 @@ interface DeductionRow {
   /** Stable key for React; never sent to the backend. */
   key: number;
   name: string;
+  unit: DeductionUnit;
+  /** The dollars typed, when `unit` is dollars. */
   amount: string;
+  /** The percent of gross pay typed, when `unit` is percent. */
+  percent: string;
   toAccountId: string | null;
 }
 
@@ -83,7 +95,9 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
     (source?.deductions ?? []).map((deduction, index) => ({
       key: index,
       name: deduction.name,
-      amount: centsToInput(deduction.amountCents),
+      unit: deduction.percentBp === null ? "dollars" : "percent",
+      amount: deduction.percentBp === null ? centsToInput(deduction.amountCents) : "",
+      percent: deduction.percentBp === null ? "" : rateToInput(deduction.percentBp),
       toAccountId: deduction.toAccountId === null ? null : String(deduction.toAccountId),
     })),
   );
@@ -93,6 +107,9 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
   const [matchFixed, setMatchFixed] = useState(match?.fixedCents != null ? centsToInput(match.fixedCents) : "");
   const [matchPercent, setMatchPercent] = useState(match?.matchBp != null ? rateToInput(match.matchBp) : "");
   const [capPercent, setCapPercent] = useState(match?.capBpOfGross != null ? rateToInput(match.capBpOfGross) : "");
+  const [withinCap, setWithinCap] = useState(match?.contributionWithinCap ?? false);
+  // Read as typed, for what a percent comes to and for whether the match can be checked at all.
+  const grossTyped = gross.trim() === "" ? null : parseDollars(gross);
   const [problem, setProblem] = useState<string>();
 
   // Archived accounts are left out, unless this source already points at one.
@@ -121,17 +138,25 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
     if (frequency === "manual_dates" && pickedDates.length < 2) {
       return "Please add at least two paydays, so there's a pay period between them.";
     }
-    const parsedDeductions = [];
+    const parsedDeductions: DeductionInput[] = [];
     for (const deduction of deductions) {
+      const toAccountId = deduction.toAccountId === null ? null : Number(deduction.toAccountId);
+      if (deduction.unit === "percent") {
+        const percentBp = parseRate(deduction.percent);
+        if (deduction.name.trim() === "" || percentBp === null || percentBp > MAX_CAP_BP) {
+          return "Each deduction needs a name and a percent of your pay like 6.";
+        }
+        if (grossCents === null) {
+          return GROSS_NEEDED_FOR_PERCENT;
+        }
+        parsedDeductions.push({ name: deduction.name, percentBp, toAccountId });
+        continue;
+      }
       const amountCents = parseDollars(deduction.amount);
       if (deduction.name.trim() === "" || amountCents === null) {
         return "Each deduction needs a name and an amount like 150.00.";
       }
-      parsedDeductions.push({
-        name: deduction.name,
-        amountCents,
-        toAccountId: deduction.toAccountId === null ? null : Number(deduction.toAccountId),
-      });
+      parsedDeductions.push({ name: deduction.name, amountCents, toAccountId });
     }
     let matchInput: IncomeSourceInput["match"] = null;
     if (matchChoice !== "none") {
@@ -143,7 +168,14 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         if (fixedCents === null || fixedCents < 0) {
           return "Please enter the match as an amount like 75.00.";
         }
-        matchInput = { toAccountId: Number(matchAccountId), mode: "fixed", fixedCents, matchBp: null, capBpOfGross: null };
+        matchInput = {
+          toAccountId: Number(matchAccountId),
+          mode: "fixed",
+          fixedCents,
+          matchBp: null,
+          capBpOfGross: null,
+          contributionWithinCap: false,
+        };
       } else {
         const matchBp = parseRate(matchPercent);
         const capBpOfGross = parseRate(capPercent);
@@ -153,10 +185,18 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         if (capBpOfGross === null || capBpOfGross > MAX_CAP_BP) {
           return "Please enter how much of your pay is matched up to, as a percentage like 6.";
         }
-        if (grossCents === null) {
-          return "A match worked out from your pay needs the gross amount of a paycheck. Please fill that in as well.";
+        // With no gross pay there is nothing to check the contribution against, so it takes a confirmation.
+        if (grossCents === null && !withinCap) {
+          return `Please fill in the gross amount per paycheck, or tick the box to confirm that what you put in is within the ${formatRate(capBpOfGross)} that is matched.`;
         }
-        matchInput = { toAccountId: Number(matchAccountId), mode: "formula", fixedCents: null, matchBp, capBpOfGross };
+        matchInput = {
+          toAccountId: Number(matchAccountId),
+          mode: "formula",
+          fixedCents: null,
+          matchBp,
+          capBpOfGross,
+          contributionWithinCap: grossCents === null && withinCap,
+        };
       }
     }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly";
@@ -359,12 +399,44 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
                   value={deduction.name}
                   onChange={(text) => updateDeduction(deduction.key, { name: text })}
                 />
+                <div>
+                  <label htmlFor={`${id}-deduction-unit-${deduction.key}`} className={LABEL}>
+                    Given as
+                  </label>
+                  <select
+                    id={`${id}-deduction-unit-${deduction.key}`}
+                    value={deduction.unit}
+                    onChange={(event) => updateDeduction(deduction.key, { unit: event.target.value as DeductionUnit })}
+                    className={INPUT}
+                  >
+                    <option value="dollars">Dollars</option>
+                    <option value="percent">Percent of gross pay</option>
+                  </select>
+                </div>
+              </div>
+              {deduction.unit === "dollars" ? (
                 <MoneyField
                   label="Amount"
                   value={deduction.amount}
                   onChange={(text) => updateDeduction(deduction.key, { amount: text })}
                 />
-              </div>
+              ) : (
+                <div>
+                  <label htmlFor={`${id}-deduction-percent-${deduction.key}`} className={LABEL}>
+                    Percent of gross pay
+                  </label>
+                  <input
+                    id={`${id}-deduction-percent-${deduction.key}`}
+                    value={deduction.percent}
+                    onChange={(event) => updateDeduction(deduction.key, { percent: event.target.value })}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="e.g. 6"
+                    className={`${INPUT} tabular-nums`}
+                  />
+                  <p className={HINT}>{percentHint(deduction.percent, grossTyped)}</p>
+                </div>
+              )}
               <Picker
                 label="Goes into (optional)"
                 noun="account"
@@ -388,7 +460,14 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
             onClick={() =>
               setDeductions((rows) => [
                 ...rows,
-                { key: Math.max(-1, ...rows.map((row) => row.key)) + 1, name: "", amount: "", toAccountId: null },
+                {
+                  key: Math.max(-1, ...rows.map((row) => row.key)) + 1,
+                  name: "",
+                  unit: "dollars",
+                  amount: "",
+                  percent: "",
+                  toAccountId: null,
+                },
               ])
             }
             className={BUTTON_LINK}
@@ -441,7 +520,7 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label htmlFor={`${id}-match-percent`} className={LABEL}>
-                    They match (%)
+                    They match (% of what I put in)
                   </label>
                   <input
                     id={`${id}-match-percent`}
@@ -449,10 +528,10 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
                     onChange={(event) => setMatchPercent(event.target.value)}
                     inputMode="decimal"
                     autoComplete="off"
-                    placeholder="e.g. 50"
+                    placeholder="e.g. 100"
                     className={`${INPUT} tabular-nums`}
                   />
-                  <p className={HINT}>Of what you put in.</p>
+                  <p className={HINT}>100 is dollar for dollar.</p>
                 </div>
                 <div>
                   <label htmlFor={`${id}-match-cap`} className={LABEL}>
@@ -471,9 +550,29 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
                 </div>
               </div>
               <p className={HINT}>
-                "50% up to 6%" is 50 and 6. What you put in is whatever the deductions above send to the same account, and the gross
-                amount per paycheck is needed to work it out.
+                "100% match up to 6%" is 100 and 6. What you put in is whatever the deductions above send to the same account, as
+                dollars or as a percent of your pay.
               </p>
+              {grossTyped === null && (
+                // Nothing to measure the contribution against: ask, rather than refuse or guess.
+                <div className="rounded-lg border border-line bg-bg p-3">
+                  <label className="flex min-h-11 items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={withinCap}
+                      onChange={(event) => setWithinCap(event.target.checked)}
+                      className="mt-0.5 size-5 shrink-0 accent-(--accent)"
+                    />
+                    <span className="font-medium">
+                      What I put in is within the {capPercent.trim() === "" ? "share" : `${capPercent.trim()}%`} of my pay that is matched
+                    </span>
+                  </label>
+                  <p className={HINT}>
+                    There is no gross amount per paycheck above, so this cannot be checked for you. Tick this and all of what you put
+                    in is matched; or fill in the gross amount and it is worked out instead.
+                  </p>
+                </div>
+              )}
             </>
           )}
         </fieldset>
@@ -521,6 +620,19 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
       )}
     </Modal>
   );
+}
+
+/** Under a percent deduction: what it comes to a paycheck, or what is still needed to say. */
+function percentHint(percent: string, grossCents: number | null): string {
+  if (grossCents === null) {
+    return "Fill in the gross amount per paycheck above, so this can be worked out.";
+  }
+  const percentBp = parseRate(percent);
+  if (percentBp === null) {
+    return "Of the gross amount per paycheck above.";
+  }
+  // The backend's figure is the one that counts; this is the same sum, shown while typing.
+  return `About ${formatCents(Math.round((grossCents * percentBp) / 10_000))} a paycheck.`;
 }
 
 function DeleteSource({ source, onDeleted }: { source: IncomeSource; onDeleted: () => void }) {

@@ -1,5 +1,7 @@
 package app.budget.server.income;
 
+import app.budget.engine.BasisPoints;
+import app.budget.engine.Money;
 import app.budget.server.accounts.Account;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
@@ -63,14 +65,21 @@ public final class IncomeRoutes {
             List<DeductionInput> deductions,
             MatchInput match) {}
 
-    public record DeductionInput(String name, Long amountCents, Long toAccountId) {}
+    /**
+     * One deduction: a dollar amount ({@code amountCents}), or a share of gross pay
+     * ({@code percentBp}: 6% is 600), which needs the source's gross amount.
+     */
+    public record DeductionInput(String name, Long amountCents, Long toAccountId, Integer percentBp) {}
 
     /**
      * Request body for the employer's match; left out (or {@code null}) for none. {@code mode} is
      * {@code fixed} (with {@code fixedCents}) or {@code formula} (with {@code matchBp} and
-     * {@code capBpOfGross}: 50% up to 6% of pay is 5000 and 600).
+     * {@code capBpOfGross}: 50% up to 6% of pay is 5000 and 600). A formula needs the source's
+     * gross amount to check the contribution against; without one it is only taken with
+     * {@code contributionWithinCap}, the user's word that what they put in is within that share.
      */
-    public record MatchInput(Long toAccountId, String mode, Long fixedCents, Integer matchBp, Integer capBpOfGross) {}
+    public record MatchInput(
+            Long toAccountId, String mode, Long fixedCents, Integer matchBp, Integer capBpOfGross, Boolean contributionWithinCap) {}
 
     /**
      * An income source as the API returns it.
@@ -175,7 +184,7 @@ public final class IncomeRoutes {
                 Boolean.TRUE.equals(input.netIsEstimate()),
                 Boolean.TRUE.equals(input.primary()),
                 input.schedule().toPayRule(),
-                deductions(input.deductions()),
+                deductions(input.deductions(), gross),
                 match(input.match(), gross));
     }
 
@@ -190,7 +199,7 @@ public final class IncomeRoutes {
         }
         MatchMode mode = Inputs.choice(MatchMode.class, input.mode(), "how the match is worked out");
         if (mode == MatchMode.FIXED) {
-            return new Match(account.id(), mode, Inputs.amount(input.fixedCents(), "The match amount"), null, null);
+            return new Match(account.id(), mode, Inputs.amount(input.fixedCents(), "The match amount"), null, null, false);
         }
         if (input.matchBp() == null || input.matchBp() < 0 || input.matchBp() > MAX_MATCH_BP) {
             throw ApiException.badRequest("Please enter how much of your contribution is matched, between 0% and 1,000%.");
@@ -198,14 +207,17 @@ public final class IncomeRoutes {
         if (input.capBpOfGross() == null || input.capBpOfGross() < 0 || input.capBpOfGross() > MAX_CAP_BP) {
             throw ApiException.badRequest("Please enter how much of your pay is matched up to, between 0% and 100%.");
         }
-        if (grossCents == null) {
+        // Without gross pay there is no checking a contribution against the cap, so the user's word is asked for.
+        boolean confirmed = grossCents == null && Boolean.TRUE.equals(input.contributionWithinCap());
+        if (grossCents == null && !confirmed) {
             throw ApiException.badRequest(
-                    "A match worked out from your pay needs the gross amount of a paycheck. Please fill that in as well.");
+                    "Without the gross amount of a paycheck, there is no telling whether what you put in is within the share of"
+                            + " your pay that is matched. Please fill in the gross amount, or confirm that it is.");
         }
-        return new Match(account.id(), mode, null, input.matchBp(), input.capBpOfGross());
+        return new Match(account.id(), mode, null, input.matchBp(), input.capBpOfGross(), confirmed);
     }
 
-    private List<Deduction> deductions(List<DeductionInput> inputs) {
+    private List<Deduction> deductions(List<DeductionInput> inputs, Long grossCents) {
         if (inputs == null) {
             return List.of();
         }
@@ -217,10 +229,21 @@ public final class IncomeRoutes {
             if (input.toAccountId() != null && !accounts.exists(input.toAccountId())) {
                 throw ApiException.badRequest("Please choose the account each deduction goes to from the list.");
             }
-            deductions.add(new Deduction(
-                    Inputs.text(input.name(), "a name for each deduction", NAME_MAX),
-                    Inputs.amount(input.amountCents(), "A deduction amount"),
-                    input.toAccountId()));
+            String name = Inputs.text(input.name(), "a name for each deduction", NAME_MAX);
+            if (input.percentBp() == null) {
+                deductions.add(new Deduction(name, Inputs.amount(input.amountCents(), "A deduction amount"), input.toAccountId(), null));
+                continue;
+            }
+            if (input.percentBp() < 0 || input.percentBp() > MAX_CAP_BP) {
+                throw ApiException.badRequest("Please enter each deduction's share of your pay between 0% and 100%.");
+            }
+            if (grossCents == null) {
+                throw ApiException.badRequest(
+                        "A deduction given as a percent of your pay needs the gross amount of a paycheck. Please fill that in as well.");
+            }
+            // Kept in cents as well, so a paycheck is worked out the same way whichever way it was typed.
+            long amount = Money.ofCents(grossCents).times(BasisPoints.of(input.percentBp()).toFraction()).cents();
+            deductions.add(new Deduction(name, amount, input.toAccountId(), input.percentBp()));
         }
         return deductions;
     }

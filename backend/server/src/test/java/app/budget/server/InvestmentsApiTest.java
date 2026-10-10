@@ -134,14 +134,91 @@ class InvestmentsApiTest extends ApiTestBase {
             assertThat(server.get("/api/income-sources", cookie).data()).isEmpty();
         }
 
-        @Test
-        void aMatchWorkedOutFromPayNeedsTheGrossAmount() throws Exception {
-            Reply reply = server.post("/api/income-sources", """
+        /** The salary with no gross amount, putting $216 of each paycheck into the 401(k). */
+        private String salaryWithoutGross(String match) {
+            return """
                     {"name":"Brightwater Health","depositAccountId":%d,"netCents":248620,"primary":true,
                      "schedule":{"frequency":"semi_monthly","day1":1,"day2":15,"startDate":"2026-01-01","weekendRule":"none"},
-                     "match":%s}""".formatted(checking, halfUpToSixPercent()), cookie);
+                     "deductions":[{"name":"401(k)","amountCents":21600,"toAccountId":%d}],
+                     "match":%s}""".formatted(checking, retirement, match);
+        }
 
-            assertError(reply, "A match worked out from your pay needs the gross amount of a paycheck. Please fill that in as well.");
+        @Test
+        void withoutGrossPayAMatchWorkedOutFromPayAsksForItOrForConfirmation() throws Exception {
+            Reply reply = server.post("/api/income-sources", salaryWithoutGross(halfUpToSixPercent()), cookie);
+
+            assertError(reply, "Without the gross amount of a paycheck, there is no telling whether what you put in is within the share of"
+                    + " your pay that is matched. Please fill in the gross amount, or confirm that it is.");
+            assertThat(server.get("/api/income-sources", cookie).data()).isEmpty();
+        }
+
+        @Test
+        void withoutGrossPayAConfirmedContributionIsMatchedInFull() throws Exception {
+            String dollarForDollar = "{\"toAccountId\":%d,\"mode\":\"formula\",\"matchBp\":10000,\"capBpOfGross\":600,\"contributionWithinCap\":true}"
+                    .formatted(retirement);
+
+            Reply reply = server.post("/api/income-sources", salaryWithoutGross(dollarForDollar), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            assertThat(reply.data().get("match").get("contributionWithinCap").asBoolean()).isTrue();
+            // 100% of the $216 put in; how much more could be earned is not known without gross pay.
+            JsonNode figures = reply.data().get("matchFigures");
+            assertThat(figures.get("perPaycheckCents").asLong()).isEqualTo(21600);
+            assertThat(figures.get("contributeMoreCents").asLong()).isZero();
+            // It arrives on payday like any other match.
+            JsonNode paycheck = server.get("/api/paychecks?from=2026-10-01&to=2026-10-01", cookie).data().get(0);
+            assertThat(paycheck.get("contributions").findValuesAsText("kind")).containsExactly("contribution", "employer_match");
+            assertThat(paycheck.get("contributions").get(1).get("amountCents").asLong()).isEqualTo(21600);
+        }
+
+        @Test
+        void onceGrossPayIsKnownTheConfirmationIsNoLongerNeededOrKept() throws Exception {
+            String confirmed = "{\"toAccountId\":%d,\"mode\":\"formula\",\"matchBp\":5000,\"capBpOfGross\":600,\"contributionWithinCap\":true}"
+                    .formatted(retirement);
+
+            Reply reply = addSalary(30000, confirmed);
+
+            // $300 is over 6% of $3,600, and the gross amount says so whatever was ticked.
+            assertThat(reply.data().get("match").get("contributionWithinCap").asBoolean()).isFalse();
+            assertThat(reply.data().get("matchFigures").get("perPaycheckCents").asLong()).isEqualTo(10800);
+        }
+
+        @Test
+        void aContributionCanBeAShareOfGrossPay() throws Exception {
+            Reply reply = server.post("/api/income-sources", """
+                    {"name":"Brightwater Health","depositAccountId":%d,"grossCents":360000,"netCents":248620,"primary":true,
+                     "schedule":{"frequency":"semi_monthly","day1":1,"day2":15,"startDate":"2026-01-01","weekendRule":"none"},
+                     "deductions":[{"name":"401(k)","percentBp":600,"toAccountId":%d}],
+                     "match":%s}""".formatted(checking, retirement, halfUpToSixPercent()), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            JsonNode deduction = reply.data().get("deductions").get(0);
+            assertThat(deduction.get("percentBp").asInt()).isEqualTo(600);
+            // 6% of $3,600, and half of it matched.
+            assertThat(deduction.get("amountCents").asLong()).isEqualTo(21600);
+            assertThat(reply.data().get("matchFigures").get("perPaycheckCents").asLong()).isEqualTo(10800);
+
+            // A raise moves the contribution with it: the share is kept, the dollars are worked out again.
+            long id = reply.data().get("id").asLong();
+            Reply raised = server.put("/api/income-sources/" + id, """
+                    {"name":"Brightwater Health","depositAccountId":%d,"grossCents":400000,"netCents":270000,"primary":true,
+                     "schedule":{"frequency":"semi_monthly","day1":1,"day2":15,"startDate":"2026-01-01","weekendRule":"none"},
+                     "deductions":[{"name":"401(k)","percentBp":600,"toAccountId":%d}]}""".formatted(checking, retirement), cookie);
+            assertThat(raised.data().get("deductions").get(0).get("amountCents").asLong()).isEqualTo(24000);
+        }
+
+        @Test
+        void aContributionGivenAsAShareNeedsGrossPayAndASensibleShare() throws Exception {
+            String body = """
+                    {"name":"Brightwater Health","depositAccountId":%d,%s"netCents":248620,"primary":true,
+                     "schedule":{"frequency":"semi_monthly","day1":1,"day2":15,"startDate":"2026-01-01","weekendRule":"none"},
+                     "deductions":[{"name":"401(k)","percentBp":%d,"toAccountId":%d}]}""";
+
+            assertError(server.post("/api/income-sources", body.formatted(checking, "", 600, retirement), cookie),
+                    "A deduction given as a percent of your pay needs the gross amount of a paycheck. Please fill that in as well.");
+            assertError(server.post("/api/income-sources", body.formatted(checking, "\"grossCents\":360000,", 10001, retirement), cookie),
+                    "Please enter each deduction's share of your pay between 0% and 100%.");
+            assertThat(server.get("/api/income-sources", cookie).data()).isEmpty();
         }
 
         @Test

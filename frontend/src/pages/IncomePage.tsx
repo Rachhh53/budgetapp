@@ -134,6 +134,7 @@ function SourceCard({ source, accounts, onEdit }: { source: IncomeSource; accoun
               <li key={index} className="flex items-center justify-between gap-3 py-2">
                 <span className="min-w-0 truncate">
                   {deduction.name}
+                  {deduction.percentBp !== null && ` · ${formatRate(deduction.percentBp)} of gross pay`}
                   {deduction.toAccountId !== null && ` → ${accountName(deduction.toAccountId) ?? "an account that was removed"}`}
                 </span>
                 <Amount cents={deduction.amountCents} className="shrink-0 font-semibold" />
@@ -157,6 +158,12 @@ function SourceCard({ source, accounts, onEdit }: { source: IncomeSource; accoun
           </div>
           {source.matchFigures === null && (
             <p className="text-sm text-muted">Add the gross amount per paycheck and the match can be worked out.</p>
+          )}
+          {source.match.contributionWithinCap && (
+            <p className="text-sm text-muted">
+              No gross amount is entered, so this takes your word that what you put in is within the{" "}
+              {formatRate(source.match.capBpOfGross ?? 0)} of pay that is matched. Add the gross amount and it is checked for you.
+            </p>
           )}
           {/* Said in words with the amounts: money the employer would add that is not being claimed. */}
           {source.matchFigures && source.matchFigures.contributeMoreCents > 0 && (

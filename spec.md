@@ -155,8 +155,8 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
 ### 4.3 Income and pay stubs
 - **income_sources** — `id, name, deposit_account_id, gross_amount (nullable), net_amount, net_is_estimate, schedule_rule_id, is_primary`. Multiple sources allowed; the **primary** source's schedule defines pay periods. The first source is always primary, and there is exactly one while any source exists.
 - **paycheck_overrides** — `income_source_id, scheduled_date, net_amount, projected_amount`. One paycheck's amount typed over ("just this one"), keyed by the date the schedule names (which stays put when a holiday moves the payday). `projected_amount` keeps what was shown before the first edit.
-- **paycheck_deductions** — `income_source_id, name, amount, to_account_id` (401(k), HSA…). These never pass through checking.
-- **employer_match** — `income_source_id, to_account_id, mode (fixed | formula), fixed_amount, match_bp, cap_bp_of_gross`. As built (migration `V12`): one per income source, a single tier (decided with Rachel, 2026-10-09), paid into an investment account only. `formula` needs the source's gross amount.
+- **paycheck_deductions** — `income_source_id, name, amount, to_account_id, percent_bp (nullable)` (401(k), HSA…). These never pass through checking. A deduction is a dollar amount or, with `percent_bp` (migration `V13`), a share of gross pay; `amount` then holds what that comes to, worked out from the gross amount each time the source is saved. A share needs the gross amount.
+- **employer_match** — `income_source_id, to_account_id, mode (fixed | formula), fixed_amount, match_bp, cap_bp_of_gross`. As built (migration `V12`): one per income source, a single tier (decided with Rachel, 2026-10-09), paid into an investment account only. `formula` checks the contribution against the source's gross amount; with no gross amount it stands only with `contribution_within_cap` (migration `V13`), the user's confirmation that what they put in is within the matched share.
 - **pay_stubs** — `id, income_source_id, pay_date, file_id, status (review | saved)`.
 - **pay_stub_lines** — `pay_stub_id, section (earnings | pre_tax | tax | net | employer), label, amount, ytd_amount, maps_to (gross | contribution | benefit | tax | net | match), maps_to_account_id, confidence`.
 - **stub_layouts** — per employer: remembered positions/labels of each line so later stubs fill automatically.
@@ -248,6 +248,7 @@ For an occurrence due on **D**, with **P** = the period containing D:
 - As built:
   - **Contributions** arrive on payday: each deduction that names an account, and the match, are money into that account (transaction kinds `contribution`, `employer_match`). They never pass through checking and are not part of take-home pay.
   - **Match formula**: the smaller of what the employee puts in and cap × gross, times the match rate, HALF_EVEN. "What the employee puts in" is that source's deductions into the match's own account. The Income screen says when the contribution is under the cap, and how much more each paycheck would earn the whole match.
+  - **Percentages or dollars** (Rachel, 2026-10-10: "100% match up to 6%, and then maybe my contribution is a dollar amount or 6% of gross. but also could just be numbers like today"): the match is a percentage rule or a fixed dollar amount, and each contribution is dollars or a percent of gross pay. A contribution as a percent is refused without a gross amount. A percentage match with a dollar contribution and no gross amount cannot be checked against the cap, so the form asks for a tick — "What I put in is within the 6% of my pay that is matched" — or the gross amount; ticked, all of the contribution is matched, and the Income screen says the match rests on that confirmation. Once a gross amount is entered the tick is dropped and the cap is checked.
   - **Growth** reuses the savings interest path (§5.4): the monthly rate is the 12th root of the yearly one, added on the last day of each month on the balance at the start of that day, from the first entered balance on. It is listed as "Assumed growth", counted in the account's "Coming in" but never under Income, never as a deposit, and it cannot be typed over — entering the real balance replaces it.
   - **Change this year** (every account): from January 1, or from the first balance entered when that is later, to today, split into what was put in and the rest.
   - **Growth per entered balance**: change since the entry before − what was put in between the two. Both figures are worked out from entered balances only.
@@ -567,11 +568,11 @@ Sums in money fields (decided 2026-10-09 with Rachel):
 
 ### Phase 4 — Investments, home, net worth (`milestone/4-investments-networth`)
 
-**Status: complete on this branch as of 2026-10-09**, waiting for Rachel to confirm. Branched from Phase 3 and rebased onto `main` once that was merged. Verified with 125 engine, 348 server and 261 frontend tests passing.
+**Status: complete on this branch as of 2026-10-09**, waiting for Rachel to confirm. Branched from Phase 3 and rebased onto `main` once that was merged. Verified with 126 engine, 352 server and 264 frontend tests passing.
 
 Decided with Rachel before building (2026-10-09): the employer match is a single tier; assets are a home, vehicles and "something else", with a growth rate of zero or more and no depreciation; the three Phase 3 leftovers were done first on this branch (interest on the day of an entered balance, §5.4; the 375px check by eye; the grouped layout on the remaining forms).
 
-Migration on this branch: `V12` employer match, assets and asset values.
+Migrations on this branch: `V12` employer match, assets and asset values · `V13` a deduction as a percent of gross pay, and the match's confirmation. `V12` has run on Rachel's installed database, so it may not be edited: anything further is a new migration.
 
 | Feature | Status | Notes |
 |---|---|---|
