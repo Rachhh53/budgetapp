@@ -6,19 +6,23 @@ import { useCategories, useTags } from "../api/categories";
 import { type Item, useItems } from "../api/items";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
-import { EditPageButton } from "../components/EditButton";
-import { ItemForm } from "../components/items/ItemForm";
+import { EditButton, EditPageButton } from "../components/EditButton";
+import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
 import { PauseControls } from "../components/items/PauseItem";
-import { PAGE_TITLE } from "../components/ui";
+import { BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 
 /**
  * One recurring item, laid out like an account's page and an income source's: the big figures
  * first (what it costs each time and over a year, when it is next due, what pays for it), then
- * a card per topic. The Recurring items screen is the overview; this is where the detail
- * lives, and where pausing and the amounts it has had are, so the edit form stays short.
+ * a card per topic. The Recurring items screen is the overview; this is where the detail lives.
+ *
+ * Like an account's page, each card is changed from the card: Edit on Schedule opens the
+ * schedule and nothing else, and so on, so no form is longer than what it is about. Edit item
+ * is the small one (type, name, archiving, deleting), as Edit account is. A bucket's own
+ * recurring amount is the exception: it is changed in its bucket's form, so it has the one button.
  */
 export function RecurringItemDetailPage() {
   const id = Number(useParams().id);
@@ -28,7 +32,8 @@ export function RecurringItemDetailPage() {
   const categories = useCategories();
   const tags = useTags();
   const buckets = useBuckets();
-  const [editing, setEditing] = useState(false);
+  // Which part of the item is open for editing, if any.
+  const [editing, setEditing] = useState<ItemPart | null>(null);
 
   if (items.isPending) {
     return <p className="text-muted">Loading…</p>;
@@ -59,6 +64,9 @@ export function RecurringItemDetailPage() {
   const parent = allCategories.find((candidate) => candidate.id === category?.parentId);
   const itemTags = (tags.data ?? []).filter((tag) => item.tagIds.includes(tag.id));
   const everyPaycheck = item.schedule.frequency === "every_pay_period";
+  // Set up on its bucket, and changed there: one form, so one button.
+  const ownForm = item.kind !== "bucket_move";
+  const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} labelled /> : undefined);
 
   return (
     <>
@@ -79,7 +87,12 @@ export function RecurringItemDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
-          <EditPageButton label="Edit item" onClick={() => setEditing(true)} />
+          <EditPageButton label="Edit item" onClick={() => setEditing("item")} />
+          {ownForm && (
+            <button type="button" onClick={() => setEditing("amount")} aria-label={`Change the amount of ${item.name}`} className={BUTTON_PRIMARY}>
+              Change the amount
+            </button>
+          )}
         </div>
       </div>
 
@@ -127,7 +140,7 @@ export function RecurringItemDetailPage() {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-4">
-            <Card title="Schedule">
+            <Card title="Schedule" action={edit("schedule", "the schedule")}>
               <dl className="grid gap-4 sm:grid-cols-3">
                 <Fact term="How often">{describeItemSchedule(item.schedule)}</Fact>
                 <Fact term={item.schedule.frequency === "one_time" ? "Date" : "Starts"}>{formatDate(item.schedule.startDate)}</Fact>
@@ -141,17 +154,21 @@ export function RecurringItemDetailPage() {
                       ? "One period early"
                       : "The period it's due in"}
                 </Fact>
-                {item.kind !== "budget" && item.kind !== "bucket_move" && <Fact term="Autopay">{item.autopay ? "Yes" : "No, paid by hand"}</Fact>}
               </dl>
             </Card>
 
-            <Card title="Details">
+            <Card
+              title={item.kind === "bucket_move" ? "Where it goes" : item.payToAccountId !== null ? "From and to" : "Where it's paid from"}
+              action={edit("accounts", "where it is paid from")}
+            >
               <dl className="grid gap-4 sm:grid-cols-3">
-                <Fact term="Category">{category ? (parent ? `${parent.name} › ${category.name}` : category.name) : "None"}</Fact>
-                <Fact term="Tags">{itemTags.length === 0 ? "None" : itemTags.map((tag) => tag.name).join(", ")}</Fact>
-                <Fact term="Date added">{formatDate(item.createdOn)}</Fact>
+                <Fact term={item.kind === "transfer" ? "From" : "Paid from"}>{accountName(item.payFromAccountId)}</Fact>
+                {item.payToAccountId !== null && <Fact term={item.kind === "card_payment" ? "Card" : "To"}>{accountName(item.payToAccountId)}</Fact>}
+                {item.kind !== "budget" && item.kind !== "bucket_move" && <Fact term="Autopay">{item.autopay ? "Yes" : "No, paid by hand"}</Fact>}
                 {item.fromBucketId !== null && <Fact term="Comes out of">{bucketName(item.fromBucketId)}</Fact>}
-                {item.kind === "transfer" && item.bucketId !== null && <Fact term="Into bucket">{bucketName(item.bucketId)}</Fact>}
+                {(item.kind === "transfer" || item.kind === "bucket_move") && item.bucketId !== null && (
+                  <Fact term="Into bucket">{bucketName(item.bucketId)}</Fact>
+                )}
                 {item.saveUpBucketId !== null && (
                   <Fact term="Saved up for in">
                     {bucketName(item.saveUpBucketId)}
@@ -163,8 +180,16 @@ export function RecurringItemDetailPage() {
                   </Fact>
                 )}
               </dl>
+            </Card>
+
+            <Card title="Details" action={edit("details", "the details")}>
+              <dl className="grid gap-4 sm:grid-cols-3">
+                <Fact term="Category">{category ? (parent ? `${parent.name} › ${category.name}` : category.name) : "None"}</Fact>
+                <Fact term="Tags">{itemTags.length === 0 ? "None" : itemTags.map((tag) => tag.name).join(", ")}</Fact>
+                <Fact term="Date added">{formatDate(item.createdOn)}</Fact>
+              </dl>
               <p className="mt-4 text-sm text-muted">Note</p>
-              <p className={item.note ? "break-words" : "text-muted"}>{item.note ?? "No note. Choose Edit item to add one."}</p>
+              <p className={item.note ? "break-words" : "text-muted"}>{item.note ?? "No note."}</p>
             </Card>
           </div>
 
@@ -186,10 +211,11 @@ export function RecurringItemDetailPage() {
       {editing && (
         <ItemForm
           item={item}
+          part={editing}
           accounts={allAccounts}
           categories={allCategories}
           tags={tags.data ?? []}
-          onClose={() => setEditing(false)}
+          onClose={() => setEditing(null)}
           onDeleted={() => navigate("/recurring")}
         />
       )}
@@ -228,7 +254,7 @@ function AmountHistory({ item }: { item: Item }) {
       </ul>
       <p className="mt-2 text-sm text-muted">
         {item.history.length < 2
-          ? "No changes yet. When the amount changes, choose Edit item: everything dated before that day keeps this amount."
+          ? "No changes yet. When the amount changes, choose Change the amount: everything dated before that day keeps this amount."
           : "Each date uses the newest amount set on or before it."}
       </p>
     </Card>

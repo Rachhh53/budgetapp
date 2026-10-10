@@ -53,6 +53,21 @@ const DAYS_AFTER_PAYDAY = Array.from({ length: 15 }, (_, days) => days);
 /** Months apart on offer for "every few months". */
 const MONTHS_APART = [2, 3, 4, 6];
 
+/**
+ * The parts of an item that can be opened on their own from its page, each from the card that shows it:
+ * what it is (type, name, archiving, deleting), its amount, the accounts it moves between, its schedule,
+ * and how it is filed (category, tags, note).
+ */
+export type ItemPart = "item" | "amount" | "accounts" | "schedule" | "details";
+
+const PART_TITLES: Record<ItemPart, string | null> = {
+  item: null,
+  amount: "Amount",
+  accounts: "Paid from",
+  schedule: "Schedule",
+  details: "Details",
+};
+
 interface ItemFormProps {
   /** The item being changed; leave out to add a new one. */
   item?: Item;
@@ -64,6 +79,11 @@ interface ItemFormProps {
   onDeleted?: () => void;
   /** Points at the item's page for pausing and its amount history. For a form opened anywhere but that page. */
   pageLink?: boolean;
+  /**
+   * Show only this part of an existing item. Everything else about it is sent back as it was, so
+   * saving one part changes nothing in the others. Left out, the whole form shows.
+   */
+  part?: ItemPart;
 }
 
 /**
@@ -90,7 +110,7 @@ export function ItemForm(props: ItemFormProps) {
   }
   return (
     <Modal
-      title={props.item ? `Edit ${props.item.name}` : "Add a recurring item"}
+      title={props.item ? [`Edit ${props.item.name}`, ...(props.part && PART_TITLES[props.part] ? [PART_TITLES[props.part]] : [])].join(" · ") : "Add a recurring item"}
       icon={props.item ? KIND_ICONS[props.item.kind] : CalendarClock}
       onClose={props.onClose}
     >
@@ -103,7 +123,7 @@ export function ItemForm(props: ItemFormProps) {
 const NOT_IN_A_BUCKET = "none";
 
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
-export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink }: ItemFormProps) {
+export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink, part }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
   const replace = useReplaceItem(item?.id);
@@ -286,11 +306,22 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
 
   const kindChanged = item !== undefined && kind !== item.kind;
   const failure = problem ?? save.error?.message ?? replace.error?.message;
+  // A different type can need a second account (a transfer's "To"), so the accounts come along with it.
+  const shows = (asked: ItemPart) => part === undefined || part === asked || (asked === "accounts" && part === "item" && kindChanged);
 
   return (
     <>
-      <form onSubmit={submit} className="space-y-4">
-        <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
+      <form
+        onSubmit={submit}
+        // A picker opens its list and clears its text when focused. Where one is the first field, the dialog
+        // would open with the choice already made hidden, so focus rests on the form instead.
+        data-autofocus={part === "details" || part === "accounts" ? true : undefined}
+        tabIndex={-1}
+        className="space-y-4 outline-none"
+      >
+        {shows("item") && (
+          <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
+        )}
 
         {kindChanged && (
           // An item is one kind for its whole life, so this cannot apply "from today on" like other changes.
@@ -311,273 +342,285 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
           </div>
         )}
 
-        <FormSection title="Amount">
-          <div>
-            <MoneyField
-              label={amountMode === "annual" ? "Per year" : "Amount each time"}
-              value={amount}
-              onChange={setAmount}
-              hint={amountMode === "annual" ? "Shared out evenly over the schedule below." : undefined}
-              required
-              hero
-            />
-            <label className="mt-1 flex min-h-11 items-center gap-3">
-              <input
-                type="checkbox"
-                checked={estimate}
-                onChange={(event) => setEstimate(event.target.checked)}
-                className="size-5 accent-(--accent)"
+        {shows("amount") && (
+          <FormSection title="Amount">
+            <div>
+              <MoneyField
+                label={amountMode === "annual" ? "Per year" : "Amount each time"}
+                value={amount}
+                onChange={setAmount}
+                hint={amountMode === "annual" ? "Shared out evenly over the schedule below." : undefined}
+                required
+                hero
               />
-              <span>It's an estimate</span>
-            </label>
-          </div>
-          <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
-        </FormSection>
-
-        <FormSection title="What it is">
-          <div>
-            <label htmlFor={`${id}-name`} className={LABEL}>
-              Name
-            </label>
-            <input
-              id={`${id}-name`}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={80}
-              required
-              autoComplete="off"
-              placeholder={kind === "budget" ? "e.g. Groceries" : isBucketMove ? "e.g. Holiday gift fund" : "e.g. Electric"}
-              className={INPUT}
-            />
-          </div>
-          <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
-        </FormSection>
-
-        <FormSection title={isBucketMove ? "Where it goes" : movesMoney ? "From and to" : "Where it's paid from"}>
-          {/* Two side by side only when there are two: a lone picker gets the full width. */}
-          <div className={`grid grid-cols-1 gap-4 ${movesMoney ? "sm:grid-cols-2" : ""}`}>
-            {isBucketMove ? (
-              <div>
-                <Picker
-                  label="Into bucket"
-                  noun="bucket"
-                  placeholder="Choose or type a bucket"
-                  options={everyBucketOption}
-                  value={bucketId}
-                  onChange={setBucketId}
+              <label className="mt-1 flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={estimate}
+                  onChange={(event) => setEstimate(event.target.checked)}
+                  className="size-5 accent-(--accent)"
                 />
-                <p className={HINT}>
-                  {everyBucketOption.length === 0
-                    ? "There are no buckets yet. Add one on a checking or savings account's page first."
-                    : "The money stays in its account. It is set aside, so less shows as available."}
-                </p>
-              </div>
-            ) : (
-              <Picker
-                label={kind === "transfer" ? "From" : "Paid from"}
-                noun="account"
-                placeholder="Choose or type an account"
-                options={accountOptions}
-                value={payFrom}
-                onChange={setPayFrom}
-              />
-            )}
-            {kind === "transfer" && (
-              <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
-            )}
-            {transferBuckets.length > 0 && (
-              <Picker
-                label="Into bucket (optional)"
-                noun="bucket"
-                placeholder="Leave unassigned"
-                options={transferBuckets}
-                value={chosenTransferBucket}
-                onChange={setBucketId}
-                clearable
-              />
-            )}
-            {kind === "card_payment" && (
-              <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
-            )}
-            {payingBuckets.length > 0 && (
+                <span>It's an estimate</span>
+              </label>
+            </div>
+            <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+          </FormSection>
+        )}
+
+        {(shows("item") || shows("details")) && (
+          <FormSection title={part === "details" ? "Category" : "What it is"}>
+            {shows("item") && (
               <div>
-                <label htmlFor={`${id}-from-bucket`} className={LABEL}>
-                  Comes out of
+                <label htmlFor={`${id}-name`} className={LABEL}>
+                  Name
+                </label>
+                <input
+                  id={`${id}-name`}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  maxLength={80}
+                  required
+                  autoComplete="off"
+                  placeholder={kind === "budget" ? "e.g. Groceries" : isBucketMove ? "e.g. Holiday gift fund" : "e.g. Electric"}
+                  className={INPUT}
+                />
+              </div>
+            )}
+            {shows("details") && <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />}
+          </FormSection>
+        )}
+
+        {shows("accounts") && (
+          <FormSection title={isBucketMove ? "Where it goes" : movesMoney ? "From and to" : "Where it's paid from"}>
+            {/* Two side by side only when there are two: a lone picker gets the full width. */}
+            <div className={`grid grid-cols-1 gap-4 ${movesMoney ? "sm:grid-cols-2" : ""}`}>
+              {isBucketMove ? (
+                <div>
+                  <Picker
+                    label="Into bucket"
+                    noun="bucket"
+                    placeholder="Choose or type a bucket"
+                    options={everyBucketOption}
+                    value={bucketId}
+                    onChange={setBucketId}
+                  />
+                  <p className={HINT}>
+                    {everyBucketOption.length === 0
+                      ? "There are no buckets yet. Add one on a checking or savings account's page first."
+                      : "The money stays in its account. It is set aside, so less shows as available."}
+                  </p>
+                </div>
+              ) : (
+                <Picker
+                  label={kind === "transfer" ? "From" : "Paid from"}
+                  noun="account"
+                  placeholder="Choose or type an account"
+                  options={accountOptions}
+                  value={payFrom}
+                  onChange={setPayFrom}
+                />
+              )}
+              {kind === "transfer" && (
+                <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
+              )}
+              {transferBuckets.length > 0 && (
+                <Picker
+                  label="Into bucket (optional)"
+                  noun="bucket"
+                  placeholder="Leave unassigned"
+                  options={transferBuckets}
+                  value={chosenTransferBucket}
+                  onChange={setBucketId}
+                  clearable
+                />
+              )}
+              {kind === "card_payment" && (
+                <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
+              )}
+              {payingBuckets.length > 0 && (
+                <div>
+                  <label htmlFor={`${id}-from-bucket`} className={LABEL}>
+                    Comes out of
+                  </label>
+                  <select
+                    id={`${id}-from-bucket`}
+                    value={comesFrom}
+                    onChange={(event) => setChosenFrom(event.target.value)}
+                    required
+                    className={INPUT}
+                  >
+                    <option value="">Choose where this comes from</option>
+                    <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
+                    {payingBuckets.map((bucket) => (
+                      <option key={bucket.id} value={bucket.id}>
+                        {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
+                      </option>
+                    ))}
+                  </select>
+                  <p className={HINT}>
+                    {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
+                      ? "Each time, the bucket and the account both go down. If the bucket runs out, the rest comes from money that is not in a bucket."
+                      : "This account has buckets, so say whether this is paid out of one of them."}
+                  </p>
+                </div>
+              )}
+            </div>
+            {kind !== "budget" && !isBucketMove && (
+              <label className="flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={autopay}
+                  onChange={(event) => setAutopay(event.target.checked)}
+                  className="size-5 accent-(--accent)"
+                />
+                <span>Autopay</span>
+              </label>
+            )}
+          </FormSection>
+        )}
+
+        {shows("schedule") && (
+          <FormSection title="Schedule">
+            {/* How often, and the day or date that goes with it, side by side where there is room. */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor={`${id}-frequency`} className={LABEL}>
+                  How often
                 </label>
                 <select
-                  id={`${id}-from-bucket`}
-                  value={comesFrom}
-                  onChange={(event) => setChosenFrom(event.target.value)}
-                  required
+                  id={`${id}-frequency`}
+                  value={frequency}
+                  onChange={(event) => setFrequency(event.target.value as ItemFrequency)}
                   className={INPUT}
                 >
-                  <option value="">Choose where this comes from</option>
-                  <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
-                  {payingBuckets.map((bucket) => (
-                    <option key={bucket.id} value={bucket.id}>
-                      {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
+                  {ITEM_FREQUENCIES.map((option) => (
+                    <option key={option} value={option}>
+                      {ITEM_FREQUENCY_LABELS[option]}
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {everyPaycheck && (
+                <div>
+                  <label htmlFor={`${id}-days`} className={LABEL}>
+                    Dated
+                  </label>
+                  <select
+                    id={`${id}-days`}
+                    value={daysAfterPayday}
+                    onChange={(event) => setDaysAfterPayday(Number(event.target.value))}
+                    className={INPUT}
+                  >
+                    {[...new Set([...DAYS_AFTER_PAYDAY, daysAfterPayday])].map((days) => (
+                      <option key={days} value={days}>
+                        {days === 0 ? "On payday" : `${days} ${days === 1 ? "day" : "days"} after payday`}
+                      </option>
+                    ))}
+                  </select>
+                  <p className={HINT}>The day it comes out of the balance in each pay period.</p>
+                </div>
+              )}
+
+              {countsFromADate && (
+                <div>
+                  <label htmlFor={`${id}-start`} className={LABEL}>
+                    {frequency === "one_time" ? "Date" : "A date it falls on"}
+                  </label>
+                  <input
+                    id={`${id}-start`}
+                    type="date"
+                    value={startsOn}
+                    onChange={(event) => setChosenStart(event.target.value)}
+                    required
+                    className={INPUT}
+                  />
+                  {frequency !== "one_time" && <p className={HINT}>Any real due date works. It repeats from there.</p>}
+                </div>
+              )}
+
+              {(frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months" || frequency === "yearly") && (
+                <>
+                  {frequency === "yearly" && (
+                    <div>
+                      <label htmlFor={`${id}-month`} className={LABEL}>
+                        Month
+                      </label>
+                      <select id={`${id}-month`} value={month} onChange={(event) => setMonth(Number(event.target.value))} className={INPUT}>
+                        {MONTH_NAMES.map((monthName, index) => (
+                          <option key={monthName} value={index + 1}>
+                            {monthName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {frequency === "every_n_months" && (
+                    <div>
+                      <label htmlFor={`${id}-interval`} className={LABEL}>
+                        Months apart
+                      </label>
+                      <select
+                        id={`${id}-interval`}
+                        value={monthsApart}
+                        onChange={(event) => setMonthsApart(Number(event.target.value))}
+                        className={INPUT}
+                      >
+                        {[...new Set([...MONTHS_APART, monthsApart])].sort((a, b) => a - b).map((months) => (
+                          <option key={months} value={months}>
+                            Every {months} months
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <DaySelect
+                    id={`${id}-day1`}
+                    label={frequency === "semi_monthly" ? "First day of the month" : "Day of the month"}
+                    value={day1}
+                    onChange={setDay1}
+                  />
+                  {frequency === "semi_monthly" && <DaySelect id={`${id}-day2`} label="Second day of the month" value={day2} onChange={setDay2} />}
+                </>
+              )}
+            </div>
+
+            {/* The schedules above name their own first date; these need to be told when they begin. */}
+            {!countsFromADate && (
+              <div>
+                <label htmlFor={`${id}-starts`} className={LABEL}>
+                  Starts
+                </label>
+                <input
+                  id={`${id}-starts`}
+                  type="date"
+                  value={startsOn}
+                  onChange={(event) => setChosenStart(event.target.value)}
+                  required
+                  className={INPUT}
+                />
                 <p className={HINT}>
-                  {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
-                    ? "Each time, the bucket and the account both go down. If the bucket runs out, the rest comes from money that is not in a bucket."
-                    : "This account has buckets, so say whether this is paid out of one of them."}
+                  {everyPaycheck
+                    ? "Today or earlier: it begins with the paycheck for the pay period that day falls in. A later day: it begins with the first paycheck on or after it, and this date moves to that payday when you save."
+                    : "Nothing is scheduled before this day. Choose an earlier day to include earlier ones."}
+                  {isBucketMove && " The bucket counts from then too."}
                 </p>
               </div>
             )}
-          </div>
-        </FormSection>
 
-        <FormSection title="Schedule">
-          <div>
-            <label htmlFor={`${id}-frequency`} className={LABEL}>
-              How often
-            </label>
-            <select
-              id={`${id}-frequency`}
-              value={frequency}
-              onChange={(event) => setFrequency(event.target.value as ItemFrequency)}
-              className={INPUT}
-            >
-              {ITEM_FREQUENCIES.map((option) => (
-                <option key={option} value={option}>
-                  {ITEM_FREQUENCY_LABELS[option]}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {everyPaycheck && (
-            <div>
-              <label htmlFor={`${id}-days`} className={LABEL}>
-                Dated
-              </label>
-              <select
-                id={`${id}-days`}
-                value={daysAfterPayday}
-                onChange={(event) => setDaysAfterPayday(Number(event.target.value))}
-                className={INPUT}
-              >
-                {[...new Set([...DAYS_AFTER_PAYDAY, daysAfterPayday])].map((days) => (
-                  <option key={days} value={days}>
-                    {days === 0 ? "On payday" : `${days} ${days === 1 ? "day" : "days"} after payday`}
-                  </option>
-                ))}
-              </select>
-              <p className={HINT}>The day it comes out of the balance in each pay period.</p>
-            </div>
-          )}
-
-          {countsFromADate && (
-            <div>
-              <label htmlFor={`${id}-start`} className={LABEL}>
-                {frequency === "one_time" ? "Date" : "A date it falls on"}
-              </label>
-              <input
-                id={`${id}-start`}
-                type="date"
-                value={startsOn}
-                onChange={(event) => setChosenStart(event.target.value)}
-                required
-                className={INPUT}
-              />
-              {frequency !== "one_time" && <p className={HINT}>Any real due date works. It repeats from there.</p>}
-            </div>
-          )}
-
-          {(frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months" || frequency === "yearly") && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {frequency === "yearly" && (
-                <div>
-                  <label htmlFor={`${id}-month`} className={LABEL}>
-                    Month
-                  </label>
-                  <select id={`${id}-month`} value={month} onChange={(event) => setMonth(Number(event.target.value))} className={INPUT}>
-                    {MONTH_NAMES.map((monthName, index) => (
-                      <option key={monthName} value={index + 1}>
-                        {monthName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              {frequency === "every_n_months" && (
-                <div>
-                  <label htmlFor={`${id}-interval`} className={LABEL}>
-                    Months apart
-                  </label>
-                  <select
-                    id={`${id}-interval`}
-                    value={monthsApart}
-                    onChange={(event) => setMonthsApart(Number(event.target.value))}
-                    className={INPUT}
-                  >
-                    {[...new Set([...MONTHS_APART, monthsApart])].sort((a, b) => a - b).map((months) => (
-                      <option key={months} value={months}>
-                        Every {months} months
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <DaySelect
-                id={`${id}-day1`}
-                label={frequency === "semi_monthly" ? "First day of the month" : "Day of the month"}
-                value={day1}
-                onChange={setDay1}
-              />
-              {frequency === "semi_monthly" && <DaySelect id={`${id}-day2`} label="Second day of the month" value={day2} onChange={setDay2} />}
-            </div>
-          )}
-
-          {/* The schedules above name their own first date; these need to be told when they begin. */}
-          {!countsFromADate && (
-            <div>
-              <label htmlFor={`${id}-starts`} className={LABEL}>
-                Starts
-              </label>
-              <input
-                id={`${id}-starts`}
-                type="date"
-                value={startsOn}
-                onChange={(event) => setChosenStart(event.target.value)}
-                required
-                className={INPUT}
-              />
-              <p className={HINT}>
-                {everyPaycheck
-                  ? "Today or earlier: it begins with the paycheck for the pay period that day falls in. A later day: it begins with the first paycheck on or after it, and this date moves to that payday when you save."
-                  : "Nothing is scheduled before this day. Choose an earlier day to include earlier ones."}
-                {isBucketMove && " The bucket counts from then too."}
-              </p>
-            </div>
-          )}
-
-          {kind !== "budget" && !isBucketMove && (
-            <label className="flex min-h-11 items-center gap-3">
-              <input
-                type="checkbox"
-                checked={autopay}
-                onChange={(event) => setAutopay(event.target.checked)}
-                className="size-5 accent-(--accent)"
-              />
-              <span>Autopay</span>
-            </label>
-          )}
-
-          {!everyPaycheck && !isBucketMove && (
-            <div>
-              <Segmented legend="Which paycheck pays it" options={PLACEMENT_OPTIONS} value={placement} onChange={setPlacement} />
-              <p className={HINT}>
-                Something due on payday that you pay by hand always comes out of the paycheck before, so the money is there in time.
-              </p>
-            </div>
-          )}
-        </FormSection>
+            {!everyPaycheck && !isBucketMove && (
+              <div>
+                <Segmented legend="Which paycheck pays it" options={PLACEMENT_OPTIONS} value={placement} onChange={setPlacement} />
+                <p className={HINT}>
+                  Something due on payday that you pay by hand always comes out of the paycheck before, so the money is there in time.
+                </p>
+              </div>
+            )}
+          </FormSection>
+        )}
 
         {/* A different thing from saving towards a goal, and easily mistaken for it: out of the way unless it is in use. */}
-        {canSaveUp && (
+        {canSaveUp && shows("accounts") && (
           <details open={item?.saveUpBucketId != null} className="rounded-lg border border-line px-4 py-1">
             <summary className="min-h-11 cursor-pointer content-center font-medium">More options</summary>
             <div className="pb-3">
@@ -653,34 +696,40 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
           </details>
         )}
 
-        <FormSection title="Tags and notes">
-          <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+        {shows("details") && (
+          <FormSection title="Tags and notes">
+            <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
 
-          <div>
-            <label htmlFor={`${id}-note`} className={LABEL}>
-              Note (optional)
-            </label>
-            <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
-          </div>
-        </FormSection>
+            <div>
+              <label htmlFor={`${id}-note`} className={LABEL}>
+                Note (optional)
+              </label>
+              <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
+            </div>
+          </FormSection>
+        )}
 
         {item && (
           <div>
-            <label className="flex min-h-11 items-center gap-3">
-              <input
-                type="checkbox"
-                checked={archived}
-                onChange={(event) => setArchived(event.target.checked)}
-                className="size-5 accent-(--accent)"
-              />
-              <span className="font-medium">Archived</span>
-            </label>
-            <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
+            {shows("item") && (
+              <>
+                <label className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={archived}
+                    onChange={(event) => setArchived(event.target.checked)}
+                    className="size-5 accent-(--accent)"
+                  />
+                  <span className="font-medium">Archived</span>
+                </label>
+                <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
+              </>
+            )}
             <p className={HINT}>
               Changes you save now apply from today on; anything dated before today keeps what it had. A different start date is the
               exception, and applies from that date.
             </p>
-            {pageLink && (
+            {pageLink && part === undefined && (
               <p className={HINT}>
                 To pause it, or to see the amounts it has had,{" "}
                 <Link to={`/recurring/${item.id}`} className="font-semibold text-accent-ink underline">
@@ -708,7 +757,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
         </div>
       </form>
 
-      {item && (
+      {item && shows("item") && (
         <div className="mt-6 border-t border-line pt-4">
           <DeleteItem item={item} onDeleted={onDeleted ?? onClose} />
         </div>
