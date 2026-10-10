@@ -85,7 +85,7 @@ export function BucketsCard({ account }: { account: Account }) {
             {archived.map((bucket) => (
               <li key={bucket.id} onClick={clickRowToEdit} className={`flex items-center justify-between gap-3 ${ROW_OPENS}`}>
                 <span className="min-w-0 text-muted wrap-break-word">{bucket.name} · Archived</span>
-                <EditButton name={bucket.name} onClick={() => setEditingId(bucket.id)} labelled />
+                <EditButton name={bucket.name} onClick={() => setEditingId(bucket.id)} />
               </li>
             ))}
           </ul>
@@ -151,7 +151,7 @@ function BucketLine({
         </div>
         {/* One way in: the amount, the goal and the rest are all changed in the same form. */}
         <div className="flex shrink-0 sm:justify-end">
-          <EditButton name={bucket.name} onClick={onEdit} labelled />
+          <EditButton name={bucket.name} onClick={onEdit} />
         </div>
       </div>
       {reached !== null && (

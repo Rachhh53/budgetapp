@@ -299,7 +299,7 @@ function PayHistory({ source, onEditTerms }: { source: IncomeSource; onEditTerms
                 </span>
               </span>
               <span className="flex shrink-0 items-center gap-1">
-                <EditButton name={`the pay from ${from}`} onClick={() => onEditTerms(entry)} labelled />
+                <EditButton name={`the pay from ${from}`} onClick={() => onEditTerms(entry)} />
                 {entry.id !== null && (
                   <button
                     type="button"

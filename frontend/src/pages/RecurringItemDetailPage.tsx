@@ -66,7 +66,7 @@ export function RecurringItemDetailPage() {
   const everyPaycheck = item.schedule.frequency === "every_pay_period";
   // Set up on its bucket, and changed there: one form, so one button.
   const ownForm = item.kind !== "bucket_move";
-  const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} labelled /> : undefined);
+  const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
 
   return (
     <>

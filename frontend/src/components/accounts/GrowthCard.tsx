@@ -50,7 +50,7 @@ export function GrowthCard({ detail }: { detail: AccountDetail }) {
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {current ? (
           <>
-            <EditButton name="assumed growth" onClick={() => setEditing(true)} labelled />
+            <EditButton name="assumed growth" onClick={() => setEditing(true)} />
             {/* With a single rate there is no history list to remove it from. */}
             {rates.length === 1 && (
               <button
