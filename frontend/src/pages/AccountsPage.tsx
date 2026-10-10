@@ -211,8 +211,8 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
       <Link to={`/accounts/${account.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
         <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-semibold">{account.name}</span>
-          <span className="block truncate text-sm text-muted">{accountSubtitle(account)}</span>
+          <span className="block font-semibold sm:truncate">{account.name}</span>
+          <span className="block text-sm text-muted sm:truncate">{accountSubtitle(account)}</span>
         </span>
         <span className="shrink-0 text-right">
           {today ? (
@@ -223,7 +223,9 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
               ) : (
                 <span className="block pr-2 text-sm text-muted">
                   {/* The mockup's "last entered" date: how fresh the real number behind today's figure is. */}
-                  today{account.latestBalance ? ` · entered ${formatDay(account.latestBalance.date)}` : ""}
+                  today
+                  {/* On a phone there is no room for it beside the name; it is on the account's own page. */}
+                  {account.latestBalance && <span className="hidden sm:inline"> · entered {formatDay(account.latestBalance.date)}</span>}
                 </span>
               )}
             </>
@@ -267,8 +269,8 @@ function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => voi
       <Link to={`/assets/${asset.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
         <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: asset.color }} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-semibold">{asset.name}</span>
-          <span className="block truncate text-sm text-muted">
+          <span className="block font-semibold sm:truncate">{asset.name}</span>
+          <span className="block text-sm text-muted sm:truncate">
             {ASSET_KIND_LABELS[asset.kind]}
             {asset.linkedLoanAccountId !== null && asset.equityCents !== null && (
               <>

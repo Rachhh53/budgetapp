@@ -20,7 +20,6 @@ import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker, TextPicker } from "../Picker";
-import { Segmented } from "../Segmented";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { FREQUENCY_LABELS, WEEKEND_LABELS } from "./schedule";
 
@@ -31,8 +30,8 @@ type MatchChoice = "none" | MatchMode;
 
 const MATCH_OPTIONS: readonly { value: MatchChoice; label: string }[] = [
   { value: "none", label: "No match" },
-  { value: "fixed", label: "Same amount" },
-  { value: "formula", label: "Share of what I put in" },
+  { value: "fixed", label: "The same amount every paycheck" },
+  { value: "formula", label: "A share of what I put in" },
 ];
 
 /** The most that can be matched, as the backend takes it: 1,000% of a contribution, up to all of gross pay. */
@@ -401,7 +400,24 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         <fieldset className="space-y-3 rounded-lg border border-line p-4">
           <legend className="px-1 font-semibold">Employer match</legend>
           <p className="text-sm text-muted">What your employer adds to a retirement account with each paycheck, on top of what you put in.</p>
-          <Segmented legend="Does your employer add anything?" options={MATCH_OPTIONS} value={matchChoice} onChange={setMatchChoice} />
+          {/* A dropdown, not a row of segments: three choices leave one stranded on a row of its own on a phone. */}
+          <div>
+            <label htmlFor={`${id}-match-choice`} className={LABEL}>
+              Does your employer add anything?
+            </label>
+            <select
+              id={`${id}-match-choice`}
+              value={matchChoice}
+              onChange={(event) => setMatchChoice(event.target.value as MatchChoice)}
+              className={INPUT}
+            >
+              {MATCH_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
           {matchChoice !== "none" && (
             <div>
               <Picker

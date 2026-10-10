@@ -238,8 +238,8 @@ describe("income screen: employer match", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const match = within(dialog).getByRole("group", { name: "Employer match" });
-    expect(within(match).getByRole("radio", { name: "No match" })).toBeChecked();
-    await userEvent.click(within(match).getByRole("radio", { name: "Share of what I put in" }));
+    expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("none");
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A share of what I put in");
     // Checking is not offered: a match only goes into an investment account.
     await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "every{Enter}");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -266,9 +266,9 @@ describe("income screen: employer match", () => {
     let dialog = screen.getByRole("dialog", { name: "Edit income source" });
     let match = within(dialog).getByRole("group", { name: "Employer match" });
     // The form opens on the match as it is.
-    expect(within(match).getByRole("radio", { name: "Share of what I put in" })).toBeChecked();
+    expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("formula");
     expect(within(match).getByLabelText("They match (%)")).toHaveValue("50.00");
-    await userEvent.click(within(match).getByRole("radio", { name: "Same amount" }));
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "The same amount every paycheck");
     await userEvent.type(within(match).getByRole("textbox", { name: "Match per paycheck" }), "75");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -279,7 +279,7 @@ describe("income screen: employer match", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit Brightwater Health" }));
     dialog = screen.getByRole("dialog", { name: "Edit income source" });
     match = within(dialog).getByRole("group", { name: "Employer match" });
-    await userEvent.click(within(match).getByRole("radio", { name: "No match" }));
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "No match");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")).toHaveLength(2));
     expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[1]).toMatchObject({ match: null });
@@ -293,7 +293,7 @@ describe("income screen: employer match", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit Brightwater Health" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
     const match = within(dialog).getByRole("group", { name: "Employer match" });
-    await userEvent.click(within(match).getByRole("radio", { name: "Share of what I put in" }));
+    await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A share of what I put in");
     await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "bright{Enter}");
     await userEvent.type(within(match).getByLabelText("They match (%)"), "50");
     await userEvent.type(within(match).getByLabelText("Up to (% of gross pay)"), "6");
