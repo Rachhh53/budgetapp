@@ -65,6 +65,9 @@ Produces one per-user NSIS installer (no admin rights) under
 and the UI. Before bundling, the script starts the packaged backend once and stops the build if
 it does not come up and serve the UI.
 
+The build compiles the small Rust shell with `rustc`, which is the step that uses the most memory
+(about 2 GB at its peak). It runs only during the build, never in the installed app.
+
 ## Installing, test installs and your data
 
 You can install Budget now to try it and install a newer build later, but they are not two
