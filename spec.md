@@ -567,7 +567,7 @@ Sums in money fields (decided 2026-10-09 with Rachel):
 
 ### Phase 4 — Investments, home, net worth (`milestone/4-investments-networth`)
 
-**Status: complete on this branch as of 2026-10-09**, waiting for Rachel to confirm. Branched from Phase 3 and rebased onto `main` once that was merged. Verified with 125 engine, 348 server and 260 frontend tests passing.
+**Status: complete on this branch as of 2026-10-09**, waiting for Rachel to confirm. Branched from Phase 3 and rebased onto `main` once that was merged. Verified with 125 engine, 348 server and 261 frontend tests passing.
 
 Decided with Rachel before building (2026-10-09): the employer match is a single tier; assets are a home, vehicles and "something else", with a growth rate of zero or more and no depreciation; the three Phase 3 leftovers were done first on this branch (interest on the day of an entered balance, §5.4; the 375px check by eye; the grouped layout on the remaining forms).
 
