@@ -233,6 +233,15 @@ describe("accounts screen", () => {
     expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
   });
 
+  it("says Open on every account, so the way into its page is not a guess", async () => {
+    fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
+    renderApp("/accounts");
+
+    const row = await screen.findByRole("link", { name: /Everyday Checking/ });
+    expect(row).toHaveTextContent(/Open$/);
+    expect(row).toHaveAttribute("href", `/accounts/${CHECKING.id}`);
+  });
+
   it("has an Edit button on every account, which opens it for changing without leaving the list", async () => {
     fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
     renderApp("/accounts");

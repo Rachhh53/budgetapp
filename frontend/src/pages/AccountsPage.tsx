@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { type Account, holdsCash, useAccounts } from "../api/accounts";
@@ -208,7 +209,7 @@ function AccountGroup({
 function AccountRow({ account, today, onEdit }: { account: Account; today: AccountBalance | undefined; onEdit: (id: number) => void }) {
   return (
     <li className="flex items-center gap-2">
-      <Link to={`/accounts/${account.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
+      <Link to={`/accounts/${account.id}`} className={ROW_LINK}>
         <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
         <span className="min-w-0 flex-1">
           <span className="block font-semibold sm:truncate">{account.name}</span>
@@ -238,9 +239,33 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
             <span className="text-sm text-muted">No balance yet</span>
           )}
         </span>
+        <OpenCue />
       </Link>
       <EditButton name={account.name} onClick={() => onEdit(account.id)} labelled />
     </li>
+  );
+}
+
+/**
+ * A row that opens its page. The hand cursor and the highlight are set outright, since inside
+ * the desktop shell a link shows neither by itself; the Open cue is what says so before any hover.
+ */
+const ROW_LINK =
+  "group -mx-2 flex min-h-11 min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-3 hover:bg-bg/60";
+
+/**
+ * Says in words that the row opens: its page is where balances, rates and history live, and a
+ * name that happens to be clickable was not discoverable (Rachel, 2026-10-10). It sits inside
+ * the row's link, looking like the button it acts as. On a phone it takes a line of its own.
+ */
+function OpenCue() {
+  return (
+    <span className="flex basis-full justify-end sm:basis-auto">
+      <span className="inline-flex min-h-9 items-center gap-1 rounded-lg border border-line px-2.5 text-sm font-semibold text-accent-ink group-hover:border-(--accent)">
+        Open
+        <ChevronRight aria-hidden className="size-4" />
+      </span>
+    </span>
   );
 }
 
@@ -266,7 +291,7 @@ function AssetGroup({ assets, onEdit, wide }: { assets: Asset[]; onEdit: (id: nu
 function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => void }) {
   return (
     <li className="flex items-center gap-2">
-      <Link to={`/assets/${asset.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
+      <Link to={`/assets/${asset.id}`} className={ROW_LINK}>
         <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: asset.color }} />
         <span className="min-w-0 flex-1">
           <span className="block font-semibold sm:truncate">{asset.name}</span>
@@ -292,6 +317,7 @@ function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => voi
             <span className="text-sm text-muted">No value yet</span>
           )}
         </span>
+        <OpenCue />
       </Link>
       <EditButton name={asset.name} onClick={() => onEdit(asset.id)} labelled />
     </li>
