@@ -24,11 +24,72 @@ export interface Schedule {
 
 export interface Deduction {
   name: string;
+  /** What it takes out of one paycheck. For a share of pay, the backend works it out from the gross amount. */
   amountCents: number;
   /** `null` when the money does not go to one of the user's accounts. */
   toAccountId: number | null;
+  /** Set when it was given as a share of gross pay (6% is 600); `null` for a dollar amount. */
+  percentBp: number | null;
 }
 
+/** A deduction as it is sent: a dollar amount, or a share of gross pay, never both. */
+export type DeductionInput =
+  | { name: string; toAccountId: number | null; amountCents: number }
+  | { name: string; toAccountId: number | null; percentBp: number };
+
+export const MATCH_MODES = ["fixed", "formula"] as const;
+export type MatchMode = (typeof MATCH_MODES)[number];
+
+/** What the employer adds with each paycheck. Rates are basis points: 50% up to 6% of pay is 5000 and 600. */
+export interface EmployerMatch {
+  /** The investment account the match is paid into. */
+  toAccountId: number;
+  mode: MatchMode;
+  /** The amount every paycheck; set exactly when `mode` is `fixed`. */
+  fixedCents: number | null;
+  /** The share of what is contributed that is matched; for `formula`. */
+  matchBp: number | null;
+  /** The share of gross pay beyond which contributions are not matched; for `formula`. */
+  capBpOfGross: number | null;
+  /**
+   * There is no gross amount to check against, and the user confirmed that what they put in is
+   * within that share, so all of it is matched. Always false once gross pay is entered.
+   */
+  contributionWithinCap: boolean;
+}
+
+/** What a match comes to per paycheck, worked out by the backend. */
+export interface MatchFigures {
+  perPaycheckCents: number;
+  /** What the employer would add if contributions reached the cap. */
+  mostPossibleCents: number;
+  /** How much more to contribute per paycheck to earn all of it; zero at or over the cap. */
+  contributeMoreCents: number;
+}
+
+/**
+ * What a source's paychecks come to from a date on: the amounts it started with, or a later
+ * change of pay (a raise). A paycheck uses the latest one dated on or before its payday.
+ */
+export interface PayTerms {
+  /** The change of pay; `null` for the amounts the source started with. */
+  id: number | null;
+  /** The first day these apply; `null` for the amounts the source started with. */
+  effectiveDate: string | null;
+  grossCents: number | null;
+  netCents: number;
+  netIsEstimate: boolean;
+  deductions: Deduction[];
+  match: EmployerMatch | null;
+  matchFigures: MatchFigures | null;
+  /** These are the amounts in force today. */
+  current: boolean;
+}
+
+/**
+ * An income source. Its amounts (gross, net, deductions, match) are the ones in force today;
+ * `payHistory` has every set of amounts it has had or will have, oldest first.
+ */
 export interface IncomeSource {
   id: number;
   name: string;
@@ -41,9 +102,31 @@ export interface IncomeSource {
   primary: boolean;
   schedule: Schedule;
   deductions: Deduction[];
+  /** `null` when the employer adds nothing. */
+  match: EmployerMatch | null;
+  /** `null` without a match. */
+  matchFigures: MatchFigures | null;
+  payHistory: PayTerms[];
 }
 
-export type IncomeSourceInput = Omit<IncomeSource, "id">;
+export type IncomeSourceInput = Omit<IncomeSource, "id" | "matchFigures" | "deductions" | "payHistory"> & {
+  deductions: DeductionInput[];
+  /**
+   * Only when changing a source: the amounts are a change of pay from this day on (a raise),
+   * and earlier paychecks keep what they had. Left out, the amounts in force today are corrected.
+   */
+  effectiveFrom?: string;
+  /** Only when changing, without `effectiveFrom`: correct the amounts the source started with instead. */
+  originalAmounts?: boolean;
+};
+
+/** Money a paycheck puts straight into another account: a deduction that names one, or the employer's match. */
+export interface Contribution {
+  toAccountId: number;
+  label: string;
+  kind: "contribution" | "employer_match";
+  amountCents: number;
+}
 
 export interface Paycheck {
   incomeSourceId: number;
@@ -58,6 +141,8 @@ export interface Paycheck {
   estimate: boolean;
   /** What the app showed before the amount was typed over; `null` if untouched. */
   projectedCents: number | null;
+  /** What goes straight to other accounts with this paycheck, never passing through the deposit account. */
+  contributions: Contribution[];
 }
 
 export interface PayPeriod {
@@ -128,6 +213,39 @@ export function useDeleteIncomeSource(id: number) {
   const refresh = useRefreshIncome();
   return useMutation({
     mutationFn: () => api.delete<{ done: boolean }>(`/api/income-sources/${id}`),
+    onSuccess: refresh,
+  });
+}
+
+/**
+ * What a source brings home in this calendar year, counting each paycheck in the year it
+ * arrives. Raises and typed-over paychecks are already in the figures.
+ */
+export interface IncomeThisYear {
+  year: number;
+  /** Take-home from the paychecks that have arrived, today's included. */
+  soFarCents: number;
+  paychecksSoFar: number;
+  /** Take-home from every paycheck of the year, those still to come included. */
+  wholeYearCents: number;
+  paychecksInYear: number;
+  /** At least one paycheck still to come is an estimate. */
+  estimate: boolean;
+}
+
+/** Kept under the pay key, so it follows every change to a schedule, an amount or a single paycheck. */
+export function useIncomeThisYear(sourceId: number) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "income-this-year", sourceId],
+    queryFn: () => api.get<IncomeThisYear>(`/api/income-sources/${sourceId}/this-year`),
+  });
+}
+
+/** Removes one change of pay, so the amounts before it carry on. */
+export function useDeletePayChange(sourceId: number) {
+  const refresh = useRefreshIncome();
+  return useMutation({
+    mutationFn: (changeId: number) => api.delete<IncomeSource>(`/api/income-sources/${sourceId}/pay-changes/${changeId}`),
     onSuccess: refresh,
   });
 }

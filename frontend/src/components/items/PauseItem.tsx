@@ -6,11 +6,12 @@ import { BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /**
  * Stops an item for a while without ending it: until a date, or until it is turned back on.
- * It acts straight away, on its own, so nothing else typed in the form is saved by it.
+ * It acts straight away, on its own. These are the controls alone, for whatever frames them:
+ * a card on the item's page, or a section of the bucket form.
  */
-export function PauseItem({ item: opened }: { item: Item }) {
+export function PauseControls({ item: opened }: { item: Item }) {
   const id = useId();
-  // The form holds the item as it was when opened; pausing changes it, so read it as it is now.
+  // Whoever shows this may hold the item as it was when opened; pausing changes it, so read it as it is now.
   const item = useItems().data?.find((candidate) => candidate.id === opened.id) ?? opened;
   const pause = usePauseItem(item.id);
   const resume = useResumeItem(item.id);
@@ -18,7 +19,7 @@ export function PauseItem({ item: opened }: { item: Item }) {
   const failure = pause.error?.message ?? resume.error?.message;
 
   return (
-    <FormSection title="Pause">
+    <div className="space-y-4">
       {item.paused ? (
         <>
           <p role="status" className="font-semibold">
@@ -66,6 +67,15 @@ export function PauseItem({ item: opened }: { item: Item }) {
           {failure}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The pause controls as a section of a form. Nothing else typed in that form is saved by them. */
+export function PauseItem({ item }: { item: Item }) {
+  return (
+    <FormSection title="Pause">
+      <PauseControls item={item} />
     </FormSection>
   );
 }

@@ -65,6 +65,9 @@ Produces one per-user NSIS installer (no admin rights) under
 and the UI. Before bundling, the script starts the packaged backend once and stops the build if
 it does not come up and serve the UI.
 
+The build compiles the small Rust shell with `rustc`, which is the step that uses the most memory
+(about 2 GB at its peak). It runs only during the build, never in the installed app.
+
 ## Installing, test installs and your data
 
 You can install Budget now to try it and install a newer build later, but they are not two
@@ -111,6 +114,13 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT, DELETE | `/api/items/{id}/pause` | pause a recurring item from today, `{ until? }` (the first day it runs again; left out to pause until resumed); DELETE resumes it today. Paused dates never happen, even after resuming |
 | GET | `/api/account-balances` | what every account holds at the end of today (`balanceCents`) and what of it is outside buckets (`availableCents`): the last balance entered plus everything since, or built up from nothing when none was entered |
 | GET | `/api/accounts/{id}/transactions` | what moved the account, newest first: paychecks, recurring items, one-off entries, transfers arriving, estimated interest and balances entered, each `{ date, label, kind, amountCents, unpaid }`; optional `from`, `to` (default: this year so far through the next month) |
+| PUT | `/api/account-balances` | enter balances for several accounts on one day `{ date, balances: [{ accountId, amountCents }] }`, as one change that Undo takes back together; `{ saved }` |
+| GET | `/api/accounts/{id}/performance` | `thisYear` `{ since, startCents, nowCents, changeCents, depositsCents, growthCents }` and, for each balance entered, its change since the one before, what was put in between them and the rest (growth) |
+| GET, POST | `/api/assets` | a home, vehicle or anything else owned, with today's value, what is owed on its linked loan and equity; add `{ name, kind, color, appreciationBp?, linkedLoanAccountId?, valueCents?, valueDate? }`. `kind` is `home`, `vehicle` or `other`; `appreciationBp` is an assumed yearly growth, zero or more |
+| GET, PUT, DELETE | `/api/assets/{id}` | one asset with every value entered; change or archive; delete |
+| POST | `/api/assets/{id}/values` | enter a value `{ date, valueCents }`; the same day again replaces it |
+| DELETE | `/api/assets/{id}/values/{valueId}` | remove one value |
+| GET | `/api/net-worth` | today: `{ date, netWorthCents, assetsCents, liabilitiesCents, cashCents, investmentsCents, propertyCents, cardsCents, loansCents }`, every part a positive amount |
 | GET | `/api/accounts/{id}/projection` | the balance, and what is available after buckets, at each pay period's end; optional `from`, `to` |
 | PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
 | POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |
@@ -121,8 +131,10 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/buckets/{id}/changes/{changeId}` | remove one of those |
 | POST | `/api/accounts/{id}/balances` | enter a balance `{ date, amountCents, note? }`; the same day again replaces it |
 | DELETE | `/api/accounts/{id}/balances/{entryId}` | remove one entry |
-| GET, POST | `/api/income-sources` | list; add `{ name, depositAccountId, netCents, grossCents?, netIsEstimate?, primary?, schedule, deductions? }` |
-| PUT, DELETE | `/api/income-sources/{id}` | change; delete (the primary one only when it is the last) |
+| GET, POST | `/api/income-sources` | list; add `{ name, depositAccountId, netCents, grossCents?, netIsEstimate?, primary?, schedule, deductions?, match? }`. `match` is the employer match, paid into an investment account: `{ toAccountId, mode: "fixed", fixedCents }` or `{ toAccountId, mode: "formula", matchBp, capBpOfGross }` (50% up to 6% of gross is 5000 and 600; without `grossCents` it also needs `contributionWithinCap: true`, the user's confirmation that what they put in is within that share, and all of it is then matched). Each deduction is `{ name, toAccountId?, amountCents }` or `{ name, toAccountId?, percentBp }`, a share of gross pay (6% is 600; needs `grossCents`) that comes back with the `amountCents` it works out to. Each source comes back with `matchFigures` `{ perPaycheckCents, mostPossibleCents, contributeMoreCents }` |
+| PUT, DELETE | `/api/income-sources/{id}` | change; delete (the primary one only when it is the last). The amounts sent (`grossCents`, `netCents`, `netIsEstimate`, `deductions`, `match`) correct the ones in force today, unless the body says otherwise: `effectiveFrom` (a date) makes them a change of pay from that day on — a raise — with earlier paychecks keeping theirs, and `originalAmounts: true` corrects the amounts the source started with. Each source comes back with the amounts in force today and `payHistory`, every set oldest first: `{ id, effectiveDate, grossCents, netCents, netIsEstimate, deductions, match, matchFigures, current }` (`id` and `effectiveDate` are null for the amounts it started with) |
+| DELETE | `/api/income-sources/{id}/pay-changes/{changeId}` | remove one change of pay, so the amounts before it carry on; returns the source |
+| GET | `/api/income-sources/{id}/this-year` | what the source brings home this calendar year: `{ year, soFarCents, paychecksSoFar, wholeYearCents, paychecksInYear, estimate }` — paychecks that have arrived (today's included) and every paycheck of the year, each counted in the year it arrives |
 | PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
 | GET | `/api/paychecks` | paychecks, today to the horizon; optional `from`, `to` |
 | GET | `/api/pay-periods` | pay periods from the primary source, each with its projected ending balance; optional `from`, `to` |

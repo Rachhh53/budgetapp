@@ -15,9 +15,11 @@ const SHOWN = 8;
  * moved one. Any amount can be typed over — "just this one" — and stops being an estimate
  * once it has been.
  */
-export function UpcomingPaychecks() {
+export function UpcomingPaychecks({ sourceId }: { /** Only this source's paychecks; every source's when left out. */ sourceId?: number }) {
   const paychecks = usePaychecks();
-  const upcoming = (paychecks.data ?? []).slice(0, SHOWN);
+  const upcoming = (paychecks.data ?? [])
+    .filter((paycheck) => sourceId === undefined || paycheck.incomeSourceId === sourceId)
+    .slice(0, SHOWN);
 
   return (
     <Card title="Upcoming paychecks">

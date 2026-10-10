@@ -90,7 +90,7 @@ export interface BucketMove {
   itemId: number | null;
 }
 
-/** A month's estimated interest arriving in an account. */
+/** A month's estimated interest arriving in a checking or savings account, or a month's assumed growth in an investment. */
 export interface InterestLine {
   accountId: number;
   date: string;
@@ -157,7 +157,7 @@ export function useAccountBalances() {
 export interface AccountTransaction {
   date: string;
   label: string;
-  /** `paycheck`, `interest`, `balance`, or the kind of the recurring item or one-off entry. */
+  /** `paycheck`, `contribution`, `employer_match`, `interest`, `growth`, `balance`, or the kind of the recurring item or one-off entry. */
   kind: string;
   /** What it did to the balance, signed; for `balance`, the balance that was entered. */
   amountCents: number;

@@ -132,7 +132,7 @@ class BucketProjectorTest {
     }
 
     private static InterestCredit credit(String day, long cents, long balanceCents) {
-        return new InterestCredit(date(day), cents(cents), cents(balanceCents), BasisPoints.of(410));
+        return new InterestCredit(date(day), cents(cents), cents(balanceCents), BasisPoints.of(410), false);
     }
 
     private static PayPeriod period(String start, String end) {

@@ -216,6 +216,9 @@ describe("account detail screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit account" }));
     const dialog = screen.getByRole("dialog", { name: "Edit account" });
+    for (const section of ["What it is", "How it looks", "Warnings and interest", "About this account"]) {
+      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
+    }
     const name = within(dialog).getByLabelText("Name");
     await userEvent.clear(name);
     await userEvent.type(name, "Household Checking");
@@ -723,6 +726,15 @@ describe("account detail screen", () => {
       await userEvent.click(within(interest).getByRole("button", { name: "Edit interest" }));
       return screen.getByRole("dialog", { name: "Edit interest — Rainy Day Savings" });
     }
+
+    it("groups the form into the rate, and when and where it goes", async () => {
+      fakeBackend(SETTINGS_ROUTES);
+      renderApp("/accounts/1");
+
+      const dialog = await editInterest();
+      expect(within(within(dialog).getByRole("group", { name: "Rate" })).getByLabelText("APY (%)")).toHaveClass("text-2xl");
+      expect(within(within(dialog).getByRole("group", { name: "When and where it goes" })).getByLabelText("Credited on")).toBeInTheDocument();
+    });
 
     it("shows the rate, when it is credited and where it goes, with one Edit for all of it", async () => {
       fakeBackend(SETTINGS_ROUTES);

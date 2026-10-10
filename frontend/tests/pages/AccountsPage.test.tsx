@@ -189,14 +189,23 @@ describe("accounts screen", () => {
     expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
   });
 
-  it("has an Edit button on every account, which opens it for changing without leaving the list", async () => {
+  it("shows each account as a row that opens: a link with the hand cursor set outright", async () => {
     fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
     renderApp("/accounts");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Everyday Checking" }));
+    const row = await screen.findByRole("link", { name: /Everyday Checking/ });
+    // The desktop shell gives a link no hand cursor by itself, so the row asks for one.
+    expect(row).toHaveClass("cursor-pointer");
+    expect(row).toHaveAttribute("href", `/accounts/${CHECKING.id}`);
+  });
 
-    const dialog = screen.getByRole("dialog", { name: "Edit account" });
-    expect(within(dialog).getByLabelText("Name")).toHaveValue("Everyday Checking");
+  it("keeps a row to one job, opening the account: editing starts on its page", async () => {
+    fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
+    renderApp("/accounts");
+
+    const group = await screen.findByRole("region", { name: "Checking & savings" });
+    expect(within(group).getByRole("link", { name: /Everyday Checking/ })).toBeInTheDocument();
+    expect(within(group).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("starts a new account on a color no other account uses", async () => {

@@ -14,10 +14,15 @@ import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Accounts and what the user enters for them: {@code /api/accounts}, {@code /api/accounts/{id}},
- * and under it {@code /balances}, {@code /interest} and {@code /rates}.
+ * and under it {@code /balances}, {@code /interest} and {@code /rates}; and
+ * {@code PUT /api/account-balances}, which enters several accounts' balances in one go.
  */
 public final class AccountsRoutes {
 
@@ -26,6 +31,9 @@ public final class AccountsRoutes {
 
     /** 1,000%: beyond any real rate, and a typo (4.10 entered as 410) still fits so it can be shown and fixed. */
     private static final int MAX_RATE_BP = 100_000;
+
+    /** More accounts than anyone keeps; only there to stop a runaway request. */
+    private static final int MAX_BALANCES = 200;
 
     private final AccountsRepository accounts;
     private final InterestRepository interest;
@@ -53,6 +61,7 @@ public final class AccountsRoutes {
         routes.put("/api/accounts/{id}/interest", this::saveInterest);
         routes.post("/api/accounts/{id}/rates", this::saveRate);
         routes.delete("/api/accounts/{id}/rates/{rateId}", this::deleteRate);
+        routes.put("/api/account-balances", this::saveBalances);
     }
 
     /** Request body for creating or changing an account. */
@@ -74,6 +83,13 @@ public final class AccountsRoutes {
     /** Request body for a rate, in basis points (4.10% is 410), from a date on. */
     public record RateInput(Integer rateBp, LocalDate effectiveDate) {}
 
+    /** Request body for entering several accounts' balances for one day. */
+    public record BalancesInput(LocalDate date, List<AccountBalanceInput> balances) {}
+
+    public record AccountBalanceInput(Long accountId, Long amountCents) {}
+
+    public record Saved(int saved) {}
+
     public record Deleted(boolean deleted) {}
 
     private void create(Context ctx) {
@@ -90,6 +106,10 @@ public final class AccountsRoutes {
         if (!fields.type().holdsCash() && buckets.all().stream().anyMatch(bucket -> bucket.accountId() == id)) {
             throw ApiException.conflict(
                     "This account has buckets, which only checking and savings accounts can hold. Remove the buckets first.");
+        }
+        if (fields.type() != AccountType.INVESTMENT && accounts.receivesEmployerMatch(id)) {
+            throw ApiException.conflict(
+                    "An employer match is paid into this account, which only an investment account can take. Change the match on the Income screen first.");
         }
         accounts.update(id, fields);
         ApiResponse.ok(ctx, detail(id));
@@ -128,6 +148,39 @@ public final class AccountsRoutes {
         }
         accounts.saveBalance(id, input.date(), amount, note);
         ApiResponse.send(ctx, 201, detail(id));
+    }
+
+    /**
+     * "Update balances": the real numbers for several accounts on one day, saved together so one
+     * Undo takes them all back. Nothing is saved unless every line is in order.
+     */
+    private void saveBalances(Context ctx) {
+        BalancesInput input = Inputs.body(ctx, BalancesInput.class);
+        if (input.date() == null) {
+            throw ApiException.badRequest("Please choose the date these balances are from.");
+        }
+        if (input.date().isAfter(LocalDate.now(clock)) || !Inputs.inSupportedYears(input.date())) {
+            throw ApiException.badRequest("A balance needs a date of today or earlier.");
+        }
+        if (input.balances() == null || input.balances().isEmpty() || input.balances().contains(null)) {
+            throw ApiException.badRequest("Please enter a balance for at least one account.");
+        }
+        if (input.balances().size() > MAX_BALANCES) {
+            throw ApiException.badRequest("That is more balances than can be saved at once. Please enter them in smaller groups.");
+        }
+        List<AccountsRepository.NewBalance> balances = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (AccountBalanceInput balance : input.balances()) {
+            if (balance.accountId() == null || !accounts.exists(balance.accountId())) {
+                throw ApiException.badRequest("One of those accounts could not be found. Please reload and try again.");
+            }
+            if (!seen.add(balance.accountId())) {
+                throw ApiException.badRequest("Each account can have one balance for a day. Please enter each account once.");
+            }
+            balances.add(new AccountsRepository.NewBalance(balance.accountId(), Inputs.signedAmount(balance.amountCents(), "A balance")));
+        }
+        accounts.saveBalances(input.date(), balances);
+        ApiResponse.ok(ctx, new Saved(balances.size()));
     }
 
     private void deleteBalance(Context ctx) {

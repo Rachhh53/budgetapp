@@ -14,6 +14,7 @@ import { centsToInput, parseDollars } from "../../lib/money";
 import { parseRate } from "../../lib/rates";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
+import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { TextPicker } from "../Picker";
@@ -109,108 +110,115 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
   return (
     <Modal title={account ? "Edit account" : "Add an account"} icon={Landmark} tone={account?.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <div>
-          <label htmlFor={`${id}-name`} className={LABEL}>
-            Name
-          </label>
-          <input
-            id={`${id}-name`}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            maxLength={80}
-            required
-            autoComplete="off"
-            className={INPUT}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormSection title="What it is">
           <div>
-            <label htmlFor={`${id}-type`} className={LABEL}>
-              Kind of account
+            <label htmlFor={`${id}-name`} className={LABEL}>
+              Name
             </label>
-            <select
-              id={`${id}-type`}
-              value={type}
-              onChange={(event) => setType(event.target.value as AccountType)}
+            <input
+              id={`${id}-name`}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={80}
+              required
+              autoComplete="off"
               className={INPUT}
-            >
-              {ACCOUNT_TYPES.map((option) => (
-                <option key={option} value={option}>
-                  {TYPE_LABELS[option]}
-                </option>
-              ))}
-            </select>
+            />
           </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor={`${id}-type`} className={LABEL}>
+                Kind of account
+              </label>
+              <select
+                id={`${id}-type`}
+                value={type}
+                onChange={(event) => setType(event.target.value as AccountType)}
+                className={INPUT}
+              >
+                {ACCOUNT_TYPES.map((option) => (
+                  <option key={option} value={option}>
+                    {TYPE_LABELS[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <TextPicker
+              label="Label (optional)"
+              noun="label"
+              placeholder="e.g. 401(k), Mortgage"
+              suggestions={labels}
+              value={subtypeLabel}
+              onChange={setSubtypeLabel}
+            />
+          </div>
+
           <TextPicker
-            label="Label (optional)"
-            noun="label"
-            placeholder="e.g. 401(k), Mortgage"
-            suggestions={labels}
-            value={subtypeLabel}
-            onChange={setSubtypeLabel}
+            label="Bank or institution (optional)"
+            noun="bank"
+            placeholder="Choose or type a bank"
+            suggestions={institutions}
+            value={institution}
+            onChange={setInstitution}
           />
-        </div>
+        </FormSection>
 
-        <TextPicker
-          label="Bank or institution (optional)"
-          noun="bank"
-          placeholder="Choose or type a bank"
-          suggestions={institutions}
-          value={institution}
-          onChange={setInstitution}
-        />
-
-        <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
+        <FormSection title="How it looks">
+          <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
+        </FormSection>
 
         {holdsCash(type) && (
-          <MoneyField
-            label="Warn me when the balance dips below (optional)"
-            value={lowBalance}
-            onChange={setLowBalance}
-            hint="Pay periods where it is projected to go lower are flagged. Leave empty for no warning."
-          />
+          <FormSection title="Warnings and interest">
+            <MoneyField
+              label="Warn me when the balance dips below (optional)"
+              value={lowBalance}
+              onChange={setLowBalance}
+              hint="Pay periods where it is projected to go lower are flagged. Leave empty for no warning."
+            />
+
+            {account ? (
+              <p className={HINT}>
+                Interest rate: add or change it under <span className="font-semibold">Interest</span> on this account's page, where its
+                history is kept.
+              </p>
+            ) : (
+              <div>
+                <label htmlFor={`${id}-apy`} className={LABEL}>
+                  Interest rate, APY % (optional)
+                </label>
+                <input
+                  id={`${id}-apy`}
+                  value={apy}
+                  onChange={(event) => setApy(event.target.value)}
+                  inputMode="decimal"
+                  autoComplete="off"
+                  placeholder="e.g. 4.10"
+                  className={INPUT}
+                />
+                <p className={HINT}>
+                  With a rate, each month's interest is projected as an estimate. You can change it later on the account's page.
+                </p>
+              </div>
+            )}
+          </FormSection>
         )}
 
-        {holdsCash(type) &&
-          (account ? (
-            <p className={HINT}>
-              Interest rate: add or change it under <span className="font-semibold">Interest</span> on this account's page, where its
-              history is kept.
-            </p>
-          ) : (
-            <div>
-              <label htmlFor={`${id}-apy`} className={LABEL}>
-                Interest rate, APY % (optional)
-              </label>
-              <input
-                id={`${id}-apy`}
-                value={apy}
-                onChange={(event) => setApy(event.target.value)}
-                inputMode="decimal"
-                autoComplete="off"
-                placeholder="e.g. 4.10"
-                className={INPUT}
-              />
-              <p className={HINT}>
-                With a rate, each month's interest is projected as an estimate. You can change it later on the account's page.
-              </p>
-            </div>
-          ))}
-
         {account && (
-          <div>
-            <label className="flex min-h-11 items-center gap-3">
-              <input
-                type="checkbox"
-                checked={archived}
-                onChange={(event) => setArchived(event.target.checked)}
-                className="size-5 accent-(--accent)"
-              />
-              <span className="font-medium">Archived</span>
-            </label>
-            <p className={HINT}>An archived account keeps its history but is tucked away at the bottom of the list.</p>
-          </div>
+          <FormSection title="About this account">
+            <div>
+              <label className="flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={archived}
+                  onChange={(event) => setArchived(event.target.checked)}
+                  className="size-5 accent-(--accent)"
+                />
+                <span className="font-medium">Archived</span>
+              </label>
+              <p className={HINT}>An archived account keeps its history but is tucked away at the bottom of the list.</p>
+            </div>
+          </FormSection>
         )}
 
         {failure && (

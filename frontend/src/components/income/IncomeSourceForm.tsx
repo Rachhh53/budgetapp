@@ -2,17 +2,21 @@ import { Banknote, Trash2 } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import {
+  type DeductionInput,
   type IncomeSource,
   type IncomeSourceInput,
+  type MatchMode,
   PAY_FREQUENCIES,
+  type PayTerms,
   type PayFrequency,
   useDeleteIncomeSource,
   useSaveIncomeSource,
   WEEKEND_RULES,
   type WeekendRule,
 } from "../../api/income";
-import { todayIso } from "../../lib/dates";
-import { centsToInput, parseDollars } from "../../lib/money";
+import { formatDate, todayIso } from "../../lib/dates";
+import { centsToInput, formatCents, parseDollars } from "../../lib/money";
+import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
@@ -23,28 +27,74 @@ import { FREQUENCY_LABELS, WEEKEND_LABELS } from "./schedule";
 
 const DEDUCTION_SUGGESTIONS = ["401(k)", "Roth 401(k)", "403(b)", "HSA", "FSA", "Pension"] as const;
 
+/** Whether the employer adds anything, and how it is worked out. */
+type MatchChoice = "none" | MatchMode;
+
+const MATCH_OPTIONS: readonly { value: MatchChoice; label: string }[] = [
+  { value: "none", label: "No match" },
+  // The usual way a match is written comes first: "100% up to 6%".
+  { value: "formula", label: "A percentage of what I put in" },
+  { value: "fixed", label: "The same dollar amount every paycheck" },
+];
+
+/** How a deduction is given: dollars a paycheck, or a share of gross pay. */
+type DeductionUnit = "dollars" | "percent";
+
+const GROSS_NEEDED_FOR_PERCENT =
+  "A deduction given as a percent of your pay needs the gross amount per paycheck. Please fill that in as well.";
+
+/** The most that can be matched, as the backend takes it: 1,000% of a contribution, up to all of gross pay. */
+const MAX_MATCH_BP = 100_000;
+const MAX_CAP_BP = 10_000;
+
 interface DeductionRow {
   /** Stable key for React; never sent to the backend. */
   key: number;
   name: string;
+  unit: DeductionUnit;
+  /** The dollars typed, when `unit` is dollars. */
   amount: string;
+  /** The percent of gross pay typed, when `unit` is percent. */
+  percent: string;
   toAccountId: string | null;
 }
 
 interface IncomeSourceFormProps {
   /** The source being changed; leave out to add a new one. */
   source?: IncomeSource;
+  /**
+   * One entry of the source's pay history to change in place, instead of the amounts in force
+   * today: the form opens on its amounts and saves back to it.
+   */
+  terms?: PayTerms;
+  /** Open with "My pay changes from a date" already chosen: recording a raise. */
+  startAsPayChange?: boolean;
   /** Whether any income source exists yet. The first one always sets the pay periods. */
   isFirst: boolean;
   accounts: readonly Account[];
   onClose: () => void;
+  /** Called after the source was deleted, so the caller can leave its screen. */
+  onDeleted?: () => void;
 }
 
 /** Add or change an income source: who pays, when, how much, and where it goes. */
-export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeSourceFormProps) {
+export function IncomeSourceForm({
+  source,
+  terms,
+  startAsPayChange = false,
+  isFirst,
+  accounts,
+  onClose,
+  onDeleted,
+}: IncomeSourceFormProps) {
   const id = useId();
   const save = useSaveIncomeSource(source?.id);
   const schedule = source?.schedule;
+  // The amounts the form opens on: the history entry asked for, or the ones in force today.
+  const pay = terms ?? source;
+  // Whether saving corrects amounts already in use, or starts new ones from a date (a raise).
+  const [timing, setTiming] = useState<"correct" | "from_date">(startAsPayChange ? "from_date" : "correct");
+  const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
 
   const [name, setName] = useState(source?.name ?? "");
   const [depositAccountId, setDepositAccountId] = useState<string | null>(
@@ -58,26 +108,40 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
     schedule && schedule.manualDates.length > 0 ? schedule.manualDates : ["", ""],
   );
   const [weekendRule, setWeekendRule] = useState<WeekendRule>(schedule?.weekendRule ?? "previous_business_day");
-  const [net, setNet] = useState(source ? centsToInput(source.netCents) : "");
-  const [netIsEstimate, setNetIsEstimate] = useState(source?.netIsEstimate ?? false);
-  const [gross, setGross] = useState(source?.grossCents != null ? centsToInput(source.grossCents) : "");
+  const [net, setNet] = useState(pay ? centsToInput(pay.netCents) : "");
+  const [netIsEstimate, setNetIsEstimate] = useState(pay?.netIsEstimate ?? false);
+  const [gross, setGross] = useState(pay?.grossCents != null ? centsToInput(pay.grossCents) : "");
   // The first source, and the current primary, must stay primary: something has to set the pay periods.
   const primaryLocked = isFirst || source?.primary === true;
   const [primary, setPrimary] = useState(primaryLocked);
   const [deductions, setDeductions] = useState<DeductionRow[]>(
-    (source?.deductions ?? []).map((deduction, index) => ({
+    (pay?.deductions ?? []).map((deduction, index) => ({
       key: index,
       name: deduction.name,
-      amount: centsToInput(deduction.amountCents),
+      unit: deduction.percentBp === null ? "dollars" : "percent",
+      amount: deduction.percentBp === null ? centsToInput(deduction.amountCents) : "",
+      percent: deduction.percentBp === null ? "" : rateToInput(deduction.percentBp),
       toAccountId: deduction.toAccountId === null ? null : String(deduction.toAccountId),
     })),
   );
+  const match = pay?.match ?? null;
+  const [matchChoice, setMatchChoice] = useState<MatchChoice>(match?.mode ?? "none");
+  const [matchAccountId, setMatchAccountId] = useState<string | null>(match ? String(match.toAccountId) : null);
+  const [matchFixed, setMatchFixed] = useState(match?.fixedCents != null ? centsToInput(match.fixedCents) : "");
+  const [matchPercent, setMatchPercent] = useState(match?.matchBp != null ? rateToInput(match.matchBp) : "");
+  const [capPercent, setCapPercent] = useState(match?.capBpOfGross != null ? rateToInput(match.capBpOfGross) : "");
+  const [withinCap, setWithinCap] = useState(match?.contributionWithinCap ?? false);
+  // Read as typed, for what a percent comes to and for whether the match can be checked at all.
+  const grossTyped = gross.trim() === "" ? null : parseDollars(gross);
   const [problem, setProblem] = useState<string>();
 
   // Archived accounts are left out, unless this source already points at one.
-  const inUse = new Set([depositAccountId, ...deductions.map((deduction) => deduction.toAccountId)]);
-  const accountOptions = accounts
-    .filter((account) => !account.archived || inUse.has(String(account.id)))
+  const inUse = new Set([depositAccountId, matchAccountId, ...deductions.map((deduction) => deduction.toAccountId)]);
+  const offered = accounts.filter((account) => !account.archived || inUse.has(String(account.id)));
+  const accountOptions = offered.map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
+  // A match is retirement money: it can only go into an investment account.
+  const investmentOptions = offered
+    .filter((account) => account.type === "investment")
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
 
   const updateDeduction = (key: number, change: Partial<DeductionRow>) =>
@@ -97,20 +161,73 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
     if (frequency === "manual_dates" && pickedDates.length < 2) {
       return "Please add at least two paydays, so there's a pay period between them.";
     }
-    const parsedDeductions = [];
+    const parsedDeductions: DeductionInput[] = [];
     for (const deduction of deductions) {
+      const toAccountId = deduction.toAccountId === null ? null : Number(deduction.toAccountId);
+      if (deduction.unit === "percent") {
+        const percentBp = parseRate(deduction.percent);
+        if (deduction.name.trim() === "" || percentBp === null || percentBp > MAX_CAP_BP) {
+          return "Each deduction needs a name and a percent of your pay like 6.";
+        }
+        if (grossCents === null) {
+          return GROSS_NEEDED_FOR_PERCENT;
+        }
+        parsedDeductions.push({ name: deduction.name, percentBp, toAccountId });
+        continue;
+      }
       const amountCents = parseDollars(deduction.amount);
       if (deduction.name.trim() === "" || amountCents === null) {
         return "Each deduction needs a name and an amount like 150.00.";
       }
-      parsedDeductions.push({
-        name: deduction.name,
-        amountCents,
-        toAccountId: deduction.toAccountId === null ? null : Number(deduction.toAccountId),
-      });
+      parsedDeductions.push({ name: deduction.name, amountCents, toAccountId });
+    }
+    let matchInput: IncomeSourceInput["match"] = null;
+    if (matchChoice !== "none") {
+      if (matchAccountId === null) {
+        return "Please choose the investment account the employer match is paid into.";
+      }
+      if (matchChoice === "fixed") {
+        const fixedCents = parseDollars(matchFixed);
+        if (fixedCents === null || fixedCents < 0) {
+          return "Please enter the match as an amount like 75.00.";
+        }
+        matchInput = {
+          toAccountId: Number(matchAccountId),
+          mode: "fixed",
+          fixedCents,
+          matchBp: null,
+          capBpOfGross: null,
+          contributionWithinCap: false,
+        };
+      } else {
+        const matchBp = parseRate(matchPercent);
+        const capBpOfGross = parseRate(capPercent);
+        if (matchBp === null || matchBp > MAX_MATCH_BP) {
+          return "Please enter how much of what you put in is matched, as a percentage like 50.";
+        }
+        if (capBpOfGross === null || capBpOfGross > MAX_CAP_BP) {
+          return "Please enter how much of your pay is matched up to, as a percentage like 6.";
+        }
+        // With no gross pay there is nothing to check the contribution against, so it takes a confirmation.
+        if (grossCents === null && !withinCap) {
+          return `Please fill in the gross amount per paycheck, or tick the box to confirm that what you put in is within the ${formatRate(capBpOfGross)} that is matched.`;
+        }
+        matchInput = {
+          toAccountId: Number(matchAccountId),
+          mode: "formula",
+          fixedCents: null,
+          matchBp,
+          capBpOfGross,
+          contributionWithinCap: grossCents === null && withinCap,
+        };
+      }
+    }
+    if (source && !terms && timing === "from_date" && effectiveFrom === "") {
+      return "Please choose the date your pay changes from.";
     }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly";
     return {
+      ...whichAmounts(),
       name,
       depositAccountId: Number(depositAccountId),
       grossCents,
@@ -129,8 +246,20 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         manualDates: frequency === "manual_dates" ? pickedDates : [],
       },
       deductions: parsedDeductions,
+      match: matchInput,
     };
   };
+
+  /** Which of the source's amounts this save is about; nothing when adding, or correcting the ones in force today. */
+  function whichAmounts(): Pick<IncomeSourceInput, "effectiveFrom" | "originalAmounts"> {
+    if (!source) {
+      return {};
+    }
+    if (terms) {
+      return terms.effectiveDate === null ? { originalAmounts: true } : { effectiveFrom: terms.effectiveDate };
+    }
+    return timing === "from_date" ? { effectiveFrom } : {};
+  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -276,6 +405,64 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
           )}
         </fieldset>
 
+        {source && terms && (
+          <p className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+            {terms.effectiveDate === null
+              ? "These are the amounts this income started with. Saving corrects them for the paychecks they cover."
+              : `These are the amounts from ${formatDate(terms.effectiveDate)} on. Saving corrects them; earlier paychecks are not touched.`}
+          </p>
+        )}
+
+        {source && !terms && (
+          <fieldset className="space-y-2 rounded-lg border border-line p-4">
+            <legend className="px-1 font-semibold">When the amounts below apply</legend>
+            <label className="flex min-h-11 items-start gap-3">
+              <input
+                type="radio"
+                name={`${id}-timing`}
+                checked={timing === "correct"}
+                onChange={() => setTiming("correct")}
+                className="mt-1 size-5 shrink-0 accent-(--accent)"
+              />
+              <span>
+                <span className="font-medium">I'm correcting the amounts</span>
+                <span className="block text-sm text-muted">{correctingHint(source)}</span>
+              </span>
+            </label>
+            <label className="flex min-h-11 items-start gap-3">
+              <input
+                type="radio"
+                name={`${id}-timing`}
+                checked={timing === "from_date"}
+                onChange={() => setTiming("from_date")}
+                className="mt-1 size-5 shrink-0 accent-(--accent)"
+              />
+              <span>
+                <span className="font-medium">My pay changes from a date</span>
+                <span className="block text-sm text-muted">
+                  A raise, new deductions, a different match. Paychecks before that date keep the amounts they have now.
+                </span>
+              </span>
+            </label>
+            {timing === "from_date" && (
+              <div>
+                <label htmlFor={`${id}-effective-from`} className={LABEL}>
+                  Changes from
+                </label>
+                <input
+                  id={`${id}-effective-from`}
+                  type="date"
+                  value={effectiveFrom}
+                  onChange={(event) => setEffectiveFrom(event.target.value)}
+                  required
+                  className={INPUT}
+                />
+                <p className={HINT}>The first paycheck on or after this day is the first with the new amounts. Any day, past or future.</p>
+              </div>
+            )}
+          </fieldset>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <MoneyField label="Take-home per paycheck" value={net} onChange={setNet} required />
@@ -308,12 +495,44 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
                   value={deduction.name}
                   onChange={(text) => updateDeduction(deduction.key, { name: text })}
                 />
+                <div>
+                  <label htmlFor={`${id}-deduction-unit-${deduction.key}`} className={LABEL}>
+                    Given as
+                  </label>
+                  <select
+                    id={`${id}-deduction-unit-${deduction.key}`}
+                    value={deduction.unit}
+                    onChange={(event) => updateDeduction(deduction.key, { unit: event.target.value as DeductionUnit })}
+                    className={INPUT}
+                  >
+                    <option value="dollars">Dollars</option>
+                    <option value="percent">Percent of gross pay</option>
+                  </select>
+                </div>
+              </div>
+              {deduction.unit === "dollars" ? (
                 <MoneyField
                   label="Amount"
                   value={deduction.amount}
                   onChange={(text) => updateDeduction(deduction.key, { amount: text })}
                 />
-              </div>
+              ) : (
+                <div>
+                  <label htmlFor={`${id}-deduction-percent-${deduction.key}`} className={LABEL}>
+                    Percent of gross pay
+                  </label>
+                  <input
+                    id={`${id}-deduction-percent-${deduction.key}`}
+                    value={deduction.percent}
+                    onChange={(event) => updateDeduction(deduction.key, { percent: event.target.value })}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="e.g. 6"
+                    className={`${INPUT} tabular-nums`}
+                  />
+                  <p className={HINT}>{percentHint(deduction.percent, grossTyped)}</p>
+                </div>
+              )}
               <Picker
                 label="Goes into (optional)"
                 noun="account"
@@ -337,13 +556,121 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
             onClick={() =>
               setDeductions((rows) => [
                 ...rows,
-                { key: Math.max(-1, ...rows.map((row) => row.key)) + 1, name: "", amount: "", toAccountId: null },
+                {
+                  key: Math.max(-1, ...rows.map((row) => row.key)) + 1,
+                  name: "",
+                  unit: "dollars",
+                  amount: "",
+                  percent: "",
+                  toAccountId: null,
+                },
               ])
             }
             className={BUTTON_LINK}
           >
             + Add a deduction
           </button>
+        </fieldset>
+
+        <fieldset className="space-y-3 rounded-lg border border-line p-4">
+          <legend className="px-1 font-semibold">Employer match</legend>
+          <p className="text-sm text-muted">What your employer adds to a retirement account with each paycheck, on top of what you put in.</p>
+          {/* A dropdown, not a row of segments: three choices leave one stranded on a row of its own on a phone. */}
+          <div>
+            <label htmlFor={`${id}-match-choice`} className={LABEL}>
+              Does your employer add anything?
+            </label>
+            <select
+              id={`${id}-match-choice`}
+              value={matchChoice}
+              onChange={(event) => setMatchChoice(event.target.value as MatchChoice)}
+              className={INPUT}
+            >
+              {MATCH_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {matchChoice !== "none" && (
+            <div>
+              <Picker
+                label="Paid into"
+                noun="investment account"
+                placeholder="Choose or type an investment account"
+                options={investmentOptions}
+                value={matchAccountId}
+                onChange={setMatchAccountId}
+              />
+              {investmentOptions.length === 0 && (
+                <p className={HINT}>
+                  There is no investment account yet. Add one on the Accounts screen first, with a label such as 401(k).
+                </p>
+              )}
+            </div>
+          )}
+          {matchChoice === "fixed" && <MoneyField label="Match per paycheck" value={matchFixed} onChange={setMatchFixed} />}
+          {matchChoice === "formula" && (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor={`${id}-match-percent`} className={LABEL}>
+                    They match (% of what I put in)
+                  </label>
+                  <input
+                    id={`${id}-match-percent`}
+                    value={matchPercent}
+                    onChange={(event) => setMatchPercent(event.target.value)}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="e.g. 100"
+                    className={`${INPUT} tabular-nums`}
+                  />
+                  <p className={HINT}>100 is dollar for dollar.</p>
+                </div>
+                <div>
+                  <label htmlFor={`${id}-match-cap`} className={LABEL}>
+                    Up to (% of gross pay)
+                  </label>
+                  <input
+                    id={`${id}-match-cap`}
+                    value={capPercent}
+                    onChange={(event) => setCapPercent(event.target.value)}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="e.g. 6"
+                    className={`${INPUT} tabular-nums`}
+                  />
+                  <p className={HINT}>Contributions beyond this are not matched.</p>
+                </div>
+              </div>
+              <p className={HINT}>
+                "100% match up to 6%" is 100 and 6. What you put in is whatever the deductions above send to the same account, as
+                dollars or as a percent of your pay.
+              </p>
+              {grossTyped === null && (
+                // Nothing to measure the contribution against: ask, rather than refuse or guess.
+                <div className="rounded-lg border border-line bg-bg p-3">
+                  <label className="flex min-h-11 items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={withinCap}
+                      onChange={(event) => setWithinCap(event.target.checked)}
+                      className="mt-0.5 size-5 shrink-0 accent-(--accent)"
+                    />
+                    <span className="font-medium">
+                      What I put in is within the {capPercent.trim() === "" ? "share" : `${capPercent.trim()}%`} of my pay that is matched
+                    </span>
+                  </label>
+                  <p className={HINT}>
+                    There is no gross amount per paycheck above, so this cannot be checked for you. Tick this and all of what you put
+                    in is matched; or fill in the gross amount and it is worked out instead.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
         </fieldset>
 
         <div>
@@ -384,11 +711,41 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
 
       {source && (
         <div className="mt-6 border-t border-line pt-4">
-          <DeleteSource source={source} onDeleted={onClose} />
+          <DeleteSource
+            source={source}
+            onDeleted={() => {
+              onClose();
+              onDeleted?.();
+            }}
+          />
         </div>
       )}
     </Modal>
   );
+}
+
+/** Which paychecks a correction reaches: the ones the amounts in force today already cover. */
+function correctingHint(source: IncomeSource): string {
+  const current = source.payHistory.find((entry) => entry.current);
+  if (current?.effectiveDate) {
+    return `Changes every paycheck since ${formatDate(current.effectiveDate)}, when these amounts began.`;
+  }
+  return source.payHistory.length > 1
+    ? "Changes every paycheck up to your next pay change."
+    : "Changes every paycheck, past and future.";
+}
+
+/** Under a percent deduction: what it comes to a paycheck, or what is still needed to say. */
+function percentHint(percent: string, grossCents: number | null): string {
+  if (grossCents === null) {
+    return "Fill in the gross amount per paycheck above, so this can be worked out.";
+  }
+  const percentBp = parseRate(percent);
+  if (percentBp === null) {
+    return "Of the gross amount per paycheck above.";
+  }
+  // The backend's figure is the one that counts; this is the same sum, shown while typing.
+  return `About ${formatCents(Math.round((grossCents * percentBp) / 10_000))} a paycheck.`;
 }
 
 function DeleteSource({ source, onDeleted }: { source: IncomeSource; onDeleted: () => void }) {

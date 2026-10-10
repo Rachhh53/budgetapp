@@ -76,6 +76,35 @@ class InterestProjectionTest {
     }
 
     @Test
+    void aBalanceEnteredOnTheCreditDayAlreadyHoldsThatMonthsInterest() {
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-01", 1_000_000), anchor("2026-10-31", 1_003_400)), List.of(), PERIODS, LAST_DAY_AT_410);
+
+        // Still on record, worked out on what October was projected to hold, so a bucket gets its share…
+        InterestCredit october = projection.interest().getFirst();
+        assertThat(october.date()).isEqualTo(date("2026-10-31"));
+        assertThat(october.inEnteredBalance()).isTrue();
+        assertThat(october.balance()).isEqualTo(cents(1_000_000));
+        assertThat(october.amount()).isEqualTo(cents(3354));
+
+        // …but the account holds what was typed in, not that plus the estimate.
+        PeriodBalance secondHalfOfOctober = projection.balances().get(1);
+        assertThat(secondHalfOfOctober.in()).isEqualTo(cents(0));
+        assertThat(secondHalfOfOctober.ending()).isEqualTo(cents(1_003_400));
+        assertThat(projection.interest().get(1).inEnteredBalance()).isFalse();
+        assertThat(projection.interest().get(1).balance()).isEqualTo(cents(1_003_400));
+    }
+
+    @Test
+    void nothingIsWorkedOutForACreditDayThatIsTheFirstBalanceEntered() {
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-31", 1_000_000)), List.of(), PERIODS, LAST_DAY_AT_410);
+
+        assertThat(projection.interest()).extracting(InterestCredit::date).containsExactly(date("2026-11-30"));
+        assertThat(projection.balances().get(1).ending()).isEqualTo(cents(1_000_000));
+    }
+
+    @Test
     void nothingIsCreditedBeforeARateTakesEffect() {
         InterestTerms fromNovember = new InterestTerms(31, List.of(new RateChange(date("2026-11-01"), BasisPoints.of(410))));
 

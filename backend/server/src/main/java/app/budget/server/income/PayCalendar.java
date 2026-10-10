@@ -1,12 +1,18 @@
 package app.budget.server.income;
 
+import app.budget.engine.BasisPoints;
 import app.budget.engine.Money;
+import app.budget.engine.investments.EmployerMatch;
 import app.budget.engine.schedule.BusinessCalendar;
 import app.budget.engine.schedule.Occurrence;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.PayPeriodGenerator;
 import app.budget.engine.schedule.ScheduleGenerator;
 import app.budget.engine.schedule.ScheduleRule;
+import app.budget.server.income.IncomeRepository.Deduction;
+import app.budget.server.income.IncomeRepository.Match;
+import app.budget.server.income.IncomeRepository.MatchMode;
+import app.budget.server.income.IncomeRepository.Pay;
 import app.budget.server.income.IncomeRepository.PaycheckOverride;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.schedule.HolidaysRepository;
@@ -48,6 +54,8 @@ public final class PayCalendar {
      * @param payDate        when it actually arrives, after any weekend or holiday move
      * @param estimate       true while the amount is the source's estimate and has not been typed over
      * @param projectedCents what the app showed before the user typed over it; {@code null} if untouched
+     * @param contributions  what goes straight into other accounts with this paycheck, never passing
+     *                       through the deposit account: deductions that name an account, and the employer's match
      */
     public record Paycheck(
             long incomeSourceId,
@@ -57,7 +65,78 @@ public final class PayCalendar {
             LocalDate payDate,
             long netCents,
             boolean estimate,
-            Long projectedCents) {}
+            Long projectedCents,
+            List<Contribution> contributions) {}
+
+    /** A contribution's {@code kind} when it is the employee's own money. */
+    public static final String CONTRIBUTION = "contribution";
+
+    /** A contribution's {@code kind} when the employer adds it. */
+    public static final String EMPLOYER_MATCH = "employer_match";
+
+    private static final String MATCH_LABEL = "Employer match";
+
+    /**
+     * Money a paycheck puts into another account before take-home pay is worked out.
+     *
+     * @param kind {@link #CONTRIBUTION} or {@link #EMPLOYER_MATCH}
+     */
+    public record Contribution(long toAccountId, String label, String kind, long amountCents) {}
+
+    /**
+     * What a source's employer match comes to, for showing beside it.
+     *
+     * @param perPaycheckCents    what the employer adds to each paycheck as things stand
+     * @param mostPossibleCents   what they would add if the employee contributed up to the cap
+     * @param contributeMoreCents how much more the employee would have to put in, per paycheck, to
+     *                            earn all of it; zero at or over the cap, and for a fixed match
+     */
+    public record MatchFigures(long perPaycheckCents, long mostPossibleCents, long contributeMoreCents) {}
+
+    /**
+     * The figures for the match on a paycheck that comes to {@code pay}; empty when it has none. A formula with no gross pay to
+     * work from stands only on the user's word that their contribution is within the matched
+     * share: all of it is then matched, and that is also the most it is known to come to.
+     */
+    public static Optional<MatchFigures> matchFigures(Pay pay) {
+        Match match = pay.match();
+        boolean grossUnknown = match != null && match.mode() == MatchMode.FORMULA && pay.grossCents() == null;
+        if (match == null || (grossUnknown && !match.contributionWithinCap())) {
+            return Optional.empty();
+        }
+        EmployerMatch terms = match.mode() == MatchMode.FIXED
+                ? EmployerMatch.fixed(Money.ofCents(match.fixedCents()))
+                : EmployerMatch.formula(BasisPoints.of(match.matchBp()), BasisPoints.of(match.capBpOfGross()));
+        Money gross = Money.ofCents(pay.grossCents() == null ? 0 : pay.grossCents());
+        // What the employee puts in is whatever their deductions send to the account the match goes to.
+        Money employee = pay.deductions().stream()
+                .filter(deduction -> deduction.toAccountId() != null && deduction.toAccountId() == match.toAccountId())
+                .map(deduction -> Money.ofCents(deduction.amountCents()))
+                .reduce(Money.ZERO, Money::plus);
+        if (grossUnknown) {
+            long matched = terms.forContributionWithinCap(employee).cents();
+            return Optional.of(new MatchFigures(matched, matched, 0));
+        }
+        return Optional.of(new MatchFigures(
+                terms.forPaycheck(gross, employee).cents(),
+                terms.mostPossible(gross).cents(),
+                terms.contributionShortOfCap(gross, employee).cents()));
+    }
+
+    /** Everything a paycheck that comes to {@code pay} sends straight to other accounts. */
+    static List<Contribution> contributions(Pay pay) {
+        List<Contribution> contributions = new ArrayList<>();
+        for (Deduction deduction : pay.deductions()) {
+            if (deduction.toAccountId() != null && deduction.amountCents() > 0) {
+                contributions.add(new Contribution(deduction.toAccountId(), deduction.name(), CONTRIBUTION, deduction.amountCents()));
+            }
+        }
+        matchFigures(pay)
+                .filter(figures -> figures.perPaycheckCents() > 0)
+                .ifPresent(figures -> contributions.add(
+                        new Contribution(pay.match().toAccountId(), MATCH_LABEL, EMPLOYER_MATCH, figures.perPaycheckCents())));
+        return List.copyOf(contributions);
+    }
 
     /** A pay period with the paychecks that land in it. */
     public record Period(
@@ -153,13 +232,17 @@ public final class PayCalendar {
         for (Source source : sources) {
             Map<LocalDate, PaycheckOverride> edited = overrides.getOrDefault(source.id(), Map.of());
             for (Occurrence occurrence : schedule.occurrences(source.schedule(), from, to)) {
+                // A raise takes over from the first paycheck whose schedule names its date or a later one.
+                Pay pay = source.termsOn(occurrence.scheduled()).pay();
+                // A typed-over take-home amount does not change what was deducted.
+                List<Contribution> contributions = contributions(pay);
                 PaycheckOverride override = edited.get(occurrence.scheduled());
                 paychecks.add(override == null
                         ? new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
-                                source.netCents(), source.netIsEstimate(), null)
+                                pay.netCents(), pay.netIsEstimate(), null, contributions)
                         // An amount the user typed is the amount: it is no longer an estimate.
                         : new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
-                                override.netCents(), false, override.projectedCents()));
+                                override.netCents(), false, override.projectedCents(), contributions));
             }
         }
         // Sources arrive primary-first, and the sort is stable, so the primary leads on a shared payday.

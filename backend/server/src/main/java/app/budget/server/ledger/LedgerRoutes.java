@@ -15,7 +15,8 @@ import java.time.LocalDate;
  * projected ending, and {@code /api/pay-periods/{start}} is everything in one of them.
  * {@code /api/accounts/{id}/projection} follows one account through them, and
  * {@code /api/account-balances} is what every account holds today, and
- * {@code /api/accounts/{id}/transactions} lists what moved one of them.
+ * {@code /api/accounts/{id}/transactions} lists what moved one of them, and
+ * {@code /api/accounts/{id}/performance} says how it has changed and how much of that was deposits.
  */
 public final class LedgerRoutes {
 
@@ -35,6 +36,13 @@ public final class LedgerRoutes {
         routes.get("/api/accounts/{id}/projection", this::accountProjection);
         routes.get("/api/account-balances", ctx -> ApiResponse.ok(ctx, ledger.balancesOn(calendar.today())));
         routes.get("/api/accounts/{id}/transactions", this::accountTransactions);
+        routes.get("/api/accounts/{id}/performance", this::accountPerformance);
+    }
+
+    /** This year so far, and each balance entered set against the one before it. */
+    private void accountPerformance(Context ctx) {
+        Account account = accounts.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound);
+        ApiResponse.ok(ctx, ledger.performance(account));
     }
 
     /** What moved one account within {@code from}–{@code to}; by default this year so far and the month ahead. */

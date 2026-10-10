@@ -7,6 +7,7 @@ import type { PeriodDetail } from "../../api/periods";
 import { todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
+import { FormSection } from "../FormSection";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
@@ -159,9 +160,9 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
   return (
     <>
       <form onSubmit={submit} className="space-y-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-5">
-          <div className="sm:col-span-2">
-            <MoneyField label="Amount" value={amount} onChange={setAmount} required autoFocus />
+        <FormSection title="Amount">
+          <div>
+            <MoneyField label="Amount" value={amount} onChange={setAmount} required autoFocus hero />
             <label className="mt-1 flex min-h-11 items-center gap-3">
               <input
                 type="checkbox"
@@ -172,7 +173,10 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
               <span>Estimate, not final yet</span>
             </label>
           </div>
-          <div className="sm:col-span-3">
+        </FormSection>
+
+        <FormSection title="What it is">
+          <div>
             <label htmlFor={`${id}-description`} className={LABEL}>
               What is it
             </label>
@@ -187,132 +191,137 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
               className={INPUT}
             />
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor={`${id}-date`} className={LABEL}>
-              Date
-            </label>
-            <input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} required className={INPUT} />
+          {/* Two side by side only when there are two: a lone picker gets the full width. */}
+          <div className={`grid grid-cols-1 gap-4 ${kind === "money_out" ? "sm:grid-cols-2" : ""}`}>
+            {kind === "money_out" && (
+              <div>
+                <label htmlFor={`${id}-payee`} className={LABEL}>
+                  Paid to (optional)
+                </label>
+                <input
+                  id={`${id}-payee`}
+                  value={payee}
+                  onChange={(event) => setPayee(event.target.value)}
+                  maxLength={120}
+                  autoComplete="off"
+                  className={INPUT}
+                />
+              </div>
+            )}
+            <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
           </div>
-          <Picker
-            label={ACCOUNT_LABELS[kind]}
-            noun="account"
-            placeholder="Choose or type an account"
-            options={accountOptions}
-            value={accountId}
-            onChange={setAccountId}
-          />
-          {kind === "transfer" && (
+        </FormSection>
+
+        <FormSection title={SECTION_TITLES[kind]}>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor={`${id}-date`} className={LABEL}>
+                Date
+              </label>
+              <input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} required className={INPUT} />
+            </div>
             <Picker
-              label="To"
+              label={ACCOUNT_LABELS[kind]}
               noun="account"
               placeholder="Choose or type an account"
               options={accountOptions}
-              value={toAccountId}
-              onChange={setToAccountId}
+              value={accountId}
+              onChange={setAccountId}
             />
-          )}
-          {kind === "money_out" && (
-            <div>
-              <label htmlFor={`${id}-payee`} className={LABEL}>
-                Paid to (optional)
-              </label>
-              <input
-                id={`${id}-payee`}
-                value={payee}
-                onChange={(event) => setPayee(event.target.value)}
-                maxLength={120}
-                autoComplete="off"
-                className={INPUT}
+            {kind === "transfer" && (
+              <Picker
+                label="To"
+                noun="account"
+                placeholder="Choose or type an account"
+                options={accountOptions}
+                value={toAccountId}
+                onChange={setToAccountId}
               />
-            </div>
-          )}
-          <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
-          {paidFromChecking && (
-            <div>
-              <label htmlFor={`${id}-check-number`} className={LABEL}>
-                Check number (optional)
-              </label>
-              <input
-                id={`${id}-check-number`}
-                value={checkNumber}
-                onChange={(event) => setCheckNumber(event.target.value)}
-                maxLength={20}
-                inputMode="numeric"
-                autoComplete="off"
-                className={INPUT}
-              />
-            </div>
-          )}
-        </div>
-
-        {payingBuckets.length > 0 && (
-          <div>
-            <label htmlFor={`${id}-from-bucket`} className={LABEL}>
-              Comes out of
-            </label>
-            <select
-              id={`${id}-from-bucket`}
-              value={comesFrom}
-              onChange={(event) => setChosenFrom(event.target.value)}
-              required
-              className={INPUT}
-            >
-              <option value="">Choose where this comes from</option>
-              <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
-              {payingBuckets.map((bucket) => (
-                <option key={bucket.id} value={bucket.id}>
-                  {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
-                </option>
-              ))}
-            </select>
-            <p className={HINT}>
-              {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
-                ? "The bucket and the account both go down by this amount."
-                : "This account has buckets, so say whether this is paid out of one of them."}
-            </p>
-          </div>
-        )}
-
-        <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
-
-        {buckets.length > 0 && (
-          <fieldset className="rounded-lg border border-line px-4 py-2">
-            <legend className="sr-only">Buckets</legend>
-            <label className="flex min-h-11 items-center gap-3">
-              <input
-                type="checkbox"
-                checked={settingAside}
-                onChange={(event) => setSettingAside(event.target.checked)}
-                className="size-5 accent-(--accent)"
-              />
-              <span className="font-medium">Set some aside in a bucket</span>
-            </label>
-            {settingAside && (
-              <div className="mt-2 grid grid-cols-1 gap-4 pb-2 sm:grid-cols-2">
-                {buckets.map((bucket) => (
-                  <MoneyField
-                    key={bucket.id}
-                    label={bucket.name}
-                    value={aside[bucket.id] ?? ""}
-                    onChange={(text) => setAside((current) => ({ ...current, [bucket.id]: text }))}
-                    hint={`Holds ${formatCents(bucket.balanceCents)} today`}
-                  />
-                ))}
-                <p className="text-sm text-muted sm:col-span-2">Whatever is not set aside stays available in the account.</p>
+            )}
+            {paidFromChecking && (
+              <div>
+                <label htmlFor={`${id}-check-number`} className={LABEL}>
+                  Check number (optional)
+                </label>
+                <input
+                  id={`${id}-check-number`}
+                  value={checkNumber}
+                  onChange={(event) => setCheckNumber(event.target.value)}
+                  maxLength={20}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  className={INPUT}
+                />
               </div>
             )}
-          </fieldset>
-        )}
+          </div>
 
-        <div>
-          <label htmlFor={`${id}-note`} className={LABEL}>
-            Note (optional)
-          </label>
-          <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
-        </div>
+          {payingBuckets.length > 0 && (
+            <div>
+              <label htmlFor={`${id}-from-bucket`} className={LABEL}>
+                Comes out of
+              </label>
+              <select
+                id={`${id}-from-bucket`}
+                value={comesFrom}
+                onChange={(event) => setChosenFrom(event.target.value)}
+                required
+                className={INPUT}
+              >
+                <option value="">Choose where this comes from</option>
+                <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
+                {payingBuckets.map((bucket) => (
+                  <option key={bucket.id} value={bucket.id}>
+                    {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
+                  </option>
+                ))}
+              </select>
+              <p className={HINT}>
+                {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
+                  ? "The bucket and the account both go down by this amount."
+                  : "This account has buckets, so say whether this is paid out of one of them."}
+              </p>
+            </div>
+          )}
+
+          {buckets.length > 0 && (
+            <div>
+              <label className="flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={settingAside}
+                  onChange={(event) => setSettingAside(event.target.checked)}
+                  className="size-5 accent-(--accent)"
+                />
+                <span className="font-medium">Set some aside in a bucket</span>
+              </label>
+              {settingAside && (
+                <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {buckets.map((bucket) => (
+                    <MoneyField
+                      key={bucket.id}
+                      label={bucket.name}
+                      value={aside[bucket.id] ?? ""}
+                      onChange={(text) => setAside((current) => ({ ...current, [bucket.id]: text }))}
+                      hint={`Holds ${formatCents(bucket.balanceCents)} today`}
+                    />
+                  ))}
+                  <p className="text-sm text-muted sm:col-span-2">Whatever is not set aside stays available in the account.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </FormSection>
+
+        <FormSection title="Tags and notes">
+          <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+          <div>
+            <label htmlFor={`${id}-note`} className={LABEL}>
+              Note (optional)
+            </label>
+            <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
+          </div>
+        </FormSection>
 
         {failure && (
           <p role="alert" className="text-danger">
@@ -352,6 +361,13 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
 const NOT_IN_A_BUCKET = "none";
 
 const ACCOUNT_LABELS: Record<EntryKind, string> = { money_out: "Paid from", money_in: "Into", transfer: "From" };
+
+/** The heading over the date and accounts, which reads differently for each kind. */
+const SECTION_TITLES: Record<EntryKind, string> = {
+  money_out: "When and where from",
+  money_in: "When and where to",
+  transfer: "When, from and to",
+};
 
 const PLACEHOLDERS: Record<EntryKind, string> = {
   money_out: "e.g. Vet visit",

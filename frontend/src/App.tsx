@@ -5,10 +5,13 @@ import { AppShell } from "./components/AppShell";
 import { NAV_ITEMS } from "./nav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
+import { IncomeDetailPage } from "./pages/IncomeDetailPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodPage } from "./pages/PayPeriodPage";
+import { RecurringItemDetailPage } from "./pages/RecurringItemDetailPage";
 import { RecurringItemsPage } from "./pages/RecurringItemsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useApplyTheme } from "./theme/useApplyTheme";
@@ -35,6 +38,9 @@ export function App() {
         ))}
         <Route path="/periods/:start" element={<PayPeriodPage />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
+        <Route path="/assets/:id" element={<AssetDetailPage />} />
+        <Route path="/income/:id" element={<IncomeDetailPage />} />
+        <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
         <Route path="*" element={<ComingSoonPage title="We couldn't find that screen" />} />
       </Route>
     </Routes>

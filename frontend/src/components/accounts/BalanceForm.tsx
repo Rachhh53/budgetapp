@@ -43,6 +43,7 @@ export function BalanceForm({ account, onClose }: { account: Account; onClose: (
           error={amountError}
           hint={owed ? "What the statement or website says you owe." : "What the bank's website or statement shows."}
           required
+          hero
         />
         <div>
           <label htmlFor={`${id}-date`} className={LABEL}>
