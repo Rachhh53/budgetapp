@@ -1,21 +1,16 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { useCategories, useTags } from "../api/categories";
 import { type Item, ITEM_KINDS, type ItemKind, useItems } from "../api/items";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
-import { EditButton } from "../components/EditButton";
-import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { ItemForm } from "../components/items/ItemForm";
 import { describeItemSchedule, describeKind, describeLandsIn, KIND_PLURALS } from "../components/items/labels";
 import { BUTTON_PRIMARY, INPUT, PAGE_TITLE } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
-
-/** What the form is open for: a new item, an existing one, or closed. */
-type FormState = { item?: Item } | null;
 
 type Filter = "all" | ItemKind | "archived";
 
@@ -41,12 +36,13 @@ interface Sort {
  * the same order, two to a line, with the amount lifted beside the name.
  */
 const COLUMNS =
-  "md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_7.5rem_6.5rem_minmax(0,1.1fr)_5.5rem_4.5rem_4.75rem] md:items-center md:gap-x-3";
+  "md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_7.5rem_6.5rem_minmax(0,1.1fr)_5.5rem_4.5rem] md:items-center md:gap-x-3";
 
 /**
  * Recurring items (design/recurring.png): every bill, transfer, budget and card payment,
  * filterable by kind and by search, with what each costs a year, which paycheck pays for it
- * and when it is next due. Choosing one opens it for editing.
+ * and when it is next due. It is an overview, like Accounts and Income: a row opens the item's
+ * own page (`RecurringItemDetailPage`), and editing starts there.
  */
 export function RecurringItemsPage() {
   const searchId = useId();
@@ -54,7 +50,7 @@ export function RecurringItemsPage() {
   const accounts = useAccounts();
   const categories = useCategories();
   const tags = useTags();
-  const [form, setForm] = useState<FormState>(null);
+  const [adding, setAdding] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>({ key: "name", descending: false });
@@ -125,7 +121,7 @@ export function RecurringItemsPage() {
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Setup</p>
           <h1 className={PAGE_TITLE}>Recurring items</h1>
         </div>
-        <button type="button" disabled={needsAccount} onClick={() => setForm({})} className={BUTTON_PRIMARY}>
+        <button type="button" disabled={needsAccount} onClick={() => setAdding(true)} className={BUTTON_PRIMARY}>
           + Add item
         </button>
       </div>
@@ -264,14 +260,11 @@ export function RecurringItemsPage() {
                       onSort={() => sortBy(column.key)}
                     />
                   ))}
-                  <span role="columnheader" className="sr-only">
-                    Edit
-                  </span>
                 </div>
               </div>
               <div role="rowgroup" className="divide-y divide-line">
                 {shown.map((item) => (
-                  <ItemRow key={item.id} item={item} accounts={allAccounts} onEdit={() => setForm({ item })} />
+                  <ItemRow key={item.id} item={item} accounts={allAccounts} />
                 ))}
               </div>
             </div>
@@ -279,15 +272,7 @@ export function RecurringItemsPage() {
         </>
       )}
 
-      {form && (
-        <ItemForm
-          item={form.item}
-          accounts={allAccounts}
-          categories={allCategories}
-          tags={tags.data ?? []}
-          onClose={() => setForm(null)}
-        />
-      )}
+      {adding && <ItemForm accounts={allAccounts} categories={allCategories} tags={tags.data ?? []} onClose={() => setAdding(false)} />}
     </>
   );
 }
@@ -345,7 +330,13 @@ function FilterChip({ label, count, pressed, onPress }: { label: string; count: 
   );
 }
 
-function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Account[]; onEdit: () => void }) {
+/**
+ * One item. The name is the link to its page, for the keyboard and for screen readers; a click
+ * anywhere else on the row follows it, and the pointer and highlight say the row can be opened.
+ */
+function ItemRow({ item, accounts }: { item: Item; accounts: readonly Account[] }) {
+  const navigate = useNavigate();
+  const page = `/recurring/${item.id}`;
   const accountName = (id: number | null) => accounts.find((account) => account.id === id)?.name ?? "An account that was removed";
   const paidFrom =
     item.payToAccountId === null
@@ -355,11 +346,18 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
   return (
     <div
       role="row"
-      onClick={clickRowToEdit}
-      className={`grid grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 md:px-5 ${COLUMNS} ${ROW_OPENS} ${item.archived ? "text-muted" : ""}`}
+      onClick={(event) => {
+        // The link opens itself; so does a new tab or window asked for with a key held.
+        if (!(event.target instanceof Element && event.target.closest("a"))) {
+          navigate(page);
+        }
+      }}
+      className={`grid cursor-pointer grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 hover:bg-bg/60 md:px-5 ${COLUMNS} ${item.archived ? "text-muted" : ""}`}
     >
       <span role="cell" className="min-w-0">
-        <span className="block max-w-full truncate font-semibold">{item.name}</span>
+        <Link to={page} className="block max-w-full truncate font-semibold">
+          {item.name}
+        </Link>
         {item.archived && <span className="ml-2 rounded-md border border-line px-1.5 py-0.5 text-xs font-semibold">Archived</span>}
         {item.paused && !item.archived && (
           <span className="rounded-md border border-line px-1.5 py-0.5 text-xs font-semibold">
@@ -384,10 +382,6 @@ function ItemRow({ item, accounts, onEdit }: { item: Item; accounts: readonly Ac
       </Cell>
       <Cell label="Next" className="text-sm md:text-base">
         {item.next ? formatDay(item.next.dueDate) : "—"}
-      </Cell>
-      {/* On a phone it closes the card, on the right where a thumb reaches. */}
-      <Cell className="col-span-2 -my-2 justify-self-end md:col-span-1 md:-my-1">
-        <EditButton name={item.name} onClick={onEdit} />
       </Cell>
     </div>
   );

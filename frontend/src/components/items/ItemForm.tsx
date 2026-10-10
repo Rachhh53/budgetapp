@@ -1,5 +1,6 @@
 import { CalendarClock } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
+import { Link } from "react-router";
 import { type Account, holdsCash } from "../../api/accounts";
 import { useBuckets, useSaveBucket } from "../../api/buckets";
 import type { Category, Tag } from "../../api/categories";
@@ -22,7 +23,6 @@ import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { firstUnusedColor } from "../ColorPicker";
 import { BucketForm } from "../buckets/BucketForm";
-import { PauseItem } from "./PauseItem";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { FormSection } from "../FormSection";
@@ -60,6 +60,10 @@ interface ItemFormProps {
   categories: readonly Category[];
   tags: readonly Tag[];
   onClose: () => void;
+  /** Where to go once the item is deleted, when closing the form is not enough (its own page is gone). */
+  onDeleted?: () => void;
+  /** Points at the item's page for pausing and its amount history. For a form opened anywhere but that page. */
+  pageLink?: boolean;
 }
 
 /**
@@ -69,6 +73,10 @@ interface ItemFormProps {
  *
  * A change to an existing item applies from a date on ("this and all future"): earlier
  * occurrences keep what they had.
+ *
+ * The form holds only what is typed and saved. What an item is doing — its next date, pausing
+ * it, the amounts it has had — is on its own page (`RecurringItemDetailPage`), which keeps this
+ * short enough to take in.
  *
  * A bucket's own recurring amount is the exception: it belongs to its bucket, so editing it
  * from anywhere opens the bucket's form, the one place it is changed or stopped.
@@ -95,7 +103,7 @@ export function ItemForm(props: ItemFormProps) {
 const NOT_IN_A_BUCKET = "none";
 
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
-export function ItemFormBody({ item, accounts, categories, tags, onClose }: ItemFormProps) {
+export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
   const replace = useReplaceItem(item?.id);
@@ -656,33 +664,32 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
           </div>
         </FormSection>
 
-        {item && !item.archived && <PauseItem item={item} />}
-
         {item && (
-          <FormSection title="About this item">
-            {/* Not a field: a fact about the item. When it begins is its own date, above. */}
-            <div>
-              <p className={LABEL}>Date added</p>
-              <p className="tabular-nums">{formatDate(item.createdOn)}</p>
+          <div>
+            <label className="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={archived}
+                onChange={(event) => setArchived(event.target.checked)}
+                className="size-5 accent-(--accent)"
+              />
+              <span className="font-medium">Archived</span>
+            </label>
+            <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
+            <p className={HINT}>
+              Changes you save now apply from today on; anything dated before today keeps what it had. A different start date is the
+              exception, and applies from that date.
+            </p>
+            {pageLink && (
               <p className={HINT}>
-                Changes you save now apply from today on; anything dated before today keeps what it had. A different start date is the
-                exception, and applies from that date.
+                To pause it, or to see the amounts it has had,{" "}
+                <Link to={`/recurring/${item.id}`} className="font-semibold text-accent-ink underline">
+                  open {item.name}'s page
+                </Link>
+                .
               </p>
-            </div>
-
-            <div>
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={archived}
-                  onChange={(event) => setArchived(event.target.checked)}
-                  className="size-5 accent-(--accent)"
-                />
-                <span className="font-medium">Archived</span>
-              </label>
-              <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
-            </div>
-          </FormSection>
+            )}
+          </div>
         )}
 
         {failure && (
@@ -702,33 +709,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
       </form>
 
       {item && (
-        <>
-          <PriceHistory item={item} />
-          <div className="mt-6 border-t border-line pt-4">
-            <DeleteItem item={item} onDeleted={onClose} />
-          </div>
-        </>
+        <div className="mt-6 border-t border-line pt-4">
+          <DeleteItem item={item} onDeleted={onDeleted ?? onClose} />
+        </div>
       )}
     </>
-  );
-}
-
-/** What the item has been set to, version by version. "Amount", not "price": a budget or a bucket move has no price. */
-function PriceHistory({ item }: { item: Item }) {
-  return (
-    <section aria-label="Amount history" className="mt-6 border-t border-line pt-4">
-      <h3 className="font-semibold">Amount history</h3>
-      <ul className="mt-2 divide-y divide-line">
-        {item.history.map((point) => (
-          <li key={point.effectiveFrom} className="flex items-center justify-between gap-3 py-2">
-            <span className="text-muted">From {formatDate(point.effectiveFrom)}</span>
-            <span data-amount className="tabular-nums">
-              {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
-            </span>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 

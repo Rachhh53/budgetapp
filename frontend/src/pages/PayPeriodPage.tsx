@@ -214,6 +214,7 @@ export function PayPeriodPage() {
           categories={categories.data}
           tags={tags.data}
           onClose={() => setEditingItem(undefined)}
+          pageLink
         />
       )}
     </div>

@@ -132,8 +132,8 @@ function withItems(items: Item[] = [ELECTRIC, GROCERIES, RENT, TO_SAVINGS], over
 
 /** The table row (a stacked card on a phone) for one item. */
 async function rowFor(name: string): Promise<HTMLElement> {
-  const button = await screen.findByRole("button", { name: `Edit ${name}` });
-  return button.closest<HTMLElement>('[role="row"]')!;
+  const link = await screen.findByRole("link", { name });
+  return link.closest<HTMLElement>('[role="row"]')!;
 }
 
 /** Chooses an entry in a type-to-filter picker by typing its start and pressing Enter. */
@@ -210,12 +210,15 @@ describe("recurring items screen", () => {
       "Paid from",
       "Lands in",
       "Next",
-      "Edit",
     ]);
-    // Being able to change an item is never left to be discovered: every row has its pencil, named for what it edits.
-    expect(within(table).getAllByRole("button", { name: /^Edit / })).toHaveLength(4);
-    // The pencil alone: the column heading already says Edit.
-    expect(within(table).queryByText("Edit", { selector: "button span" })).not.toBeInTheDocument();
+    // A row does one thing, open the item's page: its name is the link, and there is no Edit button to compete with it.
+    expect(within(table).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "/recurring/2",
+      "/recurring/3",
+      "/recurring/1",
+      "/recurring/4",
+    ]);
+    expect(within(table).queryByRole("button", { name: /^Edit / })).not.toBeInTheDocument();
     // One header row and one row per item.
     expect(within(table).getAllByRole("row")).toHaveLength(5);
   });
@@ -283,9 +286,9 @@ describe("recurring items screen", () => {
       "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
       "PUT /api/items/1": () => ({ status: 200, data: RENT }),
     });
-    renderApp("/recurring");
+    renderApp("/recurring/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
     // It was set up before buckets were asked about, so it stands as not from a bucket.
     expect(await within(dialog).findByRole("combobox", { name: "Comes out of" })).toHaveValue("none");
@@ -308,24 +311,31 @@ describe("recurring items screen", () => {
         return { status: 200, data: rent, changed: true };
       },
     });
+    renderApp("/recurring/1");
+
+    const card = await screen.findByRole("region", { name: "Pause" });
+    await userEvent.click(within(card).getByRole("button", { name: "Pause until I turn it back on" }));
+
+    expect(await within(card).findByText("Paused until you turn it back on.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")).toEqual([{}]);
+    // Under the name, in words, and nothing is left on the calendar.
+    expect(screen.getByText(/Bill · manual · Monthly · 1st · Paused/)).toBeInTheDocument();
+    expect(screen.getByText("paused, so nothing is scheduled")).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Resume now" }));
+    const until = await within(card).findByLabelText("Start again on (optional)");
+    await userEvent.type(until, "2999-12-01");
+    await userEvent.click(within(card).getByRole("button", { name: "Pause until then" }));
+
+    expect(await within(card).findByText("Paused. It starts again on Dec 1, 2999.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")[1]).toEqual({ until: "2999-12-01" });
+    expect(screen.getByText(/Paused until Dec 1, 2999/)).toBeInTheDocument();
+  });
+
+  it("says in the list when an item is paused", async () => {
+    withItems([{ ...RENT, paused: true, pausedUntil: "2999-12-01", next: null }]);
     renderApp("/recurring");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Pause until I turn it back on" }));
-
-    expect(await within(dialog).findByText("Paused until you turn it back on.")).toBeInTheDocument();
-    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")).toEqual([{}]);
-    // The list says so in words.
-    expect(await rowFor("Rent")).toHaveTextContent("Paused");
-
-    await userEvent.click(within(dialog).getByRole("button", { name: "Resume now" }));
-    const until = await within(dialog).findByLabelText("Start again on (optional)");
-    await userEvent.type(until, "2999-12-01");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Pause until then" }));
-
-    expect(await within(dialog).findByText("Paused. It starts again on Dec 1, 2999.")).toBeInTheDocument();
-    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")[1]).toEqual({ until: "2999-12-01" });
     expect(await rowFor("Rent")).toHaveTextContent("Paused until Dec 1");
   });
 
@@ -336,11 +346,11 @@ describe("recurring items screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Bills · 2" }));
 
     expect(screen.getByRole("button", { name: "Bills · 2" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Edit Rent" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Edit Groceries" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Rent" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Groceries" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "All · 4" }));
-    expect(screen.getByRole("button", { name: "Edit Groceries" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Groceries" })).toBeInTheDocument();
   });
 
   it("searches by name, account or category", async () => {
@@ -349,8 +359,8 @@ describe("recurring items screen", () => {
     const search = await screen.findByRole("searchbox", { name: "Search" });
 
     await userEvent.type(search, "rainy");
-    expect(screen.getByRole("button", { name: "Edit To savings" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Edit Rent" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "To savings" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Rent" })).not.toBeInTheDocument();
 
     await userEvent.clear(search);
     await userEvent.type(search, "zzz");
@@ -363,7 +373,7 @@ describe("recurring items screen", () => {
 
     const table = await screen.findByRole("table", { name: "Recurring items" });
     expect(within(table).getAllByRole("row").slice(1)).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Edit Electric" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Electric" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "All · 1" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Bills · 1" })).toBeInTheDocument();
 
@@ -373,7 +383,7 @@ describe("recurring items screen", () => {
     expect(rows[0]).toHaveTextContent("Electric");
     expect(rows[0]).toHaveTextContent("Archived");
     expect(rows[0]).toHaveTextContent("—");
-    expect(screen.getByRole("button", { name: "Edit Electric" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Electric" })).toBeInTheDocument();
   });
 
   it("offers no Archived chip when nothing is archived, and says so when everything is", async () => {
@@ -492,8 +502,9 @@ describe("recurring items screen", () => {
     expect(within(adding).queryByRole("radio", { name: "Bucket move" })).not.toBeInTheDocument();
     await userEvent.click(within(adding).getByRole("button", { name: "Cancel" }));
 
-    // The move is still listed here, and editing it opens the one place it is changed: its bucket.
-    await userEvent.click(screen.getByRole("button", { name: "Edit Gift fund" }));
+    // The move is still listed here, and editing it from its page opens the one place it is changed: its bucket.
+    await userEvent.click(screen.getByRole("link", { name: "Gift fund" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
     expect(await within(dialog).findByRole("textbox", { name: "Set aside (optional)" })).toHaveValue(
       (fund.amountCents / 100).toFixed(2),
@@ -506,9 +517,9 @@ describe("recurring items screen", () => {
       "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
       "PUT /api/items/2": () => ({ status: 200, data: savedUpFor }),
     });
-    renderApp("/recurring");
+    renderApp("/recurring/2");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
     const saveUp = within(dialog).getByRole("combobox", { name: "Save up for it in a bucket (optional)" });
     expect(saveUp).toHaveValue("Holiday gifts");
@@ -533,9 +544,9 @@ describe("recurring items screen", () => {
         return { status: 201, data: { bucket: created, changes: [] }, changed: true };
       },
     });
-    renderApp("/recurring");
+    renderApp("/recurring/2");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
     // The account it is paid from has no bucket yet, and the option is there all the same.
     const saveUp = within(dialog).getByRole("combobox", { name: "Save up for it in a bucket (optional)" });
@@ -549,9 +560,9 @@ describe("recurring items screen", () => {
 
   it("says why a bill paid from a card cannot be saved up for", async () => {
     withItems([{ ...ELECTRIC, payFromAccountId: VISA.id }]);
-    renderApp("/recurring");
+    renderApp("/recurring/2");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
 
     expect(within(dialog).getByText(/Buckets live in checking and savings accounts/)).toBeInTheDocument();
@@ -675,7 +686,7 @@ describe("recurring items screen", () => {
     expect(bodiesSentTo(fetchMock, "POST /api/items")).toMatchObject([{ categoryId: 9, tagIds: [7] }]);
   });
 
-  it("changes an item from a date on and shows its price history", async () => {
+  it("changes an item from a date on, with its amount history and date added on its page, not in the form", async () => {
     const twoPrices: Item = {
       ...RENT,
       history: [
@@ -684,22 +695,25 @@ describe("recurring items screen", () => {
       ],
     };
     const fetchMock = withItems([twoPrices], { "PUT /api/items/1": () => ({ status: 200, data: twoPrices }) });
-    renderApp("/recurring");
+    renderApp("/recurring/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
     expect(within(dialog).getByRole("combobox", { name: "Category (optional)" })).toHaveValue("Housing › Rent");
     expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
-    const history = within(dialog).getByRole("region", { name: "Amount history" });
+    const history = screen.getByRole("region", { name: "Amount history" });
     expect(history).toHaveTextContent("From Jan 1, 2025");
     expect(history).toHaveTextContent("$17,760.00 a year");
+    expect(within(dialog).queryByText("Amount history")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Pause")).not.toBeInTheDocument();
 
     const amount = within(dialog).getByRole("textbox", { name: "Amount each time" });
     expect(amount).toHaveValue("1550.00");
     await userEvent.clear(amount);
     await userEvent.type(amount, "1600");
     // The day it was added is stated, not asked; the change itself is dated today.
-    expect(within(dialog).getByText("Date added").nextElementSibling).toHaveTextContent("Jan 5, 2026");
+    expect(screen.getByText("Date added").nextElementSibling).toHaveTextContent("Jan 5, 2026");
+    expect(within(dialog).queryByText("Date added")).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText(/apply.* from|date added/i)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
@@ -713,9 +727,9 @@ describe("recurring items screen", () => {
     const fetchMock = withItems(undefined, {
       "POST /api/items/2/replacement": () => ({ status: 201, data: { ...ELECTRIC, id: 9, kind: "budget" }, changed: true }),
     });
-    renderApp("/recurring");
+    renderApp("/recurring/2");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
     // Nothing is said until the type is actually different.
     expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
@@ -734,22 +748,75 @@ describe("recurring items screen", () => {
     expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toEqual([]);
   });
 
-  it("opens an item for editing from a click anywhere on its row", async () => {
+  it("opens an item's page from a click anywhere on its row", async () => {
     withItems([RENT]);
     renderApp("/recurring");
     const row = await rowFor("Rent");
 
-    // On plain text in the row, not on the Edit button.
-    await userEvent.click(within(row).getByText("Rent"));
+    // On plain text in the row, not on the name.
+    await userEvent.click(within(row).getByText("Monthly · 1st"));
 
-    expect(screen.getByRole("dialog", { name: "Edit Rent" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Rent" })).toBeInTheDocument();
+    // Nothing opened for editing: that is the page's own button.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeInTheDocument();
+  });
+
+  it("lays an item's page out like an account's: the figures first, then a card per topic", async () => {
+    withItems([{ ...RENT, tagIds: [1], note: "Goes up every January" }, TO_SAVINGS]);
+    renderApp("/recurring/1");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Rent" })).toBeInTheDocument();
+    expect(screen.getByText("/ Bill", { exact: false })).toHaveTextContent("Recurring items / Bill");
+    expect(screen.getByText("Bill · manual · Monthly · 1st")).toBeInTheDocument();
+
+    expect(screen.getByText("Amount").parentElement).toHaveTextContent("$1,550.00each time");
+    expect(screen.getByText("A year").parentElement).toHaveTextContent("$18,600.00");
+    // Due on payday and paid by hand, so the paycheck before pays for it.
+    expect(screen.getByText("Next date").parentElement).toHaveTextContent("Nov 1, 2026paid from the Oct 15, 2026 paycheck, one period early");
+    expect(screen.getByText("Paid from").parentElement).toHaveTextContent("Everyday Checkingpaid by hand");
+
+    const schedule = screen.getByRole("region", { name: "Schedule" });
+    expect(within(schedule).getByText("Starts").nextElementSibling).toHaveTextContent("Jan 1, 2026");
+    expect(within(schedule).getByText("Which paycheck pays it").nextElementSibling).toHaveTextContent("The period it's due in");
+    const details = screen.getByRole("region", { name: "Details" });
+    expect(within(details).getByText("Category").nextElementSibling).toHaveTextContent("Housing › Rent");
+    expect(within(details).getByText("Tags").nextElementSibling).toHaveTextContent("Subscriptions");
+    expect(details).toHaveTextContent("Goes up every January");
+    expect(screen.getByRole("region", { name: "Amount history" })).toHaveTextContent("From Jan 1, 2026");
+  });
+
+  it("says where a transfer goes on its page", async () => {
+    withItems([TO_SAVINGS]);
+    renderApp("/recurring/4");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "To savings" })).toBeInTheDocument();
+    expect(screen.getByText("From").parentElement).toHaveTextContent("Everyday Checkingto Rainy Day Savings");
+  });
+
+  it("says so kindly when the item is not there, with a way back", async () => {
+    withItems([RENT]);
+    renderApp("/recurring/99");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't find that item. It may have been removed.");
+    expect(screen.getByRole("link", { name: "Back to all recurring items" })).toHaveAttribute("href", "/recurring");
+  });
+
+  it("offers no pause on an archived item, and says how to bring it back", async () => {
+    withItems([{ ...RENT, archived: true, next: null }]);
+    renderApp("/recurring/1");
+
+    const card = await screen.findByRole("region", { name: "Pause" });
+    expect(card).toHaveTextContent("This item is archived");
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByText(/Bill · manual · Monthly · 1st · Archived/)).toBeInTheDocument();
   });
 
   it("shows when an item starts, and saves an earlier start so it can be backdated", async () => {
     const fetchMock = withItems([GROCERIES], { "PUT /api/items/3": () => ({ status: 200, data: GROCERIES }) });
-    renderApp("/recurring");
+    renderApp("/recurring/3");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Groceries" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Groceries" });
     // What was saved, not today: this is the item's own date and stays put between visits.
     const starts = within(dialog).getByLabelText("Starts");
@@ -764,9 +831,9 @@ describe("recurring items screen", () => {
 
   it("shows the backend's message when a change is refused", async () => {
     withItems([RENT], { "PUT /api/items/1": () => ({ status: 400, error: "Please choose the category from the list." }) });
-    renderApp("/recurring");
+    renderApp("/recurring/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
@@ -775,9 +842,9 @@ describe("recurring items screen", () => {
 
   it("asks before deleting an item, with keeping it as the default", async () => {
     const fetchMock = withItems([RENT], { "DELETE /api/items/1": () => ({ status: 200, data: { deleted: true } }) });
-    renderApp("/recurring");
+    renderApp("/recurring/1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete item…" }));
     expect(within(dialog).getByRole("button", { name: "Keep it" })).toHaveFocus();
@@ -785,7 +852,9 @@ describe("recurring items screen", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Yes, delete it" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // Its page is gone with it, so the overview is where to land.
+    expect(await screen.findByRole("heading", { level: 1, name: "Recurring items" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls(fetchMock)).toContain("DELETE /api/items/1");
   });
 });
