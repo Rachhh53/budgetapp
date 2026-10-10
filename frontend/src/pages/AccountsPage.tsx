@@ -239,7 +239,7 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
           )}
         </span>
       </Link>
-      <EditButton name={account.name} onClick={() => onEdit(account.id)} labelled />
+      <EditButton name={account.name} onClick={() => onEdit(account.id)} />
     </li>
   );
 }
@@ -293,7 +293,7 @@ function AssetRow({ asset, onEdit }: { asset: Asset; onEdit: (id: number) => voi
           )}
         </span>
       </Link>
-      <EditButton name={asset.name} onClick={() => onEdit(asset.id)} labelled />
+      <EditButton name={asset.name} onClick={() => onEdit(asset.id)} />
     </li>
   );
 }

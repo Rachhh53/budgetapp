@@ -586,6 +586,8 @@ Also in this branch: growth is kept out of the pay period's Income panel and the
 
 **Income is an overview, like Accounts** (Rachel, 2026-10-10: "why not do like the account page where it's an overview and then you click in and get details"): the Income screen lists each source on one row — name, schedule, the account it lands in, take-home a paycheck, "Primary · defines pay periods" in words — with its Edit button, beside **Upcoming paychecks**, which is unchanged. A row opens the source's own page (`/income/{id}`): schedule and amounts, what goes to which account, the employer match and its under-the-cap hint, **Pay history** (always there; before any change it holds the starting amounts and says how to record a raise), that source's upcoming paychecks, and the **Edit** and **Record a pay change** buttons. Pay history is not on the overview. The eyebrow above the title reads "Money coming in", not "Setup", which came from the mockup's grouping and said nothing about the screen. Deleting a source from its page returns to the overview.
 
+**Edit is the pencil alone on overview rows** (Rachel, 2026-10-10: "change the edit button to the icon only on overview screens"): the rows of Accounts (accounts and assets) and Income show the pencil without the word, keeping its tooltip and its name for screen readers ("Edit Everyday Checking"). Everywhere else Edit keeps its word where there is room.
+
 Not in this phase: loan amortization and loan payments (Phase 5) — a loan here is a balance the user enters; net worth over time (today's figure only).
 
 ### Carried forward into later phases

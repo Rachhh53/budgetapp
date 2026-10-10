@@ -4,7 +4,11 @@ interface EditButtonProps {
   /** What it opens, for screen readers and the tooltip: "Edit Electric". */
   name: string;
   onClick: () => void;
-  /** Show the word "Edit" beside the pencil. Leave off only where a row has no room for it. */
+  /**
+   * Show the word "Edit" beside the pencil. Left off on the rows of an overview screen
+   * (Accounts, Income), where the row itself opens the detail and the pencil alone is enough,
+   * and wherever a row has no room for the word.
+   */
   labelled?: boolean;
 }
 

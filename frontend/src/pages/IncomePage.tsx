@@ -123,7 +123,7 @@ function SourceRow({ source, accounts, onEdit }: { source: IncomeSource; account
           </span>
         </span>
       </Link>
-      <EditButton name={source.name} onClick={onEdit} labelled />
+      <EditButton name={source.name} onClick={onEdit} />
     </li>
   );
 }
