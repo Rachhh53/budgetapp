@@ -7,13 +7,14 @@ import {
   type IncomeSourceInput,
   type MatchMode,
   PAY_FREQUENCIES,
+  type PayTerms,
   type PayFrequency,
   useDeleteIncomeSource,
   useSaveIncomeSource,
   WEEKEND_RULES,
   type WeekendRule,
 } from "../../api/income";
-import { todayIso } from "../../lib/dates";
+import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
@@ -61,6 +62,13 @@ interface DeductionRow {
 interface IncomeSourceFormProps {
   /** The source being changed; leave out to add a new one. */
   source?: IncomeSource;
+  /**
+   * One entry of the source's pay history to change in place, instead of the amounts in force
+   * today: the form opens on its amounts and saves back to it.
+   */
+  terms?: PayTerms;
+  /** Open with "My pay changes from a date" already chosen: recording a raise. */
+  startAsPayChange?: boolean;
   /** Whether any income source exists yet. The first one always sets the pay periods. */
   isFirst: boolean;
   accounts: readonly Account[];
@@ -68,10 +76,15 @@ interface IncomeSourceFormProps {
 }
 
 /** Add or change an income source: who pays, when, how much, and where it goes. */
-export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeSourceFormProps) {
+export function IncomeSourceForm({ source, terms, startAsPayChange = false, isFirst, accounts, onClose }: IncomeSourceFormProps) {
   const id = useId();
   const save = useSaveIncomeSource(source?.id);
   const schedule = source?.schedule;
+  // The amounts the form opens on: the history entry asked for, or the ones in force today.
+  const pay = terms ?? source;
+  // Whether saving corrects amounts already in use, or starts new ones from a date (a raise).
+  const [timing, setTiming] = useState<"correct" | "from_date">(startAsPayChange ? "from_date" : "correct");
+  const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
 
   const [name, setName] = useState(source?.name ?? "");
   const [depositAccountId, setDepositAccountId] = useState<string | null>(
@@ -85,14 +98,14 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
     schedule && schedule.manualDates.length > 0 ? schedule.manualDates : ["", ""],
   );
   const [weekendRule, setWeekendRule] = useState<WeekendRule>(schedule?.weekendRule ?? "previous_business_day");
-  const [net, setNet] = useState(source ? centsToInput(source.netCents) : "");
-  const [netIsEstimate, setNetIsEstimate] = useState(source?.netIsEstimate ?? false);
-  const [gross, setGross] = useState(source?.grossCents != null ? centsToInput(source.grossCents) : "");
+  const [net, setNet] = useState(pay ? centsToInput(pay.netCents) : "");
+  const [netIsEstimate, setNetIsEstimate] = useState(pay?.netIsEstimate ?? false);
+  const [gross, setGross] = useState(pay?.grossCents != null ? centsToInput(pay.grossCents) : "");
   // The first source, and the current primary, must stay primary: something has to set the pay periods.
   const primaryLocked = isFirst || source?.primary === true;
   const [primary, setPrimary] = useState(primaryLocked);
   const [deductions, setDeductions] = useState<DeductionRow[]>(
-    (source?.deductions ?? []).map((deduction, index) => ({
+    (pay?.deductions ?? []).map((deduction, index) => ({
       key: index,
       name: deduction.name,
       unit: deduction.percentBp === null ? "dollars" : "percent",
@@ -101,7 +114,7 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
       toAccountId: deduction.toAccountId === null ? null : String(deduction.toAccountId),
     })),
   );
-  const match = source?.match ?? null;
+  const match = pay?.match ?? null;
   const [matchChoice, setMatchChoice] = useState<MatchChoice>(match?.mode ?? "none");
   const [matchAccountId, setMatchAccountId] = useState<string | null>(match ? String(match.toAccountId) : null);
   const [matchFixed, setMatchFixed] = useState(match?.fixedCents != null ? centsToInput(match.fixedCents) : "");
@@ -199,8 +212,12 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
         };
       }
     }
+    if (source && !terms && timing === "from_date" && effectiveFrom === "") {
+      return "Please choose the date your pay changes from.";
+    }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly";
     return {
+      ...whichAmounts(),
       name,
       depositAccountId: Number(depositAccountId),
       grossCents,
@@ -222,6 +239,17 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
       match: matchInput,
     };
   };
+
+  /** Which of the source's amounts this save is about; nothing when adding, or correcting the ones in force today. */
+  function whichAmounts(): Pick<IncomeSourceInput, "effectiveFrom" | "originalAmounts"> {
+    if (!source) {
+      return {};
+    }
+    if (terms) {
+      return terms.effectiveDate === null ? { originalAmounts: true } : { effectiveFrom: terms.effectiveDate };
+    }
+    return timing === "from_date" ? { effectiveFrom } : {};
+  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -366,6 +394,64 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
             </div>
           )}
         </fieldset>
+
+        {source && terms && (
+          <p className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+            {terms.effectiveDate === null
+              ? "These are the amounts this income started with. Saving corrects them for the paychecks they cover."
+              : `These are the amounts from ${formatDate(terms.effectiveDate)} on. Saving corrects them; earlier paychecks are not touched.`}
+          </p>
+        )}
+
+        {source && !terms && (
+          <fieldset className="space-y-2 rounded-lg border border-line p-4">
+            <legend className="px-1 font-semibold">When the amounts below apply</legend>
+            <label className="flex min-h-11 items-start gap-3">
+              <input
+                type="radio"
+                name={`${id}-timing`}
+                checked={timing === "correct"}
+                onChange={() => setTiming("correct")}
+                className="mt-1 size-5 shrink-0 accent-(--accent)"
+              />
+              <span>
+                <span className="font-medium">I'm correcting the amounts</span>
+                <span className="block text-sm text-muted">{correctingHint(source)}</span>
+              </span>
+            </label>
+            <label className="flex min-h-11 items-start gap-3">
+              <input
+                type="radio"
+                name={`${id}-timing`}
+                checked={timing === "from_date"}
+                onChange={() => setTiming("from_date")}
+                className="mt-1 size-5 shrink-0 accent-(--accent)"
+              />
+              <span>
+                <span className="font-medium">My pay changes from a date</span>
+                <span className="block text-sm text-muted">
+                  A raise, new deductions, a different match. Paychecks before that date keep the amounts they have now.
+                </span>
+              </span>
+            </label>
+            {timing === "from_date" && (
+              <div>
+                <label htmlFor={`${id}-effective-from`} className={LABEL}>
+                  Changes from
+                </label>
+                <input
+                  id={`${id}-effective-from`}
+                  type="date"
+                  value={effectiveFrom}
+                  onChange={(event) => setEffectiveFrom(event.target.value)}
+                  required
+                  className={INPUT}
+                />
+                <p className={HINT}>The first paycheck on or after this day is the first with the new amounts. Any day, past or future.</p>
+              </div>
+            )}
+          </fieldset>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
@@ -620,6 +706,17 @@ export function IncomeSourceForm({ source, isFirst, accounts, onClose }: IncomeS
       )}
     </Modal>
   );
+}
+
+/** Which paychecks a correction reaches: the ones the amounts in force today already cover. */
+function correctingHint(source: IncomeSource): string {
+  const current = source.payHistory.find((entry) => entry.current);
+  if (current?.effectiveDate) {
+    return `Changes every paycheck since ${formatDate(current.effectiveDate)}, when these amounts began.`;
+  }
+  return source.payHistory.length > 1
+    ? "Changes every paycheck up to your next pay change."
+    : "Changes every paycheck, past and future.";
 }
 
 /** Under a percent deduction: what it comes to a paycheck, or what is still needed to say. */

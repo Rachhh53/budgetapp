@@ -1,18 +1,23 @@
 import { type ReactNode, useState } from "react";
 import { Link } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
-import { type IncomeSource, useIncomeSources } from "../api/income";
+import { type IncomeSource, type PayTerms, useDeletePayChange, useIncomeSources } from "../api/income";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule, WEEKEND_LABELS } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { EditButton } from "../components/EditButton";
+import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
 
-/** What the form is open for: a new source, an existing one, or closed. */
-type FormState = { source?: IncomeSource } | null;
+/**
+ * What the form is open for: a new source, an existing one (optionally one entry of its pay
+ * history, or a new change of pay), or closed.
+ */
+type FormState = { source?: IncomeSource; terms?: PayTerms; payChange?: boolean } | null;
 
 /**
  * Income (design/income.png): each source with its schedule and where the money goes, and
@@ -71,7 +76,14 @@ export function IncomePage() {
             </Card>
           )}
           {sources.data?.map((source) => (
-            <SourceCard key={source.id} source={source} accounts={allAccounts} onEdit={() => setForm({ source })} />
+            <SourceCard
+              key={source.id}
+              source={source}
+              accounts={allAccounts}
+              onEdit={() => setForm({ source })}
+              onPayChange={() => setForm({ source, payChange: true })}
+              onEditTerms={(terms) => setForm({ source, terms })}
+            />
           ))}
         </div>
         <UpcomingPaychecks />
@@ -80,6 +92,8 @@ export function IncomePage() {
       {form && (
         <IncomeSourceForm
           source={form.source}
+          terms={form.terms}
+          startAsPayChange={form.payChange}
           isFirst={sources.data?.length === 0}
           accounts={allAccounts}
           onClose={() => setForm(null)}
@@ -89,7 +103,17 @@ export function IncomePage() {
   );
 }
 
-function SourceCard({ source, accounts, onEdit }: { source: IncomeSource; accounts: Account[]; onEdit: () => void }) {
+interface SourceCardProps {
+  source: IncomeSource;
+  accounts: Account[];
+  onEdit: () => void;
+  /** Record a raise: new amounts from a date on. */
+  onPayChange: () => void;
+  /** Change one entry of the pay history in place. */
+  onEditTerms: (terms: PayTerms) => void;
+}
+
+function SourceCard({ source, accounts, onEdit, onPayChange, onEditTerms }: SourceCardProps) {
   const accountName = (id: number | null) => accounts.find((account) => account.id === id)?.name;
 
   return (
@@ -106,9 +130,14 @@ function SourceCard({ source, accounts, onEdit }: { source: IncomeSource; accoun
             </span>
           )}
         </div>
-        <button type="button" onClick={onEdit} aria-label={`Edit ${source.name}`} className={BUTTON_SECONDARY}>
-          Edit
-        </button>
+        <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
+          <button type="button" onClick={onPayChange} aria-label={`Record a pay change for ${source.name}`} className={BUTTON_SECONDARY}>
+            Record a pay change
+          </button>
+          <button type="button" onClick={onEdit} aria-label={`Edit ${source.name}`} className={BUTTON_SECONDARY}>
+            Edit
+          </button>
+        </div>
       </div>
 
       <dl className="mt-4 grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
@@ -191,8 +220,76 @@ function SourceCard({ source, accounts, onEdit }: { source: IncomeSource; accoun
           This amount stays an estimate until you type the real one into a paycheck.
         </p>
       )}
+
+      <PayHistory source={source} onEditTerms={onEditTerms} />
     </section>
   );
+}
+
+/**
+ * Every set of amounts the source has had or will have, newest first. Shown once there is more
+ * than one: until a raise is recorded there is no history to speak of.
+ */
+function PayHistory({ source, onEditTerms }: { source: IncomeSource; onEditTerms: (terms: PayTerms) => void }) {
+  const remove = useDeletePayChange(source.id);
+  if (source.payHistory.length < 2) {
+    return null;
+  }
+  return (
+    <div className="mt-4">
+      <h3 className="border-b border-line pb-2 font-semibold">Pay history</h3>
+      <ul className="divide-y divide-line">
+        {[...source.payHistory].reverse().map((entry) => {
+          const from = entry.effectiveDate === null ? "the start" : formatDate(entry.effectiveDate);
+          return (
+            <li key={entry.id ?? "start"} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <span className="min-w-0">
+                <span className="font-medium">From {from}</span>
+                {/* Said in words, never by color alone. */}
+                <span className="text-sm text-muted">{entry.current ? " · in use now" : isAhead(entry, source) ? " · still to come" : ""}</span>
+                <span className="block text-sm text-muted">
+                  {entry.grossCents !== null && (
+                    <>
+                      <span data-amount>{formatCents(entry.grossCents)}</span> gross ·{" "}
+                    </>
+                  )}
+                  <span data-amount>{formatCents(entry.netCents)}</span> take-home a paycheck
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1">
+                <EditButton name={`the pay from ${from}`} onClick={() => onEditTerms(entry)} labelled />
+                {entry.id !== null && (
+                  <button
+                    type="button"
+                    disabled={remove.isPending}
+                    onClick={() => entry.id !== null && remove.mutate(entry.id)}
+                    aria-label={`Remove the pay change from ${from}`}
+                    className={BUTTON_LINK}
+                  >
+                    Remove
+                  </button>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {remove.isError && (
+        <p role="alert" className="text-danger">
+          {remove.error.message}
+        </p>
+      )}
+      <p className="text-sm text-muted">
+        Each paycheck uses the newest amounts dated on or before its payday. Removing a change lets the amounts before it carry on.
+      </p>
+    </div>
+  );
+}
+
+/** A change of pay that has not taken effect yet: it is dated after the one in force today. */
+function isAhead(entry: PayTerms, source: IncomeSource): boolean {
+  const current = source.payHistory.findIndex((candidate) => candidate.current);
+  return source.payHistory.indexOf(entry) > current;
 }
 
 function Fact({ term, children }: { term: string; children: ReactNode }) {

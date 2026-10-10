@@ -12,6 +12,7 @@ import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.income.IncomeRepository.Deduction;
 import app.budget.server.income.IncomeRepository.Match;
 import app.budget.server.income.IncomeRepository.MatchMode;
+import app.budget.server.income.IncomeRepository.Pay;
 import app.budget.server.income.IncomeRepository.PaycheckOverride;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.schedule.HolidaysRepository;
@@ -93,22 +94,22 @@ public final class PayCalendar {
     public record MatchFigures(long perPaycheckCents, long mostPossibleCents, long contributeMoreCents) {}
 
     /**
-     * The figures for a source's match; empty when it has none. A formula with no gross pay to
+     * The figures for the match on a paycheck that comes to {@code pay}; empty when it has none. A formula with no gross pay to
      * work from stands only on the user's word that their contribution is within the matched
      * share: all of it is then matched, and that is also the most it is known to come to.
      */
-    public static Optional<MatchFigures> matchFigures(Source source) {
-        Match match = source.match();
-        boolean grossUnknown = match != null && match.mode() == MatchMode.FORMULA && source.grossCents() == null;
+    public static Optional<MatchFigures> matchFigures(Pay pay) {
+        Match match = pay.match();
+        boolean grossUnknown = match != null && match.mode() == MatchMode.FORMULA && pay.grossCents() == null;
         if (match == null || (grossUnknown && !match.contributionWithinCap())) {
             return Optional.empty();
         }
         EmployerMatch terms = match.mode() == MatchMode.FIXED
                 ? EmployerMatch.fixed(Money.ofCents(match.fixedCents()))
                 : EmployerMatch.formula(BasisPoints.of(match.matchBp()), BasisPoints.of(match.capBpOfGross()));
-        Money gross = Money.ofCents(source.grossCents() == null ? 0 : source.grossCents());
+        Money gross = Money.ofCents(pay.grossCents() == null ? 0 : pay.grossCents());
         // What the employee puts in is whatever their deductions send to the account the match goes to.
-        Money employee = source.deductions().stream()
+        Money employee = pay.deductions().stream()
                 .filter(deduction -> deduction.toAccountId() != null && deduction.toAccountId() == match.toAccountId())
                 .map(deduction -> Money.ofCents(deduction.amountCents()))
                 .reduce(Money.ZERO, Money::plus);
@@ -122,18 +123,18 @@ public final class PayCalendar {
                 terms.contributionShortOfCap(gross, employee).cents()));
     }
 
-    /** Everything one of the source's paychecks sends straight to other accounts. */
-    static List<Contribution> contributions(Source source) {
+    /** Everything a paycheck that comes to {@code pay} sends straight to other accounts. */
+    static List<Contribution> contributions(Pay pay) {
         List<Contribution> contributions = new ArrayList<>();
-        for (Deduction deduction : source.deductions()) {
+        for (Deduction deduction : pay.deductions()) {
             if (deduction.toAccountId() != null && deduction.amountCents() > 0) {
                 contributions.add(new Contribution(deduction.toAccountId(), deduction.name(), CONTRIBUTION, deduction.amountCents()));
             }
         }
-        matchFigures(source)
+        matchFigures(pay)
                 .filter(figures -> figures.perPaycheckCents() > 0)
                 .ifPresent(figures -> contributions.add(
-                        new Contribution(source.match().toAccountId(), MATCH_LABEL, EMPLOYER_MATCH, figures.perPaycheckCents())));
+                        new Contribution(pay.match().toAccountId(), MATCH_LABEL, EMPLOYER_MATCH, figures.perPaycheckCents())));
         return List.copyOf(contributions);
     }
 
@@ -230,13 +231,15 @@ public final class PayCalendar {
         List<Paycheck> paychecks = new ArrayList<>();
         for (Source source : sources) {
             Map<LocalDate, PaycheckOverride> edited = overrides.getOrDefault(source.id(), Map.of());
-            // The same for every paycheck: a typed-over take-home amount does not change what was deducted.
-            List<Contribution> contributions = contributions(source);
             for (Occurrence occurrence : schedule.occurrences(source.schedule(), from, to)) {
+                // A raise takes over from the first paycheck whose schedule names its date or a later one.
+                Pay pay = source.termsOn(occurrence.scheduled()).pay();
+                // A typed-over take-home amount does not change what was deducted.
+                List<Contribution> contributions = contributions(pay);
                 PaycheckOverride override = edited.get(occurrence.scheduled());
                 paychecks.add(override == null
                         ? new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
-                                source.netCents(), source.netIsEstimate(), null, contributions)
+                                pay.netCents(), pay.netIsEstimate(), null, contributions)
                         // An amount the user typed is the amount: it is no longer an estimate.
                         : new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
                                 override.netCents(), false, override.projectedCents(), contributions));

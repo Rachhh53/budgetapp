@@ -119,6 +119,7 @@ public final class AccountsRepository {
                         SELECT EXISTS (SELECT 1 FROM income_sources WHERE deposit_account_id = :id)
                             OR EXISTS (SELECT 1 FROM paycheck_deductions WHERE to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM income_pay_changes WHERE match_to_account_id = :id)
                         """)
                 .bind("id", id)
                 .mapTo(Boolean.class)
@@ -206,7 +207,10 @@ public final class AccountsRepository {
     /** True when an employer match is paid into this account. */
     public boolean receivesEmployerMatch(long id) {
         return jdbi.withHandle(handle -> handle
-                .createQuery("SELECT EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)")
+                .createQuery("""
+                        SELECT EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM income_pay_changes WHERE match_to_account_id = :id)
+                        """)
                 .bind("id", id)
                 .mapTo(Boolean.class)
                 .one());

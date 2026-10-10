@@ -20,6 +20,7 @@ const CHECKING: Account = {
 const RETIREMENT: Account = { ...CHECKING, id: 2, name: "Retirement", type: "investment", color: "#7e22ce" };
 
 const SALARY: IncomeSource = {
+  payHistory: [],
   id: 1,
   name: "Northwind Health",
   depositAccountId: 1,
@@ -41,6 +42,7 @@ const SALARY: IncomeSource = {
   matchFigures: null,
 };
 const BAKERY: IncomeSource = {
+  payHistory: [],
   id: 2,
   name: "Riverside Bakery",
   depositAccountId: 1,

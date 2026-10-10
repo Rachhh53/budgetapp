@@ -46,6 +46,7 @@ const PERFORMANCE: AccountPerformance = {
 };
 
 const SALARY: IncomeSource = {
+  payHistory: [],
   id: 1,
   name: "Brightwater Health",
   depositAccountId: 1,

@@ -67,6 +67,29 @@ export interface MatchFigures {
   contributeMoreCents: number;
 }
 
+/**
+ * What a source's paychecks come to from a date on: the amounts it started with, or a later
+ * change of pay (a raise). A paycheck uses the latest one dated on or before its payday.
+ */
+export interface PayTerms {
+  /** The change of pay; `null` for the amounts the source started with. */
+  id: number | null;
+  /** The first day these apply; `null` for the amounts the source started with. */
+  effectiveDate: string | null;
+  grossCents: number | null;
+  netCents: number;
+  netIsEstimate: boolean;
+  deductions: Deduction[];
+  match: EmployerMatch | null;
+  matchFigures: MatchFigures | null;
+  /** These are the amounts in force today. */
+  current: boolean;
+}
+
+/**
+ * An income source. Its amounts (gross, net, deductions, match) are the ones in force today;
+ * `payHistory` has every set of amounts it has had or will have, oldest first.
+ */
 export interface IncomeSource {
   id: number;
   name: string;
@@ -83,9 +106,19 @@ export interface IncomeSource {
   match: EmployerMatch | null;
   /** `null` without a match. */
   matchFigures: MatchFigures | null;
+  payHistory: PayTerms[];
 }
 
-export type IncomeSourceInput = Omit<IncomeSource, "id" | "matchFigures" | "deductions"> & { deductions: DeductionInput[] };
+export type IncomeSourceInput = Omit<IncomeSource, "id" | "matchFigures" | "deductions" | "payHistory"> & {
+  deductions: DeductionInput[];
+  /**
+   * Only when changing a source: the amounts are a change of pay from this day on (a raise),
+   * and earlier paychecks keep what they had. Left out, the amounts in force today are corrected.
+   */
+  effectiveFrom?: string;
+  /** Only when changing, without `effectiveFrom`: correct the amounts the source started with instead. */
+  originalAmounts?: boolean;
+};
 
 /** Money a paycheck puts straight into another account: a deduction that names one, or the employer's match. */
 export interface Contribution {
@@ -180,6 +213,15 @@ export function useDeleteIncomeSource(id: number) {
   const refresh = useRefreshIncome();
   return useMutation({
     mutationFn: () => api.delete<{ done: boolean }>(`/api/income-sources/${id}`),
+    onSuccess: refresh,
+  });
+}
+
+/** Removes one change of pay, so the amounts before it carry on. */
+export function useDeletePayChange(sourceId: number) {
+  const refresh = useRefreshIncome();
+  return useMutation({
+    mutationFn: (changeId: number) => api.delete<IncomeSource>(`/api/income-sources/${sourceId}/pay-changes/${changeId}`),
     onSuccess: refresh,
   });
 }
