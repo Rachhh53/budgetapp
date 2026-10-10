@@ -149,10 +149,30 @@ class BalanceProjectorTest {
 
         List<PeriodBalance> balances = BalanceProjector.project(List.of(anchor("2026-10-16", 50000)), movements, PERIODS);
 
-        // Oct 1–14 ended before any balance was known.
-        assertThat(balances).extracting(balance -> balance.period().start()).containsExactly(date("2026-10-15"), date("2026-11-01"));
-        assertThat(balances.getFirst().out()).isEqualTo(cents(10000));
-        assertThat(balances.getFirst().ending()).isEqualTo(cents(40000));
+        // Oct 1–14 ended before any balance was known, so it is skipped over here: see the test below.
+        PeriodBalance entered = balances.get(1);
+        assertThat(entered.period().start()).isEqualTo(date("2026-10-15"));
+        assertThat(entered.out()).isEqualTo(cents(10000));
+        assertThat(entered.ending()).isEqualTo(cents(40000));
+    }
+
+    @Test
+    void aPeriodBeforeTheFirstBalanceShowsThatBalanceWithNothingCountedYet() {
+        List<Movement> movements = List.of(move("2026-10-05", 248620), move("2026-10-08", -10000));
+
+        List<PeriodBalance> balances = BalanceProjector.project(List.of(anchor("2026-10-16", 50000)), movements, PERIODS);
+
+        // The account does not go missing from the earlier period: it stands at what was entered
+        // later, dated then, with nothing added up before it.
+        assertThat(balances).hasSize(PERIODS.size());
+        PeriodBalance before = balances.getFirst();
+        assertThat(before.period().start()).isEqualTo(date("2026-10-01"));
+        assertThat(before.entered()).isFalse();
+        assertThat(before.startingOn()).isEqualTo(date("2026-10-16"));
+        assertThat(before.starting()).isEqualTo(cents(50000));
+        assertThat(before.in()).isEqualTo(cents(0));
+        assertThat(before.out()).isEqualTo(cents(0));
+        assertThat(before.ending()).isEqualTo(cents(50000));
     }
 
     @Test

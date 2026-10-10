@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account, AccountDetail } from "../../src/api/accounts";
+import { todayIso } from "../../src/lib/dates";
 import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
@@ -12,6 +13,7 @@ const CHECKING: Account = {
   subtypeLabel: null,
   color: "#0f766e",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: { id: 10, date: "2026-10-02", amountCents: 170510, note: null },
 };
 const SAVINGS: Account = {
@@ -22,6 +24,7 @@ const SAVINGS: Account = {
   subtypeLabel: "High-yield",
   color: "#c2410c",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: { id: 11, date: "2026-09-30", amountCents: 842000, note: null },
 };
 const CARD: Account = {
@@ -32,6 +35,7 @@ const CARD: Account = {
   subtypeLabel: null,
   color: "#4338ca",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: null,
 };
 const OLD: Account = { ...SAVINGS, id: 4, name: "Old Savings", archived: true, latestBalance: null };
@@ -63,6 +67,30 @@ describe("accounts screen", () => {
     expect(screen.queryByRole("region", { name: "Loans" })).not.toBeInTheDocument();
   });
 
+  it("shows what each account holds today once that is known", async () => {
+    fakeBackend({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, CARD] }),
+      "GET /api/account-balances": () => ({
+        status: 200,
+        data: [
+          { accountId: CHECKING.id, date: "2026-10-09", balanceCents: 309610, availableCents: 289610 },
+          { accountId: SAVINGS.id, date: "2026-10-09", balanceCents: 887000, availableCents: 887000 },
+          { accountId: CARD.id, date: "2026-10-09", balanceCents: 0, availableCents: 0 },
+        ],
+      }),
+    });
+    renderApp("/accounts");
+
+    const cash = await screen.findByRole("region", { name: "Checking & savings" });
+    const checking = within(cash).getByRole("link", { name: /Everyday Checking/ });
+    // Not the $1,705.10 typed in a week ago: that plus everything since.
+    await waitFor(() => expect(checking).toHaveTextContent("$3,096.10"));
+    expect(checking).toHaveTextContent("today");
+    expect(within(cash).getByText("$11,966.10")).toBeInTheDocument();
+    // No balance was entered for the card; it is added up from nothing like any other account.
+    expect(within(screen.getByRole("region", { name: "Credit cards" })).getByRole("link", { name: /Travel Card/ })).toHaveTextContent("$0.00");
+  });
+
   it("tucks archived accounts away from the groups", async () => {
     fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING, OLD] }) });
     renderApp("/accounts");
@@ -86,7 +114,7 @@ describe("accounts screen", () => {
       "POST /api/accounts": (body) => {
         const created = { ...(body as Omit<Account, "id" | "latestBalance">), id: 9, latestBalance: null };
         accounts = [...accounts, created];
-        return { status: 201, data: { account: created, balances: [] } satisfies AccountDetail };
+        return { status: 201, data: { account: created, balances: [], interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null }, rates: [] } satisfies AccountDetail };
       },
     });
     renderApp("/accounts");
@@ -113,10 +141,62 @@ describe("accounts screen", () => {
         institution: "Coastal Credit Union",
         color: "#7e22ce",
         archived: false,
+        lowBalanceThresholdCents: null,
       },
     ]);
     const investments = await screen.findByRole("region", { name: "Investments" });
     expect(within(investments).getByRole("link", { name: /Retirement/ })).toHaveTextContent("401(k) · Coastal Credit Union");
+  });
+
+  it("takes a savings account's interest rate while adding it, and saves it from today", async () => {
+    const detail = (account: Account): AccountDetail => ({
+      account,
+      balances: [],
+      interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null },
+      rates: [],
+    });
+    const fetchMock = fakeBackend({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }),
+      "POST /api/accounts": (body) => ({
+        status: 201,
+        data: detail({ ...(body as Omit<Account, "id" | "latestBalance">), id: 9, latestBalance: null }),
+      }),
+      "POST /api/accounts/9/rates": () => ({ status: 201, data: detail({ ...CHECKING, id: 9 }) }),
+    });
+    renderApp("/accounts");
+    await screen.findByRole("link", { name: /Everyday Checking/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Rainy Day Savings");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Savings");
+    await userEvent.type(within(dialog).getByLabelText("Interest rate, APY % (optional)"), "4.1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "POST /api/accounts/9/rates")).toEqual([{ rateBp: 410, effectiveDate: todayIso() }]);
+  });
+
+  it("offers no interest rate for an account that earns none this way", async () => {
+    fakeBackend();
+    renderApp("/accounts");
+    await screen.findByText("No accounts yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Credit card");
+
+    expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
+  });
+
+  it("has an Edit button on every account, which opens it for changing without leaving the list", async () => {
+    fakeBackend({ "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }) });
+    renderApp("/accounts");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Everyday Checking" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit account" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Everyday Checking");
   });
 
   it("starts a new account on a color no other account uses", async () => {

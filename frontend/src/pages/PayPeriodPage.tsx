@@ -1,13 +1,18 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info, PartyPopper } from "lucide-react";
+import { EditButton } from "../components/EditButton";
+import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
-import { type Category, useCategories, useTags } from "../api/categories";
+import { type Bucket, useBuckets } from "../api/buckets";
+import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
-import { type Item, useChangeItemAmount, useItems } from "../api/items";
+import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
 import {
   type AccountPeriod,
+  type BucketPeriod,
+  type InterestLine,
   type Occurrence,
   type PeriodDetail,
   useEditOccurrence,
@@ -15,14 +20,15 @@ import {
   usePeriod,
 } from "../api/periods";
 import { AddItemButton, useAddItem } from "../components/add/AddItem";
-import { EstimateKey } from "../components/Amount";
+import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { ItemForm } from "../components/items/ItemForm";
-import { ConfirmationCode } from "../components/period/ConfirmationCode";
+import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { formatRate } from "../lib/rates";
 
 /** How far either side of the period on screen the strip of ending balances reaches. */
 const STRIP_DAYS_BACK = 45;
@@ -41,7 +47,7 @@ const EDITABLE = "input, textarea, select, [contenteditable='true'], [role='dial
  * inside themselves only if a period holds more than fits. On a phone it is one column,
  * with what needs doing by hand first.
  *
- * Buckets ("available after buckets") arrive in Phase 3 and the credit cards panel in Phase 5.
+ * The credit cards panel arrives in Phase 5.
  */
 export function PayPeriodPage() {
   const { start: startParam } = useParams();
@@ -59,6 +65,7 @@ export function PayPeriodPage() {
   const categories = useCategories();
   const tags = useTags();
   const items = useItems();
+  const buckets = useBuckets();
 
   const nearby = around.data?.periods ?? [];
   const at = nearby.findIndex((candidate) => candidate.start === start);
@@ -77,7 +84,8 @@ export function PayPeriodPage() {
 
   const [editingItem, setEditingItem] = useState<Item>();
 
-  const failure = upcoming.error ?? period.error ?? accounts.error ?? categories.error ?? tags.error ?? items.error;
+  const failure =
+    upcoming.error ?? period.error ?? accounts.error ?? categories.error ?? tags.error ?? items.error ?? buckets.error;
   if (failure) {
     return (
       <>
@@ -91,7 +99,7 @@ export function PayPeriodPage() {
   if (upcoming.data && start === undefined) {
     return <NoPeriods hasIncome={upcoming.data.primarySourceId !== null} />;
   }
-  if (!detail || !accounts.data || !categories.data || !tags.data || !items.data) {
+  if (!detail || !accounts.data || !categories.data || !tags.data || !items.data || !buckets.data) {
     return (
       <>
         <h1 className="text-2xl font-bold md:text-3xl">Pay period</h1>
@@ -106,11 +114,17 @@ export function PayPeriodPage() {
   const anyEstimate =
     detail.paychecks.some((paycheck) => paycheck.estimate) ||
     detail.occurrences.some((occurrence) => occurrence.estimate) ||
-    detail.entries.some((entry) => entry.estimate);
+    detail.entries.some((entry) => entry.estimate) ||
+    // Interest is always an estimate until a balance is entered that includes it.
+    detail.interest.length > 0;
   const names = new Map(accounts.data.map((account) => [account.id, account.name]));
+  const bucketNames = new Map(buckets.data.map((bucket) => [bucket.id, bucket.name]));
   const context: RowContext = {
     accountName: (id) => names.get(id) ?? "an account",
+    bucketName: (id) => (id === null ? undefined : bucketNames.get(id)),
+    isChecking: (id) => accounts.data.some((account) => account.id === id && account.type === "checking"),
     categories: categories.data,
+    tags: tags.data,
     items: items.data,
     editItem: setEditingItem,
   };
@@ -141,7 +155,7 @@ export function PayPeriodPage() {
       <PeriodStrip periods={stripAround(nearby, at)} selected={detail.start} />
 
       {primary && primaryAccount ? (
-        <Figures balance={primary} account={primaryAccount} />
+        <Figures balance={primary} account={primaryAccount} detail={detail} />
       ) : (
         <Card>
           <p className="font-medium">No balance to start from yet.</p>
@@ -167,12 +181,21 @@ export function PayPeriodPage() {
           <ManualPanel occurrences={lists.manual} carriedOver={detail.carriedOver} oneOffs={lists.oneOffs} context={context} />
         </div>
         <div className="flex flex-col gap-3 lg:order-1 lg:min-h-0 lg:overflow-y-auto">
-          <IncomePanel paychecks={detail.paychecks} moneyIn={lists.moneyIn} context={context} />
+          <IncomePanel paychecks={detail.paychecks} moneyIn={lists.moneyIn} interest={detail.interest} context={context} />
           <AutoPanel occurrences={lists.auto} context={context} />
           <BudgetsPanel occurrences={lists.budgets} context={context} />
         </div>
         <div className="flex flex-col gap-3 lg:order-3 lg:min-h-0 lg:overflow-y-auto">
-          <AccountsPanel balances={detail.accounts} accounts={accounts.data} primaryAccountId={detail.primaryAccountId} />
+          <AccountsPanel
+            balances={detail.accounts}
+            accounts={accounts.data}
+            buckets={buckets.data}
+            bucketPeriods={detail.buckets}
+            items={items.data}
+            periodStart={detail.start}
+            periodEnd={detail.end}
+            primaryAccountId={detail.primaryAccountId}
+          />
         </div>
       </div>
 
@@ -192,7 +215,12 @@ export function PayPeriodPage() {
 /** What each row needs to describe itself and to open what it belongs to. */
 interface RowContext {
   accountName: (id: number) => string;
+  /** `undefined` for no bucket, or one that has since been archived or removed. */
+  bucketName: (id: number | null) => string | undefined;
+  /** True for a checking account: the only kind a check can be written on. */
+  isChecking: (id: number) => boolean;
   categories: readonly Category[];
+  tags: readonly Tag[];
   items: readonly Item[];
   editItem: (item: Item) => void;
 }
@@ -318,7 +346,16 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
                 period.start === selected ? "border-2 border-accent" : "border border-line"
               }`}
             >
-              <span className="block text-xs text-muted">{formatDay(period.start)}</span>
+              <span className="block text-xs text-muted">
+                {formatDay(period.start)}
+                {/* In words beside the date, so the flag adds no height and never rests on color alone. */}
+                {period.lowBalance && (
+                  <span className="font-semibold text-danger">
+                    {" "}
+                    · Low<span className="sr-only"> balance</span>
+                  </span>
+                )}
+              </span>
               <span data-amount className="block font-semibold tabular-nums">
                 {period.projectedEndingCents === null ? "—" : formatCents(period.projectedEndingCents)}
               </span>
@@ -331,7 +368,7 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
 }
 
 /** The five numbers along the top, for the account the paycheck lands in. */
-function Figures({ balance, account }: { balance: AccountPeriod; account: Account }) {
+function Figures({ balance, account, detail }: { balance: AccountPeriod; account: Account; detail: PeriodDetail }) {
   // Whole numbers without the $, as the mockup writes the sum under the ending balance.
   const plain = (cents: number) => formatCents(cents).replace("$", "");
   return (
@@ -339,7 +376,10 @@ function Figures({ balance, account }: { balance: AccountPeriod; account: Accoun
       <Figure
         label="Starting balance"
         cents={balance.startingCents}
-        note={`${account.name} · ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
+        // A balance dated after this period is the first one entered: nothing earlier is counted, and the note says so.
+        note={`${account.name} · ${formatDay(balance.startingOn)}${
+          balance.entered ? " · set by you" : balance.startingOn > detail.end ? " · first balance, entered later" : ""
+        }`}
         className="order-2 lg:order-1"
       />
       <Figure
@@ -347,6 +387,8 @@ function Figures({ balance, account }: { balance: AccountPeriod; account: Accoun
         cents={balance.inCents}
         sign="+"
         note="Paychecks and money in"
+        breakdown={comingInto(balance, detail)}
+        breakdownLabel="What is coming in"
         className="order-3 lg:order-2"
       />
       <Figure
@@ -364,13 +406,51 @@ function Figures({ balance, account }: { balance: AccountPeriod; account: Accoun
         highlight
       />
       <Figure
-        label="Lowest point"
-        cents={balance.lowestCents}
-        note={`on ${formatDay(balance.lowestOn)}`}
+        label="Available after buckets"
+        cents={balance.availableCents}
+        note={
+          balance.lowBalance
+            ? `Low balance: dips to ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
+            : `${formatCents(balance.bucketsCents)} in buckets · lowest ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
+        }
+        warn={balance.lowBalance}
         className="order-5"
       />
     </dl>
   );
+}
+
+/** One thing that makes up a figure. */
+interface Part {
+  label: string;
+  cents: number;
+}
+
+/**
+ * What "Coming in" is made of for one account: its paychecks, one-off money in, transfers
+ * arriving and interest. The total itself comes from the backend; if these do not add up to
+ * it, the difference is listed too, so the list always sums to the figure above it.
+ */
+function comingInto(balance: AccountPeriod, detail: PeriodDetail): Part[] {
+  const here = balance.accountId;
+  const parts: Part[] = [
+    ...detail.paychecks
+      .filter((paycheck) => paycheck.depositAccountId === here)
+      .map((paycheck) => ({ label: `${paycheck.sourceName} paycheck`, cents: paycheck.netCents })),
+    ...detail.entries
+      .filter((entry) => (entry.kind === "money_in" ? entry.accountId === here : entry.kind === "transfer" && entry.toAccountId === here))
+      .map((entry) => ({ label: entry.kind === "transfer" ? `${entry.description} (transfer)` : entry.description, cents: entry.amountCents })),
+    ...[...detail.carriedOver, ...detail.occurrences]
+      .filter((occurrence) => !occurrence.skipped && occurrence.payToAccountId === here)
+      .map((occurrence) => ({ label: `${occurrence.name} (transfer)`, cents: occurrence.amountCents })),
+    ...detail.interest.filter((line) => line.accountId === here).map((line) => ({ label: "Interest (estimate)", cents: line.amountCents })),
+  ];
+  const rest = balance.inCents - parts.reduce((sum, part) => sum + part.cents, 0);
+  if (rest !== 0) {
+    // Less than the list: a balance entered part-way through already includes what arrived before it.
+    parts.push({ label: rest < 0 ? "Already in the balance you entered" : "Other", cents: rest });
+  }
+  return parts;
 }
 
 function Figure({
@@ -378,28 +458,69 @@ function Figure({
   cents,
   sign = "",
   note,
+  breakdown,
+  breakdownLabel,
   highlight = false,
+  warn = false,
   className = "",
 }: {
   label: string;
   cents: number;
   sign?: string;
   note: string;
+  /** What the number is made of, shown when the figure is hovered, focused or tapped. */
+  breakdown?: readonly Part[];
+  breakdownLabel?: string;
   /** The number the screen is about: outlined, and largest on a phone. */
   highlight?: boolean;
+  /** The note is a warning (it says so in words too): shown in the warning color. */
+  warn?: boolean;
   className?: string;
 }) {
   return (
-    <div className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${className}`}>
-      <dt className="text-sm text-muted">{label}</dt>
+    <div
+      // Focusable when it has more to show, so the keyboard and a tap reach what a hover does.
+      tabIndex={breakdown ? 0 : undefined}
+      className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${
+        breakdown ? "group relative cursor-help focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink" : ""
+      } ${className}`}
+    >
+      <dt className="flex items-center gap-1 text-sm text-muted">
+        {label}
+        {breakdown && <Info aria-hidden className="size-3.5" />}
+      </dt>
       <dd>
         <span data-amount className={`block font-bold tabular-nums ${highlight ? "text-3xl lg:text-2xl" : "text-xl lg:text-2xl"} lg:short:text-xl`}>
           {sign}
           {formatCents(cents)}
         </span>
-        <span data-amount title={note} className="block text-sm text-muted tabular-nums lg:truncate">
+        <span data-amount title={note} className={`block text-sm tabular-nums lg:truncate ${warn ? "font-semibold text-danger" : "text-muted"}`}>
           {note}
         </span>
+        {breakdown && (
+          <div
+            role="group"
+            aria-label={breakdownLabel}
+            // Opens towards the middle of the screen: on a phone this figure sits in the right-hand column.
+            className="invisible absolute top-full right-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface p-3 text-sm opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 lg:right-auto lg:left-0"
+          >
+            {breakdown.length === 0 ? (
+              <p className="text-muted">Nothing in this pay period.</p>
+            ) : (
+              <ul className="space-y-1">
+                {breakdown.map((part, index) => (
+                  <li key={index} className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 break-words">{part.label}</span>
+                    <span data-amount className="shrink-0 font-semibold tabular-nums">
+                      {part.cents < 0 ? "−" : ""}
+                      {formatCents(Math.abs(part.cents))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </dd>
     </div>
   );
@@ -447,7 +568,7 @@ function Row({
   wrap?: boolean;
 }) {
   return (
-    <li className="py-1.5 lg:py-1">
+    <li onClick={clickRowToEdit} className={`py-1.5 lg:py-1 ${ROW_OPENS}`}>
       <div className="flex items-center gap-3">
         {lead}
         <div className="min-w-0 flex-1 leading-tight">
@@ -469,16 +590,17 @@ function Row({
   );
 }
 
-/** A recurring item's name, as the button that opens it for a "this and all future" change. */
+/** A recurring item's name, with the button that opens it for a "this and all future" change. */
 function ItemName({ occurrence, context }: { occurrence: Occurrence; context: RowContext }) {
   const item = context.items.find((candidate) => candidate.id === occurrence.itemId);
   if (item === undefined) {
     return <>{occurrence.name}</>;
   }
   return (
-    <button type="button" onClick={() => context.editItem(item)} aria-label={`Edit ${occurrence.name}`} className="rounded-md text-left font-medium underline-offset-2 hover:underline">
-      {occurrence.name}
-    </button>
+    <span className="flex items-center gap-1">
+      <span className="min-w-0">{occurrence.name}</span>
+      <EditButton name={occurrence.name} onClick={() => context.editItem(item)} />
+    </span>
   );
 }
 
@@ -539,13 +661,14 @@ function PaycheckAmount({ paycheck }: { paycheck: Paycheck }) {
   );
 }
 
-/** A one-off's description, as the button that opens it in the + Add item form. */
+/** A one-off's description, with the button that opens it in the + Add item form. */
 function EntryName({ entry }: { entry: Entry }) {
   const { editEntry } = useAddItem();
   return (
-    <button type="button" onClick={() => editEntry(entry)} aria-label={`Edit ${entry.description}`} className="rounded-md text-left font-medium underline-offset-2 hover:underline">
-      {entry.description}
-    </button>
+    <span className="flex items-center gap-1">
+      <span className="min-w-0">{entry.description}</span>
+      <EditButton name={entry.description} onClick={() => editEntry(entry)} />
+    </span>
   );
 }
 
@@ -553,14 +676,42 @@ function Dot({ color }: { color: string | undefined }) {
   return <span aria-hidden className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: color ?? "var(--border)" }} />;
 }
 
-function categoryOf(categoryId: number | null, context: RowContext): Category | undefined {
-  return context.categories.find((category) => category.id === categoryId);
+/**
+ * The category's colour beside a row. Its name, and the row's tags, are kept off the line
+ * itself, where they read like an account or bucket name: they show on hover and are read
+ * out by a screen reader.
+ */
+function CategoryDot({ categoryId, tagIds, context }: { categoryId: number | null; tagIds: readonly number[]; context: RowContext }) {
+  const category = context.categories.find((candidate) => candidate.id === categoryId);
+  const tagNames = context.tags.filter((tag) => tagIds.includes(tag.id)).map((tag) => tag.name);
+  const about = [category && `Category: ${category.name}`, tagNames.length > 0 && `Tags: ${tagNames.join(", ")}`]
+    .filter(Boolean)
+    .join(" · ");
+  if (about === "") {
+    return <Dot color={undefined} />;
+  }
+  return (
+    <span title={about} className="flex shrink-0 items-center">
+      <Dot color={category?.color} />
+      <span className="sr-only">{about}</span>
+    </span>
+  );
 }
 
-function IncomePanel({ paychecks, moneyIn, context }: { paychecks: readonly Paycheck[]; moneyIn: readonly Entry[]; context: RowContext }) {
+function IncomePanel({
+  paychecks,
+  moneyIn,
+  interest,
+  context,
+}: {
+  paychecks: readonly Paycheck[];
+  moneyIn: readonly Entry[];
+  interest: readonly InterestLine[];
+  context: RowContext;
+}) {
   return (
     <Panel title="Income">
-      {paychecks.length === 0 && moneyIn.length === 0 ? (
+      {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 ? (
         <Empty>Nothing is coming in this period.</Empty>
       ) : (
         <ul className="divide-y divide-line">
@@ -580,10 +731,40 @@ function IncomePanel({ paychecks, moneyIn, context }: { paychecks: readonly Payc
               amount={<EntryAmount entry={entry} />}
             />
           ))}
+          {/* Worked out from the balance and the rate, so it is not typed over: entering the real balance replaces it. */}
+          {interest.map((line) => (
+            <Row
+              key={`${line.accountId}-${line.date}`}
+              title="Interest"
+              detail={`${formatDay(line.date)} → ${context.accountName(line.accountId)} · ${formatRate(line.rateBp)} APY`}
+              amount={<Amount cents={line.amountCents} estimate className="w-28 font-semibold" />}
+            />
+          ))}
         </ul>
       )}
     </Panel>
   );
+}
+
+/**
+ * "Checking", "Checking · Gifts bucket", "Checking → Savings · Emergency fund bucket": the
+ * account (and bucket) an occurrence is paid from, and where its money ends up when it stays the user's.
+ */
+function whereItGoes(occurrence: Occurrence, context: RowContext): string {
+  const account = context.accountName(occurrence.payFromAccountId);
+  const paidFrom = context.bucketName(occurrence.fromBucketId);
+  // Paid out of a bucket: say which, since the bucket goes down with the account.
+  const from = paidFrom === undefined ? account : `${account} · ${paidFrom} bucket`;
+  const bucket = context.bucketName(occurrence.bucketId);
+  if (occurrence.kind === "bucket_move") {
+    return `${from} → ${bucket ?? "a bucket"} bucket`;
+  }
+  const savedIn = context.bucketName(occurrence.saveUpBucketId);
+  if (occurrence.payToAccountId === null) {
+    return savedIn === undefined ? from : `${from} · saved up in ${savedIn}`;
+  }
+  const to = context.accountName(occurrence.payToAccountId);
+  return bucket === undefined ? `${from} → ${to}` : `${from} → ${to} · ${bucket} bucket`;
 }
 
 function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[]; context: RowContext }) {
@@ -598,9 +779,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
               lead={<span className="shrink-0 rounded-md bg-bg px-1.5 py-0.5 text-xs font-semibold text-muted">AUTO</span>}
               title={<ItemName occurrence={occurrence} context={context} />}
-              detail={`${formatDay(occurrence.payBy)} · ${context.accountName(occurrence.payFromAccountId)}${
-                occurrence.payToAccountId === null ? "" : ` → ${context.accountName(occurrence.payToAccountId)}`
-              }`}
+              detail={`${formatDay(occurrence.payBy)} · ${whereItGoes(occurrence, context)}`}
               amount={<OccurrenceAmount occurrence={occurrence} context={context} />}
             />
           ))}
@@ -613,7 +792,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
 function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurrence[]; context: RowContext }) {
   const total = occurrences.reduce((sum, occurrence) => sum + occurrence.amountCents, 0);
   return (
-    <Panel title="Spending budgets" aside="this paycheck">
+    <Panel title="Budgets" aside="this paycheck">
       {occurrences.length === 0 ? (
         <Empty>No budgets this period. Add one as a recurring item of the Budget type.</Empty>
       ) : (
@@ -622,7 +801,13 @@ function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurren
             {occurrences.map((occurrence) => (
               <Row
                 key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
-                lead={<Dot color={categoryOf(occurrence.categoryId, context)?.color} />}
+                lead={
+                  <CategoryDot
+                    categoryId={occurrence.categoryId}
+                    tagIds={context.items.find((item) => item.id === occurrence.itemId)?.tagIds ?? []}
+                    context={context}
+                  />
+                }
                 title={
                   <>
                     <ItemName occurrence={occurrence} context={context} />
@@ -681,7 +866,7 @@ function ManualPanel({
           {oneOffs.map((entry) => (
             <Row
               key={entry.id}
-              lead={<Dot color={categoryOf(entry.categoryId, context)?.color} />}
+              lead={<CategoryDot categoryId={entry.categoryId} tagIds={entry.tagIds} context={context} />}
               title={<EntryName entry={entry} />}
               detail={oneOffDetail(entry, context)}
               amount={<EntryAmount entry={entry} />}
@@ -698,8 +883,8 @@ function oneOffDetail(entry: Entry, context: RowContext): string {
     entry.toAccountId === null
       ? context.accountName(entry.accountId)
       : `${context.accountName(entry.accountId)} → ${context.accountName(entry.toAccountId)}`;
-  const category = categoryOf(entry.categoryId, context);
-  return ["One-off", formatDay(entry.date), where, category?.name].filter(Boolean).join(" · ");
+  // The category is on the coloured dot, not here: after an account it reads like one of its buckets.
+  return ["One-off", formatDay(entry.date), where, entry.checkNumber && `Check #${entry.checkNumber}`].filter(Boolean).join(" · ");
 }
 
 /** A bill paid by hand: tick it when it is paid, and keep the confirmation code with it. */
@@ -709,9 +894,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
 
   const due = `Due ${formatDay(occurrence.dueDate)}`;
   const payBy = occurrence.payBy === occurrence.dueDate ? "" : ` · pay by ${formatDay(occurrence.payBy)}`;
-  const detail = `${due}${payBy} · ${context.accountName(occurrence.payFromAccountId)}${
-    occurrence.payToAccountId === null ? "" : ` → ${context.accountName(occurrence.payToAccountId)}`
-  }`;
+  const detail = `${due}${payBy} · ${whereItGoes(occurrence, context)}`;
 
   return (
     <Row
@@ -754,6 +937,14 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
             code={occurrence.confirmationCode}
             onSave={(confirmationCode) => edit.mutate({ occurrence, edit: { confirmationCode } })}
           />
+          {context.isChecking(occurrence.payFromAccountId) && (
+            <ConfirmationCode
+              name={occurrence.name}
+              code={occurrence.checkNumber}
+              wording={CHECK_NUMBER}
+              onSave={(checkNumber) => edit.mutate({ occurrence, edit: { checkNumber } })}
+            />
+          )}
           {edit.error && (
             <span role="alert" className="text-sm text-danger">
               {edit.error.message}
@@ -765,27 +956,42 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
   );
 }
 
-/** Where every account stands at the end of the period: one tab per account with a balance. */
+/**
+ * Where every account stands at the end of the period, and what its buckets hold: one tab
+ * per account with a balance.
+ */
 function AccountsPanel({
   balances,
   accounts,
+  buckets,
+  bucketPeriods,
+  items,
+  periodStart,
+  periodEnd,
   primaryAccountId,
 }: {
   balances: readonly AccountPeriod[];
   accounts: readonly Account[];
+  buckets: readonly Bucket[];
+  bucketPeriods: readonly BucketPeriod[];
+  items: readonly Item[];
+  periodStart: string;
+  periodEnd: string;
   primaryAccountId: number | null;
 }) {
   const id = useId();
-  const known = balances.flatMap((balance) => {
-    const account = accounts.find((candidate) => candidate.id === balance.accountId);
-    return account ? [{ account, balance }] : [];
-  });
+  // Every account gets a tab, so one never seems to have gone missing: an account with no balance
+  // entered by the end of this period has nothing to show yet, and its tab says so.
+  const known = accounts
+    .map((account) => ({ account, balance: balances.find((candidate) => candidate.accountId === account.id) }))
+    .filter((tab) => tab.balance !== undefined || !tab.account.archived);
   const [chosen, setChosen] = useState<number | null>(null);
-  const shown = known.find((tab) => tab.account.id === (chosen ?? primaryAccountId)) ?? known[0];
+  const shown =
+    known.find((tab) => tab.account.id === (chosen ?? primaryAccountId)) ?? known.find((tab) => tab.balance !== undefined) ?? known[0];
 
-  if (shown === undefined) {
+  if (shown === undefined || known.every((tab) => tab.balance === undefined)) {
     return (
-      <Panel title="Accounts" aside="at period end">
+      <Panel title="Accounts & buckets" aside="at period end">
         <Empty>
           Enter a balance on the{" "}
           <Link to="/accounts" className="font-semibold text-accent-ink underline">
@@ -797,46 +1003,257 @@ function AccountsPanel({
     );
   }
 
+  const tabs = (
+    <div role="tablist" aria-label="Accounts" className="mb-2 flex gap-1 overflow-x-auto rounded-lg bg-bg p-1">
+      {known.map(({ account }) => (
+        <button
+          key={account.id}
+          type="button"
+          role="tab"
+          id={`${id}-tab-${account.id}`}
+          aria-selected={account.id === shown.account.id}
+          aria-controls={`${id}-panel`}
+          onClick={() => setChosen(account.id)}
+          className={`min-h-11 shrink-0 rounded-md px-3 text-sm lg:min-h-9 ${
+            account.id === shown.account.id ? "bg-surface font-semibold shadow-sm" : "text-muted"
+          }`}
+        >
+          {account.name}
+        </button>
+      ))}
+    </div>
+  );
+
   const owed = OWED.includes(shown.account.type);
   const { balance } = shown;
+  if (balance === undefined) {
+    return (
+      <Panel title="Accounts & buckets" aside="at period end">
+        {tabs}
+        <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`}>
+          <Empty>
+            No balance was entered for {shown.account.name} on or before {formatDay(periodEnd)}, so there is nothing to show for it in
+            this pay period.{" "}
+            <Link to={`/accounts/${shown.account.id}`} className="font-semibold text-accent-ink underline">
+              Enter a balance
+            </Link>{" "}
+            dated then or earlier and it will appear here.
+          </Empty>
+        </div>
+      </Panel>
+    );
+  }
+  // Only when it differs from the period itself; otherwise the lines mean the whole period, as they read.
+  // This period ends before the first balance entered for the account: it stands at that balance, with nothing counted yet.
+  const beforeFirst = balance.startingOn > periodEnd;
+  const since = balance.entered && balance.startingOn > periodStart ? ` since ${formatDay(balance.startingOn)}` : "";
+  const held = bucketPeriods.flatMap((period) => {
+    const bucket = buckets.find((candidate) => candidate.id === period.bucketId);
+    return bucket && period.accountId === shown.account.id ? [{ bucket, period }] : [];
+  });
   return (
-    <Panel title="Accounts" aside="at period end">
-      <div role="tablist" aria-label="Accounts" className="mb-2 flex gap-1 overflow-x-auto rounded-lg bg-bg p-1">
-        {known.map(({ account }) => (
-          <button
-            key={account.id}
-            type="button"
-            role="tab"
-            id={`${id}-tab-${account.id}`}
-            aria-selected={account.id === shown.account.id}
-            aria-controls={`${id}-panel`}
-            onClick={() => setChosen(account.id)}
-            className={`min-h-11 shrink-0 rounded-md px-3 text-sm lg:min-h-9 ${
-              account.id === shown.account.id ? "bg-surface font-semibold shadow-sm" : "text-muted"
-            }`}
-          >
-            {account.name}
-          </button>
-        ))}
-      </div>
+    <Panel title="Accounts & buckets" aside="at period end">
+      {tabs}
       <dl id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`} className="divide-y divide-line">
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />
-        <AccountLine
-          label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
-          cents={balance.startingCents}
-        />
-        <AccountLine label={owed ? "Charged" : "Coming in"} cents={balance.inCents} sign="+" />
-        <AccountLine label={owed ? "Paid off" : "Going out"} cents={balance.outCents} sign="−" />
-        <AccountLine label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}`} cents={balance.lowestCents} />
+        {beforeFirst ? (
+          <AccountLine
+            // An account with no balance entered simply has nothing in it yet: no first balance to name.
+            label={balance.builtFromZero ? `${owed ? "Owed" : "Starting"} ${formatDay(periodStart)}` : `First balance, entered ${formatDay(balance.startingOn)}`}
+            cents={balance.startingCents}
+          />
+        ) : (
+          <AccountLine
+            label={`${owed ? "Owed" : "Starting"} ${formatDay(balance.startingOn)}${balance.entered ? " · set by you" : ""}`}
+            cents={balance.startingCents}
+          />
+        )}
+        {!beforeFirst && (
+          <>
+            {/* A balance entered part-way through already holds what moved before it, so only later days are counted: say so. */}
+            <AccountLine label={`${owed ? "Charged" : "Coming in"}${since}`} cents={balance.inCents} sign="+" />
+            <AccountLine label={`${owed ? "Paid off" : "Going out"}${since}`} cents={balance.outCents} sign="−" />
+            <AccountLine
+              label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
+              cents={balance.lowestCents}
+              warn={balance.lowBalance}
+            />
+          </>
+        )}
+        {held.length > 0 && (
+          <>
+            <AccountLine label="In buckets" cents={balance.bucketsCents} sign="−" />
+            <AccountLine label="Available after buckets" cents={balance.availableCents} />
+          </>
+        )}
       </dl>
+      {/* Said in words and set apart, not just coloured: an overdrawn account is the thing to see first. */}
+      {!owed && balance.lowestCents < 0 && (
+        <p role="alert" className="mt-2 rounded-lg border-2 border-danger p-3 font-semibold text-danger">
+          Overdrawn: {shown.account.name} drops to {formatCents(balance.lowestCents)} on {formatDay(balance.lowestOn)}
+          {balance.endingCents < 0 ? ` and ends this pay period at ${formatCents(balance.endingCents)}` : ""}.
+        </p>
+      )}
+      {!owed && balance.lowestCents >= 0 && balance.availableCents < 0 && (
+        <p role="alert" className="mt-2 rounded-lg border-2 border-danger p-3 font-semibold text-danger">
+          The buckets hold {formatCents(-balance.availableCents)} more than {shown.account.name} does. Take that much out of a bucket on the{" "}
+          <Link to={`/accounts/${shown.account.id}`} className="underline">
+            account's page
+          </Link>
+          , or update its balance.
+        </p>
+      )}
+      {beforeFirst && !balance.builtFromZero && (
+        <p className="mt-1 text-sm text-muted">
+          Nothing is counted for {shown.account.name} before the first balance you entered, so this pay period shows that balance as it is.
+        </p>
+      )}
+      {held.length > 0 && (
+        <section aria-label={`Buckets in ${shown.account.name}`} className="mt-2 border-t border-line pt-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold">Buckets</h3>
+            <Link to={`/accounts/${shown.account.id}`} className="text-sm font-semibold text-accent-ink underline">
+              Manage
+            </Link>
+          </div>
+          <ul className="divide-y divide-line">
+            {held.map(({ bucket, period }) => (
+              <BucketRow
+                key={bucket.id}
+                bucket={bucket}
+                period={period}
+                periodEnd={periodEnd}
+                // The recurring moves still putting money in it after this period: what "Stop saving" would end.
+                saving={items.filter(
+                  (item) =>
+                    !item.archived &&
+                    item.kind === "bucket_move" &&
+                    item.bucketId === bucket.id &&
+                    (item.schedule.endDate === null || item.schedule.endDate > periodEnd),
+                )}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
     </Panel>
   );
 }
 
-function AccountLine({ label, cents, sign = "", strong = false }: { label: string; cents: number; sign?: string; strong?: boolean }) {
+/** One bucket at the end of the period: what it holds, what the period moved, and how far along its goal is. */
+function BucketRow({
+  bucket,
+  period,
+  periodEnd,
+  saving,
+}: {
+  bucket: Bucket;
+  period: BucketPeriod;
+  periodEnd: string;
+  saving: readonly Item[];
+}) {
+  const stop = useEndItems();
+  const moved = period.endingCents - period.startingCents;
+  const goal = bucket.goalCents;
+  const goalReached = goal !== null && goal > 0 && period.endingCents >= goal;
+  // Against its goal date, as things stand today (the same words as on the account's page).
+  const pace = goalReached || bucket.goalDate === null ? null : bucket.goalProgress;
+  const projected = pace === null ? "" : `With what is scheduled it will hold ${formatCents(pace.projectedCents)} by ${formatDate(bucket.goalDate ?? "")}.`;
+  // Shown as at most full: a bucket can hold more than its goal.
+  const reached = goal === null ? null : Math.max(0, Math.min(100, Math.round((period.endingCents * 100) / goal)));
+  const detail = [
+    moved === 0 ? null : `${moved > 0 ? "+" : "−"}${formatCents(Math.abs(moved))} this period`,
+    goal === null ? null : `${reached}% of ${formatCents(goal)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <li className="py-1.5 lg:py-1">
+      <div className="flex items-center gap-3">
+        <Dot color={bucket.color} />
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="font-medium wrap-break-word">
+            {bucket.name}
+            {goalReached && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 align-middle text-xs font-semibold text-on-accent">
+                <PartyPopper aria-hidden className="size-3.5" />
+                Goal reached
+              </span>
+            )}
+          </div>
+          {detail !== "" && (
+            <div data-amount className="text-sm leading-tight text-muted tabular-nums">
+              {detail}
+            </div>
+          )}
+          {/* In words, never color alone; the fuller sentence is there on hover. */}
+          {pace !== null && (
+            <div data-amount title={projected} className="text-sm leading-tight tabular-nums">
+              {pace.shortCents === 0 ? (
+                <span className="font-semibold">On track</span>
+              ) : (
+                <span className="font-semibold text-danger">
+                  Short{" "}
+                  {pace.morePerPaycheckCents !== null
+                    ? `${formatCents(pace.morePerPaycheckCents)} a paycheck`
+                    : `by ${formatCents(pace.shortCents)}`}
+                </span>
+              )}
+              <span className="text-muted"> for {formatDate(bucket.goalDate ?? "")}</span>
+            </div>
+          )}
+          {/* Only where it would change something: a move still running, in this period or a later one. */}
+          {goalReached && saving.length > 0 && periodEnd >= todayIso() && (
+            <div className="mt-1">
+              <button
+                type="button"
+                disabled={stop.isPending}
+                onClick={() => stop.mutate({ items: saving, endDate: periodEnd, effectiveFrom: todayIso() })}
+                aria-label={`Stop saving into ${bucket.name}`}
+                title={`Ends ${saving.map((item) => item.name).join(", ")} after this pay period. You can undo it straight afterwards.`}
+                className="min-h-11 rounded-lg border border-line px-3 text-sm font-semibold lg:min-h-8"
+              >
+                {stop.isPending ? "Stopping…" : "Stop saving"}
+              </button>
+              {stop.error && (
+                <p role="alert" className="text-sm text-danger">
+                  {stop.error.message}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+        <span data-amount className="shrink-0 font-semibold tabular-nums">
+          {formatCents(period.endingCents)}
+        </span>
+      </div>
+      {reached !== null && (
+        // The percentage is in the text above; the bar only draws it.
+        <div aria-hidden className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg">
+          <div className="h-full rounded-full" style={{ width: `${reached}%`, backgroundColor: bucket.color }} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+function AccountLine({
+  label,
+  cents,
+  sign = "",
+  strong = false,
+  warn = false,
+}: {
+  label: string;
+  cents: number;
+  sign?: string;
+  strong?: boolean;
+  /** The label says what is wrong; this only adds the warning color. */
+  warn?: boolean;
+}) {
   return (
     <div className={`flex items-center justify-between gap-3 py-1.5 ${strong ? "text-lg font-bold" : ""}`}>
-      <dt className={strong ? "" : "text-muted"}>{label}</dt>
+      <dt className={warn ? "font-semibold text-danger" : strong ? "" : "text-muted"}>{label}</dt>
       <dd data-amount className="tabular-nums">
         {sign}
         {formatCents(cents)}

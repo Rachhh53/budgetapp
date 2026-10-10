@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { type Account, useAccounts } from "../api/accounts";
+import { type Account, holdsCash, useAccounts } from "../api/accounts";
+import { type AccountBalance, useAccountBalances } from "../api/periods";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { ACCOUNT_GROUPS, accountSubtitle } from "../components/accounts/labels";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
+import { EditButton } from "../components/EditButton";
 import { BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
 import { formatDay } from "../lib/dates";
 
@@ -15,10 +17,16 @@ import { formatDay } from "../lib/dates";
 export function AccountsPage() {
   const accounts = useAccounts();
   const [adding, setAdding] = useState(false);
+  // Kept as an id, so the open form always shows the account as it is now.
+  const [editingId, setEditingId] = useState<number>();
 
   const all = accounts.data ?? [];
   const active = all.filter((account) => !account.archived);
   const archived = all.filter((account) => account.archived);
+  const editing = all.find((account) => account.id === editingId);
+  const groups = ACCOUNT_GROUPS.map(({ title, types }) => ({ title, accounts: active.filter((account) => types.includes(account.type)) })).filter(
+    (group) => group.accounts.length > 0,
+  );
 
   return (
     <>
@@ -51,10 +59,16 @@ export function AccountsPage() {
 
       {active.length > 0 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {ACCOUNT_GROUPS.map(({ title, types }) => {
-            const group = active.filter((account) => types.includes(account.type));
-            return group.length > 0 && <AccountGroup key={title} title={title} accounts={group} />;
-          })}
+          {groups.map((group, index) => (
+            <AccountGroup
+              key={group.title}
+              title={group.title}
+              accounts={group.accounts}
+              onEdit={setEditingId}
+              // A group left alone on the last row takes the whole width instead of sitting in half of it.
+              wide={groups.length % 2 === 1 && index === groups.length - 1}
+            />
+          ))}
         </div>
       )}
 
@@ -65,23 +79,37 @@ export function AccountsPage() {
           </summary>
           <ul className="mt-2 divide-y divide-line">
             {archived.map((account) => (
-              <AccountRow key={account.id} account={account} />
+              <AccountRow key={account.id} account={account} today={undefined} onEdit={setEditingId} />
             ))}
           </ul>
         </details>
       )}
 
       {adding && <AccountForm accounts={all} onClose={() => setAdding(false)} />}
+      {editing && <AccountForm account={editing} accounts={all} onClose={() => setEditingId(undefined)} />}
     </>
   );
 }
 
-function AccountGroup({ title, accounts }: { title: string; accounts: Account[] }) {
+function AccountGroup({
+  title,
+  accounts,
+  onEdit,
+  wide,
+}: {
+  title: string;
+  accounts: Account[];
+  onEdit: (id: number) => void;
+  wide: boolean;
+}) {
   const headingId = `group-${title.replace(/\W+/g, "-").toLowerCase()}`;
-  // Only accounts with a balance count; adding in cents keeps the total exact.
-  const total = accounts.reduce((sum, account) => sum + (account.latestBalance?.amountCents ?? 0), 0);
+  const today = useAccountBalances().data;
+  // What each account holds today; until that is known, the balance last entered for it.
+  const held = (account: Account) => today?.find((balance) => balance.accountId === account.id);
+  // Adding in cents keeps the total exact.
+  const total = accounts.reduce((sum, account) => sum + (held(account)?.balanceCents ?? account.latestBalance?.amountCents ?? 0), 0);
   return (
-    <section aria-labelledby={headingId} className="rounded-card border border-line bg-surface p-5 md:p-6">
+    <section aria-labelledby={headingId} className={`rounded-card border border-line bg-surface p-5 md:p-6 ${wide ? "lg:col-span-2" : ""}`}>
       <div className="flex items-baseline justify-between gap-3 border-b border-line pb-3">
         <h2 id={headingId} className="text-lg font-semibold">
           {title}
@@ -90,24 +118,33 @@ function AccountGroup({ title, accounts }: { title: string; accounts: Account[] 
       </div>
       <ul className="divide-y divide-line">
         {accounts.map((account) => (
-          <AccountRow key={account.id} account={account} />
+          <AccountRow key={account.id} account={account} today={held(account)} onEdit={onEdit} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AccountRow({ account }: { account: Account }) {
+function AccountRow({ account, today, onEdit }: { account: Account; today: AccountBalance | undefined; onEdit: (id: number) => void }) {
   return (
-    <li>
-      <Link to={`/accounts/${account.id}`} className="flex min-h-11 items-center gap-3 py-3">
+    <li className="flex items-center gap-2">
+      <Link to={`/accounts/${account.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 py-3">
         <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
         <span className="min-w-0 flex-1">
           <span className="block truncate font-semibold">{account.name}</span>
           <span className="block truncate text-sm text-muted">{accountSubtitle(account)}</span>
         </span>
         <span className="shrink-0 text-right">
-          {account.latestBalance ? (
+          {today ? (
+            <>
+              <Amount cents={today.balanceCents} className="font-semibold" />
+              {today.balanceCents < 0 && holdsCash(account.type) ? (
+                <span className="block pr-2 text-sm font-semibold text-danger">Overdrawn today</span>
+              ) : (
+                <span className="block pr-2 text-sm text-muted">today</span>
+              )}
+            </>
+          ) : account.latestBalance ? (
             <>
               <Amount cents={account.latestBalance.amountCents} className="font-semibold" />
               <span className="block pr-2 text-sm text-muted">entered {formatDay(account.latestBalance.date)}</span>
@@ -117,6 +154,7 @@ function AccountRow({ account }: { account: Account }) {
           )}
         </span>
       </Link>
+      <EditButton name={account.name} onClick={() => onEdit(account.id)} labelled />
     </li>
   );
 }

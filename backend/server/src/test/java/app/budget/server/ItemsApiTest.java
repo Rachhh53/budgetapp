@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import app.budget.server.TestServer.Reply;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -200,7 +203,7 @@ class ItemsApiTest extends ApiTestBase {
             assertError(bill("", 100, MONTHLY_5TH, ""), "Please add a name for this item.");
             assertError(bill("Rent", 100, MONTHLY_5TH, "").replace("\"bill\"", "\"rent\""), "Please choose the type of item from the list.");
             assertError(bill("Rent", 100, MONTHLY_5TH, "").replace("\"bill\"", "\"bucket_move\""),
-                    "Bucket moves aren't available yet — they arrive together with buckets.");
+                    "Please choose the bucket this money goes into.");
             assertError(bill("Rent", -1, MONTHLY_5TH, ""), "The amount can't be less than zero.");
             assertError("{\"name\":\"Rent\",\"kind\":\"bill\",\"payFromAccountId\":%d,\"schedule\":%s}".formatted(checking, MONTHLY_5TH),
                     "The amount is missing. Please enter an amount.");
@@ -254,6 +257,152 @@ class ItemsApiTest extends ApiTestBase {
             Reply reply = server.post("/api/items", body, cookie);
             assertThat(reply.status()).isEqualTo(400);
             assertThat(reply.error()).isEqualTo(message);
+        }
+    }
+
+    @Nested
+    class Pausing {
+        private List<String> carLoanDates(String from, String to) throws Exception {
+            List<String> dates = new ArrayList<>();
+            for (JsonNode period : server.get("/api/pay-periods?from=" + from + "&to=" + to, cookie).data().get("periods")) {
+                JsonNode detail = server.get("/api/pay-periods/" + period.get("start").asText(), cookie).data();
+                for (JsonNode occurrence : detail.get("occurrences")) {
+                    if (occurrence.get("name").asText().equals("Car loan")) {
+                        dates.add(occurrence.get("scheduledDate").asText());
+                    }
+                }
+            }
+            return dates;
+        }
+
+        @Test
+        void requiresASession() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            assertThat(server.put("/api/items/" + id + "/pause", "{}", null).status()).isEqualTo(401);
+            assertThat(server.delete("/api/items/" + id + "/pause", null).status()).isEqualTo(401);
+            assertThat(server.get("/api/items/" + id, cookie).data().get("paused").asBoolean()).isFalse();
+        }
+
+        @Test
+        void pausedUntilADateItSkipsThoseDatesAndPicksUpAgain() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply reply = server.put("/api/items/" + id + "/pause", "{\"until\":\"2026-12-01\"}", cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.data().get("paused").asBoolean()).isTrue();
+            assertThat(reply.data().get("pausedUntil").asText()).isEqualTo("2026-12-01");
+            // Today is Oct 1: October and November are paused, September already happened, December runs.
+            assertThat(carLoanDates("2026-09-01", "2026-12-31")).containsExactly("2026-09-05", "2026-12-05");
+            assertThat(reply.data().get("next").get("scheduledDate").asText()).isEqualTo("2026-12-05");
+        }
+
+        @Test
+        void pausedUntilTurnedBackOnItStaysPausedAndResumingKeepsWhatWasPaused() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply paused = server.put("/api/items/" + id + "/pause", "{}", cookie);
+            assertThat(paused.data().get("paused").asBoolean()).isTrue();
+            assertThat(paused.data().get("pausedUntil").isNull()).isTrue();
+            assertThat(paused.data().get("next").isNull()).isTrue();
+            assertThat(carLoanDates("2026-10-01", "2027-01-31")).isEmpty();
+
+            // Two months on it is turned back on: the months it was paused stay paused.
+            server.clock.advance(Duration.ofDays(61));
+            // The session locked itself long ago.
+            cookie = server.unlock();
+            Reply resumed = server.delete("/api/items/" + id + "/pause", cookie);
+            assertThat(resumed.status()).isEqualTo(200);
+            assertThat(resumed.data().get("paused").asBoolean()).isFalse();
+            assertThat(carLoanDates("2026-10-01", "2027-01-31")).containsExactly("2026-12-05", "2027-01-05");
+        }
+
+        @Test
+        void explainsWhatIsWrong() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply today = server.put("/api/items/" + id + "/pause", "{\"until\":\"2026-10-01\"}", cookie);
+            assertThat(today.status()).isEqualTo(400);
+            assertThat(today.error()).isEqualTo("Please choose a later day for it to start again, or leave the date empty.");
+            assertThat(server.put("/api/items/999/pause", "{}", cookie).status()).isEqualTo(404);
+            assertThat(server.delete("/api/items/999/pause", cookie).status()).isEqualTo(404);
+        }
+    }
+
+    @Nested
+    class ChangingWhatKindOfItemItIs {
+        private String transferToSavings(long cents) {
+            return "{\"name\":\"Car loan\",\"kind\":\"transfer\",\"amountCents\":%d,\"payFromAccountId\":%d,\"payToAccountId\":%d,\"autopay\":true,\"schedule\":%s}"
+                    .formatted(cents, checking, savings, MONTHLY_5TH);
+        }
+
+        private JsonNode septemberOccurrence() throws Exception {
+            return server.get("/api/pay-periods/2026-09-01", cookie).data().get("occurrences").get(0);
+        }
+
+        @Test
+        void earlierDatesBecomeTheNewKindTooAndTheHistoryKeepsEveryDate() throws Exception {
+            long id = created("/api/items", carLoan());
+            server.put("/api/items/" + id, bill("Car loan", 43000, MONTHLY_5TH, "\"autopay\":true,\"effectiveFrom\":\"2026-06-01\""), cookie);
+            assertThat(septemberOccurrence().get("payToAccountId").isNull()).isTrue();
+
+            JsonNode item = server.put("/api/items/" + id, transferToSavings(45000), cookie).data();
+
+            // Every earlier date and amount is still there, with today's change added.
+            assertThat(item.get("kind").asText()).isEqualTo("transfer");
+            assertThat(item.get("history").findValuesAsText("effectiveFrom")).containsExactly("2026-01-01", "2026-06-01", "2026-10-01");
+            assertThat(item.get("history").findValues("perOccurrenceCents").stream().map(JsonNode::asLong))
+                    .containsExactly(41200L, 43000L, 45000L);
+            // A transfer from before the change goes where the item goes now, at what it cost then.
+            JsonNode september = septemberOccurrence();
+            assertThat(september.get("kind").asText()).isEqualTo("transfer");
+            assertThat(september.get("payToAccountId").asLong()).isEqualTo(savings);
+            assertThat(september.get("amountCents").asLong()).isEqualTo(43000);
+        }
+
+        @Test
+        void replacingArchivesTheOldItemAndAddsANewOneFromToday() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply reply = server.post("/api/items/" + id + "/replacement", transferToSavings(45000), cookie);
+
+            assertThat(reply.status()).isEqualTo(201);
+            JsonNode added = reply.data();
+            assertThat(added.get("id").asLong()).isNotEqualTo(id);
+            assertThat(added.get("kind").asText()).isEqualTo("transfer");
+            assertThat(added.get("archived").asBoolean()).isFalse();
+            // Whatever start was sent, the new one begins today, so it does not repeat the old one's past.
+            assertThat(added.get("schedule").get("startDate").asText()).isEqualTo("2026-10-01");
+            assertThat(added.get("history").findValuesAsText("effectiveFrom")).containsExactly("2026-10-01");
+            // The old one is untouched apart from being archived.
+            JsonNode old = server.get("/api/items/" + id, cookie).data();
+            assertThat(old.get("archived").asBoolean()).isTrue();
+            assertThat(old.get("kind").asText()).isEqualTo("bill");
+            assertThat(old.get("amountCents").asLong()).isEqualTo(41200);
+        }
+
+        @Test
+        void aReplacementThatIsNotValidLeavesTheOldItemAsItWas() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            Reply reply = server.post("/api/items/" + id + "/replacement",
+                    "{\"name\":\"Car loan\",\"kind\":\"transfer\",\"amountCents\":45000,\"payFromAccountId\":%d,\"schedule\":%s}"
+                            .formatted(checking, MONTHLY_5TH),
+                    cookie);
+
+            assertThat(reply.status()).isEqualTo(400);
+            assertThat(server.get("/api/items", cookie).data()).hasSize(1);
+            assertThat(server.get("/api/items/" + id, cookie).data().get("archived").asBoolean()).isFalse();
+        }
+
+        @Test
+        void replacingNeedsASessionAndAnItemThatExists() throws Exception {
+            long id = created("/api/items", carLoan());
+
+            assertThat(server.post("/api/items/" + id + "/replacement", transferToSavings(45000), null).status()).isEqualTo(401);
+            assertThat(server.post("/api/items/9999/replacement", transferToSavings(45000), cookie).status()).isEqualTo(404);
+            assertThat(server.get("/api/items", cookie).data()).hasSize(1);
         }
     }
 
@@ -379,6 +528,26 @@ class ItemsApiTest extends ApiTestBase {
 
         private Reply edit(String date, String body) throws Exception {
             return server.put("/api/items/" + electric + "/occurrences/" + date, body, cookie);
+        }
+
+        @Test
+        void keepsTheCheckNumberOneOccurrenceWasPaidWith() throws Exception {
+            JsonNode paid = edit("2026-10-16", "{\"paid\":true,\"checkNumber\":\" 1043 \"}").data();
+            assertThat(paid.get("checkNumber").asText()).isEqualTo("1043");
+            // Another edit leaves it alone; sending it empty clears it; other occurrences never had one.
+            assertThat(edit("2026-10-16", "{\"note\":\"Mailed\"}").data().get("checkNumber").asText()).isEqualTo("1043");
+            assertThat(edit("2026-11-16", "{\"note\":\"\"}").data().get("checkNumber").isNull()).isTrue();
+            assertThat(edit("2026-10-16", "{\"checkNumber\":\"\"}").data().get("checkNumber").isNull()).isTrue();
+
+            Reply tooLong = edit("2026-10-16", "{\"checkNumber\":\"" + "1".repeat(21) + "\"}");
+            assertThat(tooLong.status()).isEqualTo(400);
+
+            // A card has no checks.
+            long onCard = created("/api/items",
+                    "{\"name\":\"Gym\",\"kind\":\"bill\",\"amountCents\":3000,\"payFromAccountId\":%d,\"schedule\":%s}".formatted(visa, MONTHLY_5TH));
+            Reply refused = server.put("/api/items/" + onCard + "/occurrences/2026-10-05", "{\"checkNumber\":\"7\"}", cookie);
+            assertThat(refused.status()).isEqualTo(400);
+            assertThat(refused.error()).isEqualTo("A check number can be kept for something paid from a checking account.");
         }
 
         @Test

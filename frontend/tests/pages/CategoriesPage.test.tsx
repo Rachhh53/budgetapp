@@ -46,9 +46,9 @@ describe("categories & tags screen", () => {
     const categories = await screen.findByRole("region", { name: "Categories" });
     const rows = await within(categories).findAllByRole("listitem");
     expect(rows.map((row) => row.textContent)).toEqual([
-      "Housing2 items$19,800.00 a year",
-      "Rent1 item$18,600.00 a year",
-      "Food0 items$0.00 a year",
+      "Housing2 items$19,800.00 a yearEdit",
+      "Rent1 item$18,600.00 a yearEdit",
+      "Food0 items$0.00 a yearEdit",
     ]);
     // Everything about a row is in its name, for anyone not seeing the layout.
     expect(within(categories).getByRole("button", { name: "Edit Rent, 1 item, $18,600.00 a year" })).toBeInTheDocument();

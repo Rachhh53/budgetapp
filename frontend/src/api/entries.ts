@@ -1,4 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ACCOUNTS_KEY } from "./accounts";
+import { BUCKETS_KEY } from "./buckets";
 import { CATEGORIES_KEY, TAGS_KEY } from "./categories";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
@@ -20,7 +22,20 @@ export interface EntryInput {
   /** Where a transfer goes; `null` otherwise. */
   toAccountId: number | null;
   note: string | null;
+  /** The check it was paid with, when it left a checking account that way; `null` otherwise. */
+  checkNumber: string | null;
   tagIds: number[];
+  /**
+   * The buckets this touches. A bucket in the account the money leaves is where it comes out
+   * of; a bucket in the account it arrives in is where part of it is set aside.
+   */
+  bucketSplits: BucketSplit[];
+}
+
+/** Part of an entry set aside in, or paid out of, one bucket. */
+export interface BucketSplit {
+  bucketId: number;
+  amountCents: number;
 }
 
 /** One-off money in, money out or a transfer. */
@@ -28,12 +43,14 @@ export interface Entry extends EntryInput {
   id: number;
 }
 
-/** An entry changes what its pay period adds up to. */
+/** An entry changes what its pay period adds up to, each account's chart, and what its buckets hold. */
 function useRefreshEntries() {
   const queryClient = useQueryClient();
   return () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+      queryClient.invalidateQueries({ queryKey: BUCKETS_KEY }),
       queryClient.invalidateQueries({ queryKey: CATEGORIES_KEY }),
       queryClient.invalidateQueries({ queryKey: TAGS_KEY }),
     ]);

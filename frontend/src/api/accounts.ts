@@ -1,8 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import { PAY_KEY } from "./income";
 
 export const ACCOUNT_TYPES = ["checking", "savings", "credit_card", "investment", "loan"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
+
+/** Checking and savings: the accounts that can hold buckets and earn savings interest. */
+export function holdsCash(type: AccountType): boolean {
+  return type === "checking" || type === "savings";
+}
 
 /** A balance the user typed in for one day. Amounts are whole cents. */
 export interface BalanceEntry {
@@ -21,14 +27,38 @@ export interface Account {
   subtypeLabel: string | null;
   color: string;
   archived: boolean;
+  /** Warn when the balance is projected to dip below this; `null` for no warning. */
+  lowBalanceThresholdCents: number | null;
   /** The most recent balance entered, or `null` if none yet. */
   latestBalance: BalanceEntry | null;
 }
 
-/** One account with every balance entered for it, newest first. */
+export const INTEREST_DESTINATIONS = ["unassigned", "bucket", "proportional"] as const;
+export type InterestDestination = (typeof INTEREST_DESTINATIONS)[number];
+
+/** When an account's interest is credited and where it goes. */
+export interface InterestSettings {
+  /** Day of the month, 1–31; 31 means the last day. */
+  creditDay: number;
+  destination: InterestDestination;
+  /** Set exactly when `destination` is `bucket`. */
+  destinationBucketId: number | null;
+}
+
+/** A rate in basis points (4.10% is 410) that applies from a date until the next one. */
+export interface Rate {
+  id: number;
+  kind: "apy" | "growth" | "apr" | "loan_rate";
+  rateBp: number;
+  effectiveDate: string;
+}
+
+/** One account with everything entered for it; balances and rates newest first. */
 export interface AccountDetail {
   account: Account;
   balances: BalanceEntry[];
+  interest: InterestSettings;
+  rates: Rate[];
 }
 
 export interface AccountInput {
@@ -38,12 +68,28 @@ export interface AccountInput {
   subtypeLabel: string | null;
   color: string;
   archived: boolean;
+  lowBalanceThresholdCents: number | null;
 }
 
 export interface BalanceInput {
   date: string;
   amountCents: number;
   note: string | null;
+}
+
+export interface RateInput {
+  rateBp: number;
+  effectiveDate: string;
+}
+
+/** One account at the end of one pay period: a point on its chart. */
+export interface AccountPoint {
+  start: string;
+  end: string;
+  endingCents: number;
+  lowestCents: number;
+  /** The ending balance less what is in the account's buckets. */
+  availableCents: number;
 }
 
 export const ACCOUNTS_KEY = ["accounts"] as const;
@@ -57,16 +103,36 @@ export function useAccount(id: number) {
   return useQuery({ queryKey: detailKey(id), queryFn: () => api.get<AccountDetail>(`/api/accounts/${id}`) });
 }
 
+/** The account at the end of each pay period from the current one through the horizon; empty until it has a balance. */
+export function useAccountProjection(id: number) {
+  return useQuery({
+    queryKey: [...detailKey(id), "projection"],
+    queryFn: () => api.get<AccountPoint[]>(`/api/accounts/${id}/projection`),
+  });
+}
+
+/**
+ * What is entered for an account (a balance, a rate, a warning amount) changes its own views
+ * and what every pay period adds up to. All account keys start with ACCOUNTS_KEY.
+ */
+function useRefreshAccounts() {
+  const queryClient = useQueryClient();
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+      queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+    ]);
+}
+
 /** Creates an account, or changes the one with `id`. */
 export function useSaveAccount(id?: number) {
-  const queryClient = useQueryClient();
+  const refresh = useRefreshAccounts();
   return useMutation({
     mutationFn: (input: AccountInput) =>
       id === undefined
         ? api.post<AccountDetail>("/api/accounts", input)
         : api.put<AccountDetail>(`/api/accounts/${id}`, input),
-    // Covers the list and every detail view, whose keys all start with ACCOUNTS_KEY.
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+    onSuccess: refresh,
   });
 }
 
@@ -75,7 +141,7 @@ export function useDeleteAccount(id: number) {
   return useMutation({
     mutationFn: () => api.delete<{ deleted: boolean }>(`/api/accounts/${id}`),
     onSuccess: () => {
-      // Drop the deleted account's own view rather than refetching it into a 404.
+      // Drop the deleted account's own views rather than refetching them into a 404.
       queryClient.removeQueries({ queryKey: detailKey(id) });
       return queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY, exact: true });
     },
@@ -83,17 +149,52 @@ export function useDeleteAccount(id: number) {
 }
 
 export function useSaveBalance(accountId: number) {
-  const queryClient = useQueryClient();
+  const refresh = useRefreshAccounts();
   return useMutation({
     mutationFn: (input: BalanceInput) => api.post<AccountDetail>(`/api/accounts/${accountId}/balances`, input),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+    onSuccess: refresh,
   });
 }
 
 export function useDeleteBalance(accountId: number) {
-  const queryClient = useQueryClient();
+  const refresh = useRefreshAccounts();
   return useMutation({
     mutationFn: (entryId: number) => api.delete<AccountDetail>(`/api/accounts/${accountId}/balances/${entryId}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+    onSuccess: refresh,
+  });
+}
+
+export function useSaveInterest(accountId: number) {
+  const refresh = useRefreshAccounts();
+  return useMutation({
+    mutationFn: (input: InterestSettings) => api.put<AccountDetail>(`/api/accounts/${accountId}/interest`, input),
+    onSuccess: refresh,
+  });
+}
+
+/** Records a rate from a date on. The same date again replaces it. */
+export function useSaveRate(accountId: number) {
+  const refresh = useRefreshAccounts();
+  return useMutation({
+    mutationFn: (input: RateInput) => api.post<AccountDetail>(`/api/accounts/${accountId}/rates`, input),
+    onSuccess: refresh,
+  });
+}
+
+/** As {@link useSaveRate}, for an account that did not exist when the form opened: one just added. */
+export function useSaveRateFor() {
+  const refresh = useRefreshAccounts();
+  return useMutation({
+    mutationFn: ({ accountId, ...input }: RateInput & { accountId: number }) =>
+      api.post<AccountDetail>(`/api/accounts/${accountId}/rates`, input),
+    onSuccess: refresh,
+  });
+}
+
+export function useDeleteRate(accountId: number) {
+  const refresh = useRefreshAccounts();
+  return useMutation({
+    mutationFn: (rateId: number) => api.delete<AccountDetail>(`/api/accounts/${accountId}/rates/${rateId}`),
+    onSuccess: refresh,
   });
 }

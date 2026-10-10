@@ -1,18 +1,27 @@
 package app.budget.server.entries;
 
+import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
+import app.budget.server.buckets.BucketsRepository;
+import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.entries.EntriesRepository.Entry;
 import app.budget.server.entries.EntriesRepository.Fields;
+import app.budget.server.entries.EntriesRepository.Split;
+import app.budget.server.ledger.Ledger;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** One-off money in, money out and transfers: {@code /api/entries} and {@code /api/entries/{id}}. */
 public final class EntriesRoutes {
@@ -21,19 +30,32 @@ public final class EntriesRoutes {
     private static final int NOTE_MAX = 500;
     private static final int MAX_TAGS = 20;
     private static final String CHOOSE_TAGS = "Please choose tags from the list.";
+    private static final int MAX_SPLITS = 20;
+    private static final int CHECK_NUMBER_MAX = 20;
+    private static final String CHOOSE_BUCKETS = "Please choose each bucket once, from the list.";
 
     private final EntriesRepository entries;
     private final AccountsRepository accounts;
     private final CategoriesRepository categories;
     private final TagsRepository tags;
+    private final BucketsRepository buckets;
+    private final Ledger ledger;
     private final Clock clock;
 
     public EntriesRoutes(
-            EntriesRepository entries, AccountsRepository accounts, CategoriesRepository categories, TagsRepository tags, Clock clock) {
+            EntriesRepository entries,
+            AccountsRepository accounts,
+            CategoriesRepository categories,
+            TagsRepository tags,
+            BucketsRepository buckets,
+            Ledger ledger,
+            Clock clock) {
         this.entries = entries;
         this.accounts = accounts;
         this.categories = categories;
         this.tags = tags;
+        this.buckets = buckets;
+        this.ledger = ledger;
         this.clock = clock;
     }
 
@@ -56,7 +78,12 @@ public final class EntriesRoutes {
             Long accountId,
             Long toAccountId,
             String note,
-            List<Long> tagIds) {}
+            List<Long> tagIds,
+            List<SplitInput> bucketSplits,
+            String checkNumber) {}
+
+    /** Part of money coming in to set aside in one bucket. */
+    public record SplitInput(Long bucketId, Long amountCents) {}
 
     public record Deleted(boolean deleted) {}
 
@@ -70,13 +97,18 @@ public final class EntriesRoutes {
     }
 
     private void create(Context ctx) {
-        long id = entries.create(fields(Inputs.body(ctx, EntryInput.class)));
+        Fields fields = fields(Inputs.body(ctx, EntryInput.class));
+        requireTheMoneyIsThere(fields, null);
+        long id = entries.create(fields);
         ApiResponse.send(ctx, 201, view(id));
     }
 
     private void update(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        if (!entries.update(id, fields(Inputs.body(ctx, EntryInput.class)))) {
+        Entry existing = entries.find(id).orElseThrow(ApiException::notFound);
+        Fields fields = fields(Inputs.body(ctx, EntryInput.class));
+        requireTheMoneyIsThere(fields, existing);
+        if (!entries.update(id, fields)) {
             throw ApiException.notFound();
         }
         ApiResponse.ok(ctx, view(id));
@@ -133,6 +165,98 @@ public final class EntriesRoutes {
                 input.accountId(),
                 toAccountId,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
-                tagIds);
+                tagIds,
+                splits(input.bucketSplits(), kind, amount, input.accountId(), toAccountId == null ? input.accountId() : toAccountId),
+                // Only money leaving a checking account can have been paid by check; the form sends whatever was last typed.
+                kind != EntryKind.MONEY_IN && isChecking(input.accountId())
+                        ? Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)
+                        : null);
+    }
+
+    private boolean isChecking(long accountId) {
+        return accounts.find(accountId)
+                .filter(account -> account.type().equals(Inputs.code(AccountType.CHECKING)))
+                .isPresent();
+    }
+
+    /**
+     * Money that comes out of a bucket has to be in it: a bucket never goes below nothing.
+     * The account itself is not checked. It can be overdrawn, as a real one can, and the
+     * screens warn loudly when it is.
+     *
+     * @param replacing the entry being changed, whose own money is counted as still there
+     */
+    private void requireTheMoneyIsThere(Fields fields, Entry replacing) {
+        if (fields.kind() == EntryKind.MONEY_IN) {
+            return;
+        }
+        Set<Long> ids = buckets.all().stream()
+                .filter(bucket -> !bucket.archived() && bucket.accountId() == fields.accountId())
+                .map(Bucket::id)
+                .collect(Collectors.toSet());
+        if (fields.bucketSplits().stream().noneMatch(split -> ids.contains(split.bucketId()))) {
+            return;
+        }
+        // What the entry being changed already took is still there to be taken again.
+        boolean sameAccount = replacing != null && replacing.kind() != EntryKind.MONEY_IN
+                && replacing.accountId() == fields.accountId() && !replacing.date().isAfter(fields.date());
+        Map<Long, Long> held = ledger.bucketBalances(fields.date());
+        for (Split split : fields.bucketSplits()) {
+            if (!ids.contains(split.bucketId())) {
+                continue;
+            }
+            long alreadyTaken = !sameAccount ? 0 : replacing.bucketSplits().stream()
+                    .filter(taken -> taken.bucketId() == split.bucketId())
+                    .mapToLong(Split::amountCents)
+                    .sum();
+            if (split.amountCents() > held.getOrDefault(split.bucketId(), 0L) + alreadyTaken) {
+                throw ApiException.conflict(
+                        "That is more than that bucket holds on that day. Please enter a smaller amount, or choose somewhere else for it to come out of.");
+            }
+        }
+    }
+
+    /**
+     * The buckets an entry touches. A bucket in the account the money leaves is where it comes
+     * out of; a bucket in the account it arrives in is where part of it is set aside.
+     */
+    private List<Split> splits(List<SplitInput> inputs, EntryKind kind, long amount, long leaves, long arrivesIn) {
+        if (inputs == null || inputs.isEmpty()) {
+            return List.of();
+        }
+        if (inputs.size() > MAX_SPLITS || inputs.stream().anyMatch(split -> split == null || split.bucketId() == null)
+                || inputs.stream().map(SplitInput::bucketId).distinct().count() != inputs.size()) {
+            throw ApiException.badRequest(CHOOSE_BUCKETS);
+        }
+        List<Split> splits = new ArrayList<>();
+        long setAside = 0;
+        long takenOut = 0;
+        for (SplitInput input : inputs) {
+            Bucket bucket = buckets.find(input.bucketId()).orElse(null);
+            boolean comesOut = bucket != null && kind != EntryKind.MONEY_IN && bucket.accountId() == leaves;
+            boolean goesIn = bucket != null && kind != EntryKind.MONEY_OUT && bucket.accountId() == arrivesIn;
+            if (bucket == null || bucket.archived() || !(comesOut || goesIn)) {
+                throw ApiException.badRequest(kind == EntryKind.MONEY_OUT
+                        ? "Please choose a bucket in the account this comes out of."
+                        : "Please choose buckets in the account this money goes into.");
+            }
+            long cents = Inputs.amount(input.amountCents(), comesOut ? "The amount from the bucket" : "The amount to set aside");
+            if (cents == 0) {
+                throw ApiException.badRequest("Please enter how much to set aside, or remove that bucket.");
+            }
+            if (comesOut) {
+                takenOut += cents;
+            } else {
+                setAside += cents;
+            }
+            splits.add(new Split(bucket.id(), cents));
+        }
+        if (setAside > amount) {
+            throw ApiException.badRequest("That sets aside more than the amount itself. Please lower one of the buckets.");
+        }
+        if (takenOut > amount) {
+            throw ApiException.badRequest("That takes more out of buckets than the amount itself. Please lower one of the buckets.");
+        }
+        return splits;
     }
 }

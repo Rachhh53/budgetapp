@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centsToInput, formatCents, parseDollars } from "../../src/lib/money";
+import { calculate, centsToInput, formatCents, isSum, parseDollars } from "../../src/lib/money";
 
 describe("formatCents", () => {
   it("shows dollars with separators and two decimals", () => {
@@ -52,5 +52,59 @@ describe("parseDollars", () => {
     for (const cents of [0, 1, 99, 100, 248620, -31840]) {
       expect(parseDollars(centsToInput(cents))).toBe(cents);
     }
+  });
+});
+
+describe("sums typed into an amount", () => {
+  it("adds and takes away, exactly", () => {
+    expect(parseDollars("4005+3751")).toBe(775600);
+    expect(parseDollars("100-50")).toBe(5000);
+    expect(parseDollars("$1,000 + 250.50 - .5")).toBe(125000);
+    // 0.1 + 0.2 is 0.30000000000000004 in floating point.
+    expect(parseDollars("0.1+0.2")).toBe(30);
+  });
+
+  it("still reads a lone negative amount as negative", () => {
+    expect(parseDollars("-50")).toBe(-5000);
+    expect(parseDollars("-20+5")).toBe(-1500);
+    expect(isSum("-50")).toBe(false);
+    expect(isSum("100-50")).toBe(true);
+  });
+
+  it("returns null for a sum that is not finished or not a sum", () => {
+    expect(parseDollars("40+")).toBeNull();
+    expect(parseDollars("40++5")).toBeNull();
+    expect(parseDollars("40+-5")).toBeNull();
+    expect(parseDollars("40+1.234")).toBeNull();
+    expect(parseDollars("40*2")).toBeNull();
+  });
+});
+
+describe("calculate", () => {
+  it("adds and takes away an amount", () => {
+    expect(calculate(400500, "+", "3751")).toBe(775600);
+    expect(calculate(30000, "−", "450.25")).toBe(-15025);
+  });
+
+  it("multiplies and divides by a plain number", () => {
+    expect(calculate(30000, "÷", "12")).toBe(2500);
+    expect(calculate(2500, "×", "2")).toBe(5000);
+    // A tax rate has more than two decimals.
+    expect(calculate(10000, "×", "1.0825")).toBe(10825);
+  });
+
+  it("rounds to the cent, a tie going to the even cent", () => {
+    expect(calculate(10000, "÷", "3")).toBe(3333);
+    expect(calculate(20000, "÷", "3")).toBe(6667);
+    expect(calculate(5, "÷", "2")).toBe(2);
+    expect(calculate(15, "÷", "2")).toBe(8);
+    expect(calculate(-5, "÷", "2")).toBe(-2);
+  });
+
+  it("returns null when there is nothing to work out", () => {
+    expect(calculate(30000, "÷", "0")).toBeNull();
+    expect(calculate(30000, "×", "")).toBeNull();
+    expect(calculate(30000, "+", "1.234")).toBeNull();
+    expect(calculate(30000, "×", "abc")).toBeNull();
   });
 });

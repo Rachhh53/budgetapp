@@ -1,6 +1,9 @@
+import { CalendarClock } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import type { Account } from "../../api/accounts";
+import { type Account, holdsCash } from "../../api/accounts";
+import { useBuckets, useSaveBucket } from "../../api/buckets";
 import type { Category, Tag } from "../../api/categories";
+import { usePayPeriods } from "../../api/income";
 import {
   type AmountMode,
   type Item,
@@ -11,21 +14,28 @@ import {
   type ItemKind,
   type Placement,
   useDeleteItem,
+  useReplaceItem,
   useSaveItem,
 } from "../../api/items";
 import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
+import { firstUnusedColor } from "../ColorPicker";
+import { BucketForm } from "../buckets/BucketForm";
+import { PauseItem } from "./PauseItem";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
+import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { Segmented } from "../Segmented";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
-import { ITEM_FREQUENCY_LABELS, KIND_LABELS, MONTH_NAMES } from "./labels";
+import { ITEM_FREQUENCY_LABELS, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
 
-const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind] }));
+const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind], icon: KIND_ICONS[kind] }));
+/** What a new item can be. Setting money aside in a bucket is set up on the bucket itself, so it is not offered. */
+const KINDS_TO_ADD = KIND_OPTIONS.filter((option) => option.value !== "bucket_move");
 
 const AMOUNT_MODE_OPTIONS: readonly { value: AmountMode; label: string }[] = [
   { value: "per_occurrence", label: "Each time" },
@@ -53,25 +63,42 @@ interface ItemFormProps {
 }
 
 /**
- * Add or change a recurring item (the edit drawer in design/recurring.png). Everything chosen
+ * Add or change a recurring item, in the same centered dialog as every other form. Everything chosen
  * from a list is a dropdown or a type-to-filter picker; a category or tag that does not
  * exist yet can be added from its picker without leaving the form.
  *
  * A change to an existing item applies from a date on ("this and all future"): earlier
  * occurrences keep what they had.
+ *
+ * A bucket's own recurring amount is the exception: it belongs to its bucket, so editing it
+ * from anywhere opens the bucket's form, the one place it is changed or stopped.
  */
 export function ItemForm(props: ItemFormProps) {
+  const buckets = useBuckets().data;
+  const bucket = props.item?.kind === "bucket_move" ? buckets?.find((candidate) => candidate.id === props.item?.bucketId) : undefined;
+  const account = bucket && props.accounts.find((candidate) => candidate.id === bucket.accountId);
+  if (bucket && account && buckets) {
+    return <BucketForm account={account} bucket={bucket} buckets={buckets} onClose={props.onClose} />;
+  }
   return (
-    <Modal title={props.item ? `Edit ${props.item.name}` : "Add a recurring item"} onClose={props.onClose} drawer>
+    <Modal
+      title={props.item ? `Edit ${props.item.name}` : "Add a recurring item"}
+      icon={props.item ? KIND_ICONS[props.item.kind] : CalendarClock}
+      onClose={props.onClose}
+    >
       <ItemFormBody {...props} />
     </Modal>
   );
 }
 
+/** The choice that takes nothing out of any bucket. Not a number, so it can never be mistaken for a bucket's id. */
+const NOT_IN_A_BUCKET = "none";
+
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
 export function ItemFormBody({ item, accounts, categories, tags, onClose }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
+  const replace = useReplaceItem(item?.id);
   const schedule = item?.schedule;
 
   const [kind, setKind] = useState<ItemKind>(item?.kind ?? "bill");
@@ -87,20 +114,76 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   const [day2, setDay2] = useState(schedule?.day2 ?? 15);
   const [month, setMonth] = useState(schedule?.month ?? 1);
   const [monthsApart, setMonthsApart] = useState(schedule?.interval && schedule.interval > 1 ? schedule.interval : 3);
-  const [startDate, setStartDate] = useState(schedule?.startDate ?? todayIso());
+  // `null` until chosen: a new item then starts where its kind of schedule usually does (see `startsOn`).
+  const [chosenStart, setChosenStart] = useState<string | null>(schedule?.startDate ?? null);
   const [daysAfterPayday, setDaysAfterPayday] = useState(item?.daysAfterPayday ?? 0);
   const [autopay, setAutopay] = useState(item?.autopay ?? false);
   const [placement, setPlacement] = useState<Placement>(item?.placement ?? "due_period");
   const [tagIds, setTagIds] = useState<number[]>(item?.tagIds ?? []);
   const [note, setNote] = useState(item?.note ?? "");
   const [archived, setArchived] = useState(item?.archived ?? false);
-  const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
+  const [bucketId, setBucketId] = useState<string | null>(item?.bucketId != null ? String(item.bucketId) : null);
+  const [saveUpBucketId, setSaveUpBucketId] = useState<string | null>(
+    item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
+  );
+  // Where the money comes out of: a bucket's id, NOT_IN_A_BUCKET, or "" until it is chosen.
+  const [chosenFrom, setChosenFrom] = useState<string>();
   const [problem, setProblem] = useState<string>();
+  const addBucket = useSaveBucket();
+  const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
+
+  // Archived buckets are left out, unless this item already points at one.
+  const everyBucket = useBuckets().data ?? [];
+  const openBuckets = everyBucket.filter(
+    (bucket) => !bucket.archived || [bucketId, saveUpBucketId, String(item?.fromBucketId)].includes(String(bucket.id)),
+  );
+  const bucketOptionsIn = (accountId: string | null) =>
+    openBuckets
+      .filter((bucket) => String(bucket.accountId) === accountId)
+      .map((bucket) => ({ id: String(bucket.id), label: bucket.name, color: bucket.color }));
+  // A bucket move can go into any bucket, so each one says which account it is in.
+  const everyBucketOption = openBuckets.map((bucket) => ({
+    id: String(bucket.id),
+    label: `${bucket.name} · ${accounts.find((account) => account.id === bucket.accountId)?.name ?? "an account"}`,
+    color: bucket.color,
+  }));
+
+  const isBucketMove = kind === "bucket_move";
+  const canSaveUp = kind === "bill" || kind === "budget";
+  const transferBuckets = kind === "transfer" ? bucketOptionsIn(payTo) : [];
+  // Only an account that can hold buckets can be saved up in.
+  const saveUpAccount = canSaveUp ? accounts.find((account) => String(account.id) === payFrom && holdsCash(account.type)) : undefined;
+  const saveUpBuckets = saveUpAccount ? bucketOptionsIn(payFrom) : [];
+  // A bucket chosen for another account, or another kind of item, no longer applies.
+  const chosenTransferBucket = transferBuckets.some((option) => option.id === bucketId) ? bucketId : null;
+  const chosenSaveUpBucket = saveUpBuckets.some((option) => option.id === saveUpBucketId) ? saveUpBucketId : null;
+  // Money leaving an account that has buckets comes out of one of them, or out of what is in none.
+  // A bill being saved up for is already paid out of its save-up bucket, so it is not asked.
+  const payingBuckets = isBucketMove || chosenSaveUpBucket !== null ? [] : everyBucket.filter(
+    (bucket) => String(bucket.accountId) === payFrom && (!bucket.archived || bucket.id === item?.fromBucketId),
+  );
+  // An item being changed already says where it comes from; a new one has to be told.
+  const askedFrom = chosenFrom ?? (item ? String(item.fromBucketId ?? NOT_IN_A_BUCKET) : "");
+  // A bucket chosen before the account was changed no longer applies.
+  const comesFrom = askedFrom === NOT_IN_A_BUCKET || payingBuckets.some((bucket) => String(bucket.id) === askedFrom) ? askedFrom : "";
+
+  const changeKind = (next: ItemKind) => {
+    setKind(next);
+    // Setting money aside is usually done with every paycheck, so start a new bucket move there.
+    if (next === "bucket_move" && !item) {
+      setFrequency("every_pay_period");
+    }
+  };
 
   const movesMoney = kind === "transfer" || kind === "card_payment";
   const everyPaycheck = frequency === "every_pay_period";
   // These repeat from a date the user gives; the rest name their own day of the month or year.
   const countsFromADate = frequency === "weekly" || frequency === "biweekly" || frequency === "one_time";
+  // Where a new item starts until the user says otherwise. One that names its own day of the
+  // month or year starts in January, so this year's occurrences exist; anything dated from
+  // today starts today. Money set aside in a bucket never reaches back on its own: it would
+  // fill the bucket with months of moves that never happened.
+  const startsOn = chosenStart ?? (countsFromADate || everyPaycheck || isBucketMove ? todayIso() : `${todayIso().slice(0, 4)}-01-01`);
 
   // Archived accounts are left out, unless this item already points at one.
   const offered = accounts.filter((account) => !account.archived || [payFrom, payTo].includes(String(account.id)));
@@ -111,7 +194,13 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
 
   /** Turns the form into a request, or explains what still needs attention. */
   const toInput = (): ItemInput | string => {
-    if (payFrom === null) {
+    const moveInto = isBucketMove ? openBuckets.find((bucket) => String(bucket.id) === bucketId) : undefined;
+    if (isBucketMove && moveInto === undefined) {
+      return "Please choose the bucket this money goes into.";
+    }
+    // A bucket move stays inside the bucket's own account.
+    const paidFrom = moveInto !== undefined ? String(moveInto.accountId) : payFrom;
+    if (paidFrom === null) {
       return kind === "transfer" ? "Please choose the account this money comes from." : "Please choose the account this is paid from.";
     }
     if (movesMoney && payTo === null) {
@@ -124,6 +213,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
     if (amountCents === null || amountCents < 0) {
       return AMOUNT_HELP;
     }
+    if (payingBuckets.length > 0 && comesFrom === "") {
+      return "Please say where this comes out of: one of the buckets, or money that is not in a bucket.";
+    }
     const byDayOfMonth = frequency === "semi_monthly" || frequency === "monthly" || frequency === "every_n_months";
     return {
       name,
@@ -135,10 +227,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
       amountMode,
       estimate,
       categoryId,
-      payFromAccountId: Number(payFrom),
+      payFromAccountId: Number(paidFrom),
       payToAccountId: movesMoney && payTo !== null ? Number(payTo) : null,
-      // A budget is money set aside to spend, not something that is paid automatically.
-      autopay: kind === "budget" ? false : autopay,
+      // A budget is money set aside to spend, not something that is paid automatically;
+      // a bucket move needs nobody to pay anything.
+      autopay: kind === "budget" ? false : isBucketMove ? true : autopay,
       placement: everyPaycheck ? "due_period" : placement,
       schedule: {
         frequency,
@@ -146,16 +239,16 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
         day1: byDayOfMonth || frequency === "yearly" ? day1 : null,
         day2: frequency === "semi_monthly" ? day2 : null,
         month: frequency === "yearly" ? month : null,
-        // Schedules that name their own day need no anchor; start them in January so this
-        // year's occurrences exist. "Every paycheck" starts with the paycheck in hand.
-        startDate: countsFromADate
-          ? startDate
-          : (schedule?.startDate ?? (everyPaycheck ? todayIso() : `${todayIso().slice(0, 4)}-01-01`)),
+        startDate: startsOn,
         endDate: schedule?.endDate ?? null,
         weekendRule: schedule?.weekendRule ?? "none",
       },
       daysAfterPayday: everyPaycheck ? daysAfterPayday : 0,
-      ...(item ? { effectiveFrom } : {}),
+      bucketId: moveInto !== undefined ? moveInto.id : chosenTransferBucket !== null ? Number(chosenTransferBucket) : null,
+      saveUpBucketId: chosenSaveUpBucket !== null ? Number(chosenSaveUpBucket) : null,
+      fromBucketId: payingBuckets.length > 0 && comesFrom !== NOT_IN_A_BUCKET ? Number(comesFrom) : null,
+      // A change is dated the day it is made; the backend reaches further back only for an earlier start.
+      ...(item ? { effectiveFrom: todayIso() } : {}),
     };
   };
 
@@ -170,69 +263,165 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
     save.mutate(input, { onSuccess: onClose });
   };
 
-  const failure = problem ?? save.error?.message;
+  /** Archives this item and adds the form as a new one from today, leaving the old one's past alone. */
+  const addAsNew = () => {
+    const input = toInput();
+    if (typeof input === "string") {
+      setProblem(input);
+      return;
+    }
+    setProblem(undefined);
+    // A new item: nothing to date a change from, and not archived whatever the old one was.
+    const { effectiveFrom: _unused, ...fresh } = input;
+    replace.mutate({ ...fresh, archived: false }, { onSuccess: onClose });
+  };
+
+  const kindChanged = item !== undefined && kind !== item.kind;
+  const failure = problem ?? save.error?.message ?? replace.error?.message;
 
   return (
     <>
       <form onSubmit={submit} className="space-y-4">
-        <Segmented legend="Type" options={KIND_OPTIONS} value={kind} onChange={setKind} />
+        <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
 
-        <div>
-          <label htmlFor={`${id}-name`} className={LABEL}>
-            Name
-          </label>
-          <input
-            id={`${id}-name`}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            maxLength={80}
-            required
-            autoComplete="off"
-            placeholder={kind === "budget" ? "e.g. Groceries" : "e.g. Electric"}
-            className={INPUT}
-          />
-        </div>
+        {kindChanged && (
+          // An item is one kind for its whole life, so this cannot apply "from today on" like other changes.
+          <div role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
+            <p className="font-semibold">
+              Changing the type changes {item.name} all the way back to when it started.
+            </p>
+            <p className="mt-1 text-muted">
+              Its earlier dates will count as a {KIND_LABELS[kind].toLowerCase()} too, between the accounts you choose here. The dates and
+              amounts in its history stay as they are.
+            </p>
+            <p className="mt-2 text-muted">
+              To leave its past alone, archive it and add this as a new item that starts today.
+            </p>
+            <button type="button" onClick={addAsNew} disabled={replace.isPending || save.isPending} className={`${BUTTON_SECONDARY} mt-2`}>
+              {replace.isPending ? "Adding…" : "Archive this and add a new item"}
+            </button>
+          </div>
+        )}
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Picker
-            label={kind === "transfer" ? "From" : "Paid from"}
-            noun="account"
-            placeholder="Choose or type an account"
-            options={accountOptions}
-            value={payFrom}
-            onChange={setPayFrom}
-          />
-          {kind === "transfer" && (
-            <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
-          )}
-          {kind === "card_payment" && (
-            <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
-          )}
-          <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
-        </div>
-
-        <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
-        <div>
-          <MoneyField
-            label={amountMode === "annual" ? "Per year" : "Amount each time"}
-            value={amount}
-            onChange={setAmount}
-            hint={amountMode === "annual" ? "Shared out evenly over the schedule below." : undefined}
-            required
-          />
-          <label className="mt-1 flex min-h-11 items-center gap-3">
-            <input
-              type="checkbox"
-              checked={estimate}
-              onChange={(event) => setEstimate(event.target.checked)}
-              className="size-5 accent-(--accent)"
+        <FormSection title="Amount">
+          <div>
+            <MoneyField
+              label={amountMode === "annual" ? "Per year" : "Amount each time"}
+              value={amount}
+              onChange={setAmount}
+              hint={amountMode === "annual" ? "Shared out evenly over the schedule below." : undefined}
+              required
+              hero
             />
-            <span>It's an estimate</span>
-          </label>
-        </div>
+            <label className="mt-1 flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={estimate}
+                onChange={(event) => setEstimate(event.target.checked)}
+                className="size-5 accent-(--accent)"
+              />
+              <span>It's an estimate</span>
+            </label>
+          </div>
+          <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+        </FormSection>
 
-        <fieldset className="space-y-4 rounded-lg border border-line p-4">
-          <legend className="px-1 font-semibold">Schedule</legend>
+        <FormSection title="What it is">
+          <div>
+            <label htmlFor={`${id}-name`} className={LABEL}>
+              Name
+            </label>
+            <input
+              id={`${id}-name`}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={80}
+              required
+              autoComplete="off"
+              placeholder={kind === "budget" ? "e.g. Groceries" : isBucketMove ? "e.g. Holiday gift fund" : "e.g. Electric"}
+              className={INPUT}
+            />
+          </div>
+          <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
+        </FormSection>
+
+        <FormSection title={isBucketMove ? "Where it goes" : movesMoney ? "From and to" : "Where it's paid from"}>
+          {/* Two side by side only when there are two: a lone picker gets the full width. */}
+          <div className={`grid grid-cols-1 gap-4 ${movesMoney ? "sm:grid-cols-2" : ""}`}>
+            {isBucketMove ? (
+              <div>
+                <Picker
+                  label="Into bucket"
+                  noun="bucket"
+                  placeholder="Choose or type a bucket"
+                  options={everyBucketOption}
+                  value={bucketId}
+                  onChange={setBucketId}
+                />
+                <p className={HINT}>
+                  {everyBucketOption.length === 0
+                    ? "There are no buckets yet. Add one on a checking or savings account's page first."
+                    : "The money stays in its account. It is set aside, so less shows as available."}
+                </p>
+              </div>
+            ) : (
+              <Picker
+                label={kind === "transfer" ? "From" : "Paid from"}
+                noun="account"
+                placeholder="Choose or type an account"
+                options={accountOptions}
+                value={payFrom}
+                onChange={setPayFrom}
+              />
+            )}
+            {kind === "transfer" && (
+              <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
+            )}
+            {transferBuckets.length > 0 && (
+              <Picker
+                label="Into bucket (optional)"
+                noun="bucket"
+                placeholder="Leave unassigned"
+                options={transferBuckets}
+                value={chosenTransferBucket}
+                onChange={setBucketId}
+                clearable
+              />
+            )}
+            {kind === "card_payment" && (
+              <Picker label="Card" noun="card" placeholder="Choose or type a card" options={cardOptions} value={payTo} onChange={setPayTo} />
+            )}
+            {payingBuckets.length > 0 && (
+              <div>
+                <label htmlFor={`${id}-from-bucket`} className={LABEL}>
+                  Comes out of
+                </label>
+                <select
+                  id={`${id}-from-bucket`}
+                  value={comesFrom}
+                  onChange={(event) => setChosenFrom(event.target.value)}
+                  required
+                  className={INPUT}
+                >
+                  <option value="">Choose where this comes from</option>
+                  <option value={NOT_IN_A_BUCKET}>Money that is not in a bucket</option>
+                  {payingBuckets.map((bucket) => (
+                    <option key={bucket.id} value={bucket.id}>
+                      {bucket.name} (holds {formatCents(bucket.balanceCents)} today)
+                    </option>
+                  ))}
+                </select>
+                <p className={HINT}>
+                  {comesFrom !== "" && comesFrom !== NOT_IN_A_BUCKET
+                    ? "Each time, the bucket and the account both go down. If the bucket runs out, the rest comes from money that is not in a bucket."
+                    : "This account has buckets, so say whether this is paid out of one of them."}
+                </p>
+              </div>
+            )}
+          </div>
+        </FormSection>
+
+        <FormSection title="Schedule">
           <div>
             <label htmlFor={`${id}-frequency`} className={LABEL}>
               How often
@@ -280,8 +469,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
               <input
                 id={`${id}-start`}
                 type="date"
-                value={startDate}
-                onChange={(event) => setStartDate(event.target.value)}
+                value={startsOn}
+                onChange={(event) => setChosenStart(event.target.value)}
                 required
                 className={INPUT}
               />
@@ -334,7 +523,30 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
             </div>
           )}
 
-          {kind !== "budget" && (
+          {/* The schedules above name their own first date; these need to be told when they begin. */}
+          {!countsFromADate && (
+            <div>
+              <label htmlFor={`${id}-starts`} className={LABEL}>
+                Starts
+              </label>
+              <input
+                id={`${id}-starts`}
+                type="date"
+                value={startsOn}
+                onChange={(event) => setChosenStart(event.target.value)}
+                required
+                className={INPUT}
+              />
+              <p className={HINT}>
+                {everyPaycheck
+                  ? "Today or earlier: it begins with the paycheck for the pay period that day falls in. A later day: it begins with the first paycheck on or after it, and this date moves to that payday when you save."
+                  : "Nothing is scheduled before this day. Choose an earlier day to include earlier ones."}
+                {isBucketMove && " The bucket counts from then too."}
+              </p>
+            </div>
+          )}
+
+          {kind !== "budget" && !isBucketMove && (
             <label className="flex min-h-11 items-center gap-3">
               <input
                 type="checkbox"
@@ -345,41 +557,117 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
               <span>Autopay</span>
             </label>
           )}
-        </fieldset>
 
-        {!everyPaycheck && (
-          <div>
-            <Segmented legend="Which paycheck pays it" options={PLACEMENT_OPTIONS} value={placement} onChange={setPlacement} />
-            <p className={HINT}>
-              Something due on payday that you pay by hand always comes out of the paycheck before, so the money is there in time.
-            </p>
-          </div>
+          {!everyPaycheck && !isBucketMove && (
+            <div>
+              <Segmented legend="Which paycheck pays it" options={PLACEMENT_OPTIONS} value={placement} onChange={setPlacement} />
+              <p className={HINT}>
+                Something due on payday that you pay by hand always comes out of the paycheck before, so the money is there in time.
+              </p>
+            </div>
+          )}
+        </FormSection>
+
+        {/* A different thing from saving towards a goal, and easily mistaken for it: out of the way unless it is in use. */}
+        {canSaveUp && (
+          <details open={item?.saveUpBucketId != null} className="rounded-lg border border-line px-4 py-1">
+            <summary className="min-h-11 cursor-pointer content-center font-medium">More options</summary>
+            <div className="pb-3">
+              <FormSection title="Saving up">
+                {/* Always shown on a bill or budget, so it can be found; when it cannot be used, it says why. */}
+                {saveUpAccount === undefined && (
+                  <div>
+                    <p className={LABEL}>Save up for it in a bucket (optional)</p>
+                    <p className={HINT}>
+                      {payFrom === null
+                        ? "Choose the account it is paid from first. A share can then be set aside in one of that account's buckets every paycheck."
+                        : "Buckets live in checking and savings accounts, so there is nowhere to save up for something paid from this one."}
+                    </p>
+                  </div>
+                )}
+                {saveUpAccount !== undefined && (
+                  <div>
+                    <Picker
+                      label="Save up for it in a bucket (optional)"
+                      noun="bucket"
+                      placeholder={saveUpBuckets.length === 0 ? "Type a name to add a bucket" : "Choose a bucket, or type a new one"}
+                      options={saveUpBuckets}
+                      value={chosenSaveUpBucket}
+                      onChange={setSaveUpBucketId}
+                      // A bucket that does not exist yet is added in place, in the account this is paid from.
+                      onCreate={(text) =>
+                        addBucket.mutate(
+                          {
+                            accountId: saveUpAccount.id,
+                            name: text,
+                            color: firstUnusedColor([...everyBucket].reverse().map((bucket) => bucket.color)),
+                            goalCents: null,
+                            goalDate: null,
+                            note: null,
+                            archived: false,
+                            // From this paycheck's payday, as a bucket added on its own page would be.
+                            openedOn: currentPeriod?.start ?? todayIso(),
+                            startingCents: 0,
+                          },
+                          { onSuccess: (created) => setSaveUpBucketId(String(created.bucket.id)) },
+                        )
+                      }
+                      clearable
+                    />
+                    {addBucket.error && (
+                      <p role="alert" className="mt-1 text-sm text-danger">
+                        {addBucket.error.message}
+                      </p>
+                    )}
+                    <p className={HINT}>
+                      This does not save anything extra. It spreads this {kind === "budget" ? "budget" : "bill"}'s own amount over the
+                      paychecks before it is due, and holds each share in the bucket until then.
+                      {item?.saveUpPerPaycheckCents != null && chosenSaveUpBucket !== null && (
+                        <>
+                          {" "}
+                          The next paycheck sets aside{" "}
+                          <span data-amount className="font-semibold text-ink tabular-nums">
+                            {formatCents(item.saveUpPerPaycheckCents)}
+                          </span>{" "}
+                          of the <span data-amount>{formatCents(item.perOccurrenceCents)}</span>
+                          {item.next ? ` due ${formatDate(item.next.dueDate)}` : ""}.
+                        </>
+                      )}
+                    </p>
+                    <p className={HINT}>
+                      To put a set amount in a bucket every paycheck or month instead, open the bucket on its account's page and fill in
+                      "Set aside".
+                    </p>
+                  </div>
+                )}
+              </FormSection>
+            </div>
+          </details>
         )}
 
-        <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+        <FormSection title="Tags and notes">
+          <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
 
-        <div>
-          <label htmlFor={`${id}-note`} className={LABEL}>
-            Note (optional)
-          </label>
-          <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
-        </div>
+          <div>
+            <label htmlFor={`${id}-note`} className={LABEL}>
+              Note (optional)
+            </label>
+            <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
+          </div>
+        </FormSection>
+
+        {item && !item.archived && <PauseItem item={item} />}
 
         {item && (
-          <>
+          <FormSection title="About this item">
+            {/* Not a field: a fact about the item. When it begins is its own date, above. */}
             <div>
-              <label htmlFor={`${id}-from`} className={LABEL}>
-                Changes apply from
-              </label>
-              <input
-                id={`${id}-from`}
-                type="date"
-                value={effectiveFrom}
-                onChange={(event) => setEffectiveFrom(event.target.value)}
-                required
-                className={INPUT}
-              />
-              <p className={HINT}>This and all future. Anything dated before this keeps what it had.</p>
+              <p className={LABEL}>Date added</p>
+              <p className="tabular-nums">{formatDate(item.createdOn)}</p>
+              <p className={HINT}>
+                Changes you save now apply from today on; anything dated before today keeps what it had. A different start date is the
+                exception, and applies from that date.
+              </p>
             </div>
 
             <div>
@@ -394,7 +682,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
               </label>
               <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
             </div>
-          </>
+          </FormSection>
         )}
 
         {failure && (
@@ -425,11 +713,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose }: Item
   );
 }
 
-/** What the item has cost per year, version by version. */
+/** What the item has been set to, version by version. "Amount", not "price": a budget or a bucket move has no price. */
 function PriceHistory({ item }: { item: Item }) {
   return (
-    <section aria-label="Price history" className="mt-6 border-t border-line pt-4">
-      <h3 className="font-semibold">Price history</h3>
+    <section aria-label="Amount history" className="mt-6 border-t border-line pt-4">
+      <h3 className="font-semibold">Amount history</h3>
       <ul className="mt-2 divide-y divide-line">
         {item.history.map((point) => (
           <li key={point.effectiveFrom} className="flex items-center justify-between gap-3 py-2">

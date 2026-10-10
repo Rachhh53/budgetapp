@@ -125,6 +125,59 @@ class DatabaseTest {
         }
     }
 
+    @Test
+    void repairsEarlierVersionsOfAnItemThatWasTurnedIntoATransfer() throws IOException {
+        Database database = Database.open(dataDir);
+        // A bucket move inside savings (2) that was changed into a transfer from checking (1) to
+        // savings on Oct 9, as the app used to save it: the earlier version kept the old accounts.
+        database.jdbi().useHandle(handle -> {
+            for (String name : List.of("Checking", "Savings")) {
+                handle.createUpdate("INSERT INTO accounts (name, type, color, created_at) VALUES (:name, 'savings', '#0f766e', 'now')")
+                        .bind("name", name)
+                        .execute();
+            }
+            handle.execute("INSERT INTO buckets (account_id, name, color, opened_on, created_at) VALUES (2, 'Fund', '#0f766e', '2026-01-01', 'now')");
+            handle.execute("INSERT INTO items (id, name, kind, archived, created_at) VALUES (1, 'Fund', 'transfer', 0, 'now'), (2, 'Rent', 'bill', 0, 'now')");
+            for (int rule = 1; rule <= 3; rule++) {
+                handle.createUpdate("""
+                                INSERT INTO schedule_rules (id, frequency, interval, day_1, start_date, weekend_rule)
+                                VALUES (:id, 'monthly', 1, 1, '2026-01-01', 'none')
+                                """)
+                        .bind("id", rule)
+                        .execute();
+            }
+            handle.execute("""
+                    INSERT INTO item_versions
+                        (item_id, effective_from, amount, amount_mode, is_estimate, pay_from_account_id, pay_to_account_id,
+                         autopay, placement, schedule_rule_id, days_after_payday, bucket_id)
+                    VALUES (1, '2026-01-01', 40000, 'per_occurrence', 0, 2, NULL, 1, 'due_period', 1, 0, 1),
+                           (1, '2026-10-09', 45000, 'per_occurrence', 0, 1, 2, 1, 'due_period', 2, 0, 1),
+                           (2, '2026-01-01', 90000, 'per_occurrence', 0, 1, NULL, 0, 'due_period', 3, 0, NULL)
+                    """);
+        });
+
+        // The migration has already run on this database, on nothing; running its statement again is the repair.
+        String repair = new String(
+                getClass().getResourceAsStream("/db/migration/V8__repair_versions_of_items_that_changed_kind.sql").readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8);
+        database.jdbi().useHandle(handle -> handle.createScript(repair).execute());
+
+        List<String> versions = database.jdbi().withHandle(handle -> handle
+                .createQuery("""
+                        SELECT item_id || ' ' || effective_from || ' ' || amount || ' from ' || pay_from_account_id
+                               || ' to ' || coalesce(pay_to_account_id, 'nowhere')
+                        FROM item_versions ORDER BY item_id, effective_from
+                        """)
+                .mapTo(String.class)
+                .list());
+        assertThat(versions).containsExactly(
+                // The earlier version keeps its date and amount, and now goes where the item goes.
+                "1 2026-01-01 40000 from 1 to 2",
+                "1 2026-10-09 45000 from 1 to 2",
+                // A bill names nowhere by its nature and is left alone.
+                "2 2026-01-01 90000 from 1 to nowhere");
+    }
+
     private static String pragma(Database database, String name) {
         // PRAGMA names cannot be bound as parameters; these are fixed strings from this test only.
         return database.jdbi().withHandle(handle ->

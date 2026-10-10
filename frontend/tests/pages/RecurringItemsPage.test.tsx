@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account } from "../../src/api/accounts";
+import type { Bucket } from "../../src/api/buckets";
 import type { Category, Tag } from "../../src/api/categories";
 import type { Item } from "../../src/api/items";
 import { todayIso } from "../../src/lib/dates";
@@ -15,6 +16,7 @@ const CHECKING: Account = {
   subtypeLabel: null,
   color: "#0f766e",
   archived: false,
+  lowBalanceThresholdCents: null,
   latestBalance: null,
 };
 const SAVINGS: Account = { ...CHECKING, id: 2, name: "Rainy Day Savings", type: "savings", color: "#0369a1" };
@@ -30,6 +32,7 @@ const RENT: Item = {
   kind: "bill",
   note: null,
   archived: false,
+  createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 155000,
   amountMode: "per_occurrence",
@@ -50,11 +53,17 @@ const RENT: Item = {
     weekendRule: "none",
   },
   daysAfterPayday: 0,
+  bucketId: null,
+  saveUpBucketId: null,
+  saveUpPerPaycheckCents: null,
   perOccurrenceCents: 155000,
   perYearCents: 1860000,
   // Due on payday and paid by hand, so the paycheck before pays for it.
   next: { scheduledDate: "2026-11-01", dueDate: "2026-11-01", periodStart: "2026-10-15", early: true },
   history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 }],
+  paused: false,
+  pausedUntil: null,
+  fromBucketId: null,
 };
 const ELECTRIC: Item = {
   ...RENT,
@@ -94,6 +103,22 @@ const TO_SAVINGS: Item = {
   perYearCents: 240000,
   next: { scheduledDate: "2026-11-02", dueDate: "2026-11-02", periodStart: "2026-11-01", early: false },
 };
+
+const GIFTS: Bucket = {
+  id: 7,
+  accountId: 1,
+  name: "Holiday gifts",
+  color: "#b45309",
+  goalCents: 60000,
+  note: null,
+  archived: false,
+  openedOn: "2026-09-01",
+  goalDate: null,
+  stopAtGoal: false,
+  goalProgress: null,
+  balanceCents: 15000,
+};
+const EMERGENCY: Bucket = { ...GIFTS, id: 8, accountId: 2, name: "Emergency fund", goalCents: null };
 
 function withItems(items: Item[] = [ELECTRIC, GROCERIES, RENT, TO_SAVINGS], overrides: Parameters<typeof fakeBackend>[0] = {}) {
   return fakeBackend({
@@ -185,9 +210,122 @@ describe("recurring items screen", () => {
       "Paid from",
       "Lands in",
       "Next",
+      "Edit",
     ]);
+    // Being able to change an item is never left to be discovered: every row says so.
+    expect(within(table).getAllByRole("button", { name: /^Edit / })).toHaveLength(4);
+    expect(within(table).getAllByText("Edit", { selector: "button span" })).toHaveLength(4);
     // One header row and one row per item.
     expect(within(table).getAllByRole("row")).toHaveLength(5);
+  });
+
+  it("sorts by a column when its heading is pressed, and the other way when pressed again", async () => {
+    withItems();
+    renderApp("/recurring");
+
+    const table = await screen.findByRole("table", { name: "Recurring items" });
+    const names = () =>
+      within(table)
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getAllByRole("cell")[0]!.textContent);
+    const byName = names();
+    expect(within(table).getByRole("columnheader", { name: "Name" })).toHaveAttribute("aria-sort", "ascending");
+
+    await userEvent.click(within(table).getByRole("button", { name: "Amount" }));
+    const amounts = [ELECTRIC, GROCERIES, RENT, TO_SAVINGS].sort((a, b) => a.perOccurrenceCents - b.perOccurrenceCents).map((item) => item.name);
+    expect(names()).toEqual(amounts);
+    expect(within(table).getByRole("columnheader", { name: "Amount" })).toHaveAttribute("aria-sort", "ascending");
+    expect(within(table).getByRole("columnheader", { name: "Name" })).toHaveAttribute("aria-sort", "none");
+
+    await userEvent.click(within(table).getByRole("button", { name: "Amount" }));
+    expect(names()).toEqual([...amounts].reverse());
+    expect(within(table).getByRole("columnheader", { name: "Amount" })).toHaveAttribute("aria-sort", "descending");
+
+    await userEvent.click(within(table).getByRole("button", { name: "Name" }));
+    expect(names()).toEqual(byName);
+  });
+
+  it("asks which bucket a bill comes out of when its account has buckets", async () => {
+    const fetchMock = withItems([], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
+      "POST /api/items": () => ({ status: 201, data: ELECTRIC }),
+    });
+    renderApp("/recurring");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "+ Add item" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a recurring item" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Streaming");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount each time" }), "15");
+    // Nothing to ask until an account with buckets is chosen.
+    expect(within(dialog).queryByRole("combobox", { name: "Comes out of" })).not.toBeInTheDocument();
+    await pick(dialog, "Paid from", "Every");
+    const from = within(dialog).getByRole("combobox", { name: "Comes out of" });
+    // Only that account's buckets are offered.
+    expect(within(from).queryByRole("option", { name: /Emergency fund/ })).not.toBeInTheDocument();
+
+    // It has to be said: nothing is sent until it is.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+    expect(calls(fetchMock)).not.toContain("POST /api/items");
+
+    await userEvent.selectOptions(from, within(from).getByRole("option", { name: /Holiday gifts/ }));
+    expect(within(dialog).getByText(/Each time, the bucket and the account both go down/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/items")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({ name: "Streaming", payFromAccountId: 1, fromBucketId: 7 });
+  });
+
+  it("keeps where an existing item comes out of, and sends none for money not in a bucket", async () => {
+    const fetchMock = withItems([RENT], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "PUT /api/items/1": () => ({ status: 200, data: RENT }),
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
+    // It was set up before buckets were asked about, so it stands as not from a bucket.
+    expect(await within(dialog).findByRole("combobox", { name: "Comes out of" })).toHaveValue("none");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")[0]).toMatchObject({ fromBucketId: null });
+  });
+
+  it("pauses an item until a date or until it is turned back on, and resumes it", async () => {
+    let rent: Item = RENT;
+    const fetchMock = withItems([RENT], {
+      "GET /api/items": () => ({ status: 200, data: [rent] }),
+      "PUT /api/items/1/pause": (body) => {
+        rent = { ...RENT, paused: true, pausedUntil: (body as { until?: string }).until ?? null, next: null };
+        return { status: 200, data: rent, changed: true };
+      },
+      "DELETE /api/items/1/pause": () => {
+        rent = RENT;
+        return { status: 200, data: rent, changed: true };
+      },
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Rent" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Pause until I turn it back on" }));
+
+    expect(await within(dialog).findByText("Paused until you turn it back on.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")).toEqual([{}]);
+    // The list says so in words.
+    expect(await rowFor("Rent")).toHaveTextContent("Paused");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Resume now" }));
+    const until = await within(dialog).findByLabelText("Start again on (optional)");
+    await userEvent.type(until, "2999-12-01");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Pause until then" }));
+
+    expect(await within(dialog).findByText("Paused. It starts again on Dec 1, 2999.")).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")[1]).toEqual({ until: "2999-12-01" });
+    expect(await rowFor("Rent")).toHaveTextContent("Paused until Dec 1");
   });
 
   it("filters by kind and counts each kind on its chip", async () => {
@@ -218,16 +356,36 @@ describe("recurring items screen", () => {
     expect(screen.getByText("Nothing matches that.")).toBeInTheDocument();
   });
 
-  it("shows an archived item last and labelled", async () => {
+  it("hides archived items until Archived is chosen, and counts them only there", async () => {
     withItems([{ ...ELECTRIC, archived: true, next: null }, RENT]);
     renderApp("/recurring");
 
     const table = await screen.findByRole("table", { name: "Recurring items" });
-    const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows[0]).toHaveTextContent("Rent");
-    expect(rows[1]).toHaveTextContent("Electric");
-    expect(rows[1]).toHaveTextContent("Archived");
-    expect(rows[1]).toHaveTextContent("—");
+    expect(within(table).getAllByRole("row").slice(1)).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Edit Electric" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All · 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bills · 1" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Archived · 1" }));
+    const rows = within(screen.getByRole("table", { name: "Recurring items" })).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Electric");
+    expect(rows[0]).toHaveTextContent("Archived");
+    expect(rows[0]).toHaveTextContent("—");
+    expect(screen.getByRole("button", { name: "Edit Electric" })).toBeInTheDocument();
+  });
+
+  it("offers no Archived chip when nothing is archived, and says so when everything is", async () => {
+    withItems([RENT]);
+    const { unmount } = renderApp("/recurring");
+    await screen.findByRole("button", { name: "All · 1" });
+    expect(screen.queryByRole("button", { name: /^Archived/ })).not.toBeInTheDocument();
+    unmount();
+
+    withItems([{ ...ELECTRIC, archived: true, next: null }]);
+    renderApp("/recurring");
+    expect(await screen.findByText("Everything here is archived.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archived · 1" })).toBeInTheDocument();
   });
 
   it("adds a bill", async () => {
@@ -243,6 +401,10 @@ describe("recurring items screen", () => {
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "It's an estimate" }));
     await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Day of the month" }), "16th");
     await userEvent.click(within(dialog).getByRole("radio", { name: "One period early" }));
+    // The form is laid out as named groups.
+    for (const section of ["Amount", "What it is", "Where it's paid from", "Schedule", "Saving up", "Tags and notes"]) {
+      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
+    }
     await userEvent.click(within(dialog).getByRole("button", { name: "Add item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -272,6 +434,9 @@ describe("recurring items screen", () => {
           weekendRule: "none",
         },
         daysAfterPayday: 0,
+        bucketId: null,
+        saveUpBucketId: null,
+        fromBucketId: null,
       },
     ]);
   });
@@ -306,6 +471,90 @@ describe("recurring items screen", () => {
       daysAfterPayday: 3,
       schedule: { frequency: "every_pay_period", startDate: todayIso(), day1: null },
     });
+  });
+
+  it("does not offer a bucket move as a type, and opens a bucket's own move in the bucket's form", async () => {
+    const fund: Item = { ...GROCERIES, id: 8, name: "Gift fund", kind: "bucket_move", bucketId: 7, categoryId: null };
+    withItems([fund, RENT], { "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }) });
+    renderApp("/recurring");
+
+    // Setting money aside is set up on the bucket, so it is not among the types of a new item.
+    await waitFor(() => expect(screen.getByRole("button", { name: "+ Add item" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
+    const adding = screen.getByRole("dialog", { name: "Add a recurring item" });
+    expect(within(adding).getAllByRole("radio").slice(0, 4).map((radio) => radio.closest("label")?.textContent)).toEqual([
+      "Bill",
+      "Transfer",
+      "Budget",
+      "Card payment",
+    ]);
+    expect(within(adding).queryByRole("radio", { name: "Bucket move" })).not.toBeInTheDocument();
+    await userEvent.click(within(adding).getByRole("button", { name: "Cancel" }));
+
+    // The move is still listed here, and editing it opens the one place it is changed: its bucket.
+    await userEvent.click(screen.getByRole("button", { name: "Edit Gift fund" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+    expect(await within(dialog).findByRole("textbox", { name: "Set aside (optional)" })).toHaveValue(
+      (fund.amountCents / 100).toFixed(2),
+    );
+  });
+
+  it("saves up for a bill in a bucket of the account it is paid from", async () => {
+    const savedUpFor: Item = { ...ELECTRIC, saveUpBucketId: 7, saveUpPerPaycheckCents: 7000 };
+    const fetchMock = withItems([savedUpFor], {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS, EMERGENCY] }),
+      "PUT /api/items/2": () => ({ status: 200, data: savedUpFor }),
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    const saveUp = within(dialog).getByRole("combobox", { name: "Save up for it in a bucket (optional)" });
+    expect(saveUp).toHaveValue("Holiday gifts");
+    expect(within(dialog).getByText(/The next paycheck sets aside/)).toHaveTextContent("$70.00");
+    // Only the buckets of the account it is paid from are offered.
+    await userEvent.click(saveUp);
+    expect(within(dialog).queryByRole("option", { name: /Emergency fund/ })).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")[0]).toMatchObject({ kind: "bill", saveUpBucketId: 7, bucketId: null });
+  });
+
+  it("adds a bucket in place from the save-up picker, in the account the bill is paid from", async () => {
+    let buckets = [EMERGENCY];
+    const created = { ...GIFTS, id: 12, name: "Car insurance", goalCents: null, balanceCents: 0 };
+    const fetchMock = withItems([ELECTRIC], {
+      "GET /api/buckets": () => ({ status: 200, data: buckets }),
+      "POST /api/buckets": () => {
+        buckets = [...buckets, created];
+        return { status: 201, data: { bucket: created, changes: [] }, changed: true };
+      },
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    // The account it is paid from has no bucket yet, and the option is there all the same.
+    const saveUp = within(dialog).getByRole("combobox", { name: "Save up for it in a bucket (optional)" });
+    await userEvent.type(saveUp, "Car insurance{Enter}");
+
+    await waitFor(() => expect(saveUp).toHaveValue("Car insurance"));
+    expect(bodiesSentTo(fetchMock, "POST /api/buckets")).toMatchObject([
+      { accountId: ELECTRIC.payFromAccountId, name: "Car insurance", goalCents: null, startingCents: 0 },
+    ]);
+  });
+
+  it("says why a bill paid from a card cannot be saved up for", async () => {
+    withItems([{ ...ELECTRIC, payFromAccountId: VISA.id }]);
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+
+    expect(within(dialog).getByText(/Buckets live in checking and savings accounts/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("combobox", { name: "Save up for it in a bucket (optional)" })).not.toBeInTheDocument();
   });
 
   it("adds a yearly bill entered as an annual amount", async () => {
@@ -440,7 +689,7 @@ describe("recurring items screen", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
     expect(within(dialog).getByRole("combobox", { name: "Category (optional)" })).toHaveValue("Housing › Rent");
     expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
-    const history = within(dialog).getByRole("region", { name: "Price history" });
+    const history = within(dialog).getByRole("region", { name: "Amount history" });
     expect(history).toHaveTextContent("From Jan 1, 2025");
     expect(history).toHaveTextContent("$17,760.00 a year");
 
@@ -448,14 +697,68 @@ describe("recurring items screen", () => {
     expect(amount).toHaveValue("1550.00");
     await userEvent.clear(amount);
     await userEvent.type(amount, "1600");
-    // By default the change starts today; earlier pay periods keep the old rent.
-    expect(within(dialog).getByLabelText("Changes apply from")).toHaveValue(todayIso());
+    // The day it was added is stated, not asked; the change itself is dated today.
+    expect(within(dialog).getByText("Date added").nextElementSibling).toHaveTextContent("Jan 5, 2026");
+    expect(within(dialog).queryByLabelText(/apply.* from|date added/i)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toMatchObject([
       { name: "Rent", amountCents: 160000, effectiveFrom: todayIso(), schedule: { startDate: "2026-01-01", day1: 1 } },
     ]);
+  });
+
+  it("warns that a change of type reaches back, and can archive the item and add a new one instead", async () => {
+    const fetchMock = withItems(undefined, {
+      "POST /api/items/2/replacement": () => ({ status: 201, data: { ...ELECTRIC, id: 9, kind: "budget" }, changed: true }),
+    });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    // Nothing is said until the type is actually different.
+    expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Budget" }));
+    const warning = within(dialog).getByRole("status");
+    expect(warning).toHaveTextContent("Changing the type changes Electric all the way back to when it started.");
+    expect(warning).toHaveTextContent("Its earlier dates will count as a budget too");
+
+    await userEvent.click(within(warning).getByRole("button", { name: "Archive this and add a new item" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const sent = bodiesSentTo(fetchMock, "POST /api/items/2/replacement")[0] as Record<string, unknown>;
+    expect(sent).toMatchObject({ name: "Electric", kind: "budget", archived: false });
+    expect(sent).not.toHaveProperty("effectiveFrom");
+    // The item itself was not changed.
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toEqual([]);
+  });
+
+  it("opens an item for editing from a click anywhere on its row", async () => {
+    withItems([RENT]);
+    renderApp("/recurring");
+    const row = await rowFor("Rent");
+
+    // On plain text in the row, not on the Edit button.
+    await userEvent.click(within(row).getByText("Rent"));
+
+    expect(screen.getByRole("dialog", { name: "Edit Rent" })).toBeInTheDocument();
+  });
+
+  it("shows when an item starts, and saves an earlier start so it can be backdated", async () => {
+    const fetchMock = withItems([GROCERIES], { "PUT /api/items/3": () => ({ status: 200, data: GROCERIES }) });
+    renderApp("/recurring");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Groceries" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Groceries" });
+    // What was saved, not today: this is the item's own date and stays put between visits.
+    const starts = within(dialog).getByLabelText("Starts");
+    expect(starts).toHaveValue("2026-10-01");
+    await userEvent.clear(starts);
+    await userEvent.type(starts, "2026-09-01");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/3")).toMatchObject([{ schedule: { startDate: "2026-09-01" } }]);
   });
 
   it("shows the backend's message when a change is refused", async () => {

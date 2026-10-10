@@ -17,10 +17,15 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/paychecks": () => ({ status: 200, data: [] }),
   "GET /api/pay-periods": () => ({ status: 200, data: { primarySourceId: null, primaryAccountId: null, periods: [] } }),
   "GET /api/items": () => ({ status: 200, data: [] }),
+  "GET /api/buckets": () => ({ status: 200, data: [] }),
   "GET /api/categories": () => ({ status: 200, data: [] }),
   "GET /api/tags": () => ({ status: 200, data: [] }),
   "GET /api/holidays": () => ({ status: 200, data: [] }),
 };
+
+/** Any account's chart and transactions: on a fresh install there is nothing to show, whichever account it is. */
+const NO_PROJECTION = /^GET \/api\/accounts\/\d+\/(projection|transactions)(\?.*)?$/;
+const nothingProjected: Handler = () => ({ status: 200, data: [] });
 
 /**
  * Replaces `fetch` with a tiny fake backend. Routes are keyed `"METHOD /path"` and are laid
@@ -31,7 +36,8 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
   const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
-    const handler = routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`];
+    const handler =
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;

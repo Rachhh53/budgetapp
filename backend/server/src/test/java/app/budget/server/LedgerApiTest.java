@@ -53,6 +53,22 @@ class LedgerApiTest extends ApiTestBase {
     }
 
     @Nested
+    class ATransferDueOnPayday {
+        @Test
+        void arrivesInTheOtherAccountWhoseBalanceWasEnteredTheDayBefore() throws Exception {
+            enterBalance(checking, "2026-09-30", 500000);
+            enterBalance(savings, "2026-09-30", 1000000);
+            item("To savings", "transfer", 45000, monthly(1), "\"autopay\":true,\"payToAccountId\":" + savings);
+
+            JsonNode period = period("2026-10-01");
+            assertThat(period.get("occurrences").findValuesAsText("name")).contains("To savings");
+            assertThat(account(period, checking).get("outCents").asLong()).isEqualTo(45000);
+            assertThat(account(period, savings).get("inCents").asLong()).isEqualTo(45000);
+            assertThat(account(period("2026-10-15"), savings).get("startingCents").asLong()).isEqualTo(1045000);
+        }
+    }
+
+    @Nested
     class Auth {
         @Test
         void bothRoutesRequireASession() throws Exception {
@@ -64,18 +80,19 @@ class LedgerApiTest extends ApiTestBase {
     @Nested
     class BeforeABalanceIsEntered {
         @Test
-        void periodsAreListedWithoutAProjectedEnding() throws Exception {
+        void theAccountIsBuiltUpFromNothingByItsPaychecks() throws Exception {
             JsonNode data = server.get("/api/pay-periods?from=2026-10-01&to=2026-10-31", cookie).data();
 
             assertThat(data.get("primaryAccountId").asLong()).isEqualTo(checking);
             assertThat(data.get("periods")).hasSize(2);
             assertThat(data.get("periods").get(0).get("incomeCents").asLong()).isEqualTo(248620);
             assertThat(data.get("periods").get(0).get("paychecks").get(0).get("depositAccountId").asLong()).isEqualTo(checking);
-            assertThat(data.get("periods").get(0).get("projectedEndingCents").isNull()).isTrue();
+            // Nineteen paychecks since the pay schedule began on Jan 1, the one on Oct 1 included.
+            assertThat(data.get("periods").get(0).get("projectedEndingCents").asLong()).isEqualTo(19 * 248620L);
         }
 
         @Test
-        void aPeriodStillListsWhatIsInItButHasNoAccountFigures() throws Exception {
+        void aPeriodAddsUpEverythingSinceTheFirstMoneyMoved() throws Exception {
             item("Car loan", "bill", 41200, monthly(5), "\"autopay\":true");
 
             JsonNode period = period("2026-10-01");
@@ -83,7 +100,50 @@ class LedgerApiTest extends ApiTestBase {
             assertThat(period.get("end").asText()).isEqualTo("2026-10-14");
             assertThat(period.get("current").asBoolean()).isTrue();
             assertThat(period.get("occurrences").findValuesAsText("name")).containsExactly("Car loan");
-            assertThat(period.get("accounts")).isEmpty();
+            // Eighteen paychecks and nine loan payments before Oct 1; one more of each in the period.
+            JsonNode built = account(period, checking);
+            assertThat(built.get("builtFromZero").asBoolean()).isTrue();
+            assertThat(built.get("startingCents").asLong()).isEqualTo(18 * 248620L - 9 * 41200L);
+            assertThat(built.get("inCents").asLong()).isEqualTo(248620);
+            assertThat(built.get("outCents").asLong()).isEqualTo(41200);
+            assertThat(built.get("endingCents").asLong()).isEqualTo(19 * 248620L - 10 * 41200L);
+            // Nothing has moved in or out of savings, so it stands at nothing.
+            assertThat(account(period, savings).get("endingCents").asLong()).isZero();
+            assertThat(account(period, savings).get("builtFromZero").asBoolean()).isTrue();
+        }
+
+        @Test
+        void enteringABalanceTakesOverFromThatDay() throws Exception {
+            enterBalance(checking, "2026-10-01", 121438);
+
+            JsonNode entered = account(period("2026-10-01"), checking);
+            assertThat(entered.get("builtFromZero").asBoolean()).isFalse();
+            assertThat(entered.get("startingCents").asLong()).isEqualTo(121438);
+        }
+
+        @Test
+        void aTransferBuildsTheAccountItArrivesInAndItsBucketTogether() throws Exception {
+            long fund = server.post("/api/buckets",
+                    "{\"accountId\":%d,\"name\":\"Emergency fund\",\"color\":\"#b45309\"}".formatted(savings), cookie)
+                    .data().get("bucket").get("id").asLong();
+            server.put("/api/buckets/" + fund,
+                    "{\"name\":\"Emergency fund\",\"color\":\"#b45309\",\"openedOn\":\"2026-01-01\"}", cookie);
+            item("To savings", "transfer", 45000, monthly(1), "\"autopay\":true,\"payToAccountId\":%d,\"bucketId\":%d".formatted(savings, fund));
+
+            // Ten transfers, Jan 1 to Oct 1: all in the account and all in its bucket.
+            JsonNode built = account(period("2026-10-01"), savings);
+            assertThat(built.get("endingCents").asLong()).isEqualTo(450000);
+            assertThat(built.get("bucketsCents").asLong()).isEqualTo(450000);
+            assertThat(built.get("availableCents").asLong()).isZero();
+        }
+
+        @Test
+        void anArchivedAccountIsNotBuiltUp() throws Exception {
+            assertThat(server.put("/api/accounts/" + visa,
+                    "{\"name\":\"Visa\",\"type\":\"credit_card\",\"color\":\"#0f766e\",\"archived\":true}", cookie).status()).isEqualTo(200);
+
+            assertThat(period("2026-10-01").get("accounts").findValues("accountId")).extracting(JsonNode::asLong)
+                    .containsExactlyInAnyOrder(checking, savings);
         }
     }
 

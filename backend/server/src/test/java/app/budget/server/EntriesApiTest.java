@@ -43,6 +43,28 @@ class EntriesApiTest extends ApiTestBase {
     }
 
     @Test
+    void keepsTheCheckNumberOfSomethingPaidFromChecking() throws Exception {
+        String byCheck = vet().replace("}", ",\"checkNumber\":\" 1042 \"}");
+
+        Reply added = server.post("/api/entries", byCheck, cookie);
+        assertThat(added.status()).isEqualTo(201);
+        assertThat(added.data().get("checkNumber").asText()).isEqualTo("1042");
+        long id = added.data().get("id").asLong();
+
+        // Sent empty, it is cleared; left out, it is cleared too, as the whole entry is what was sent.
+        assertThat(server.put("/api/entries/" + id, vet().replace("}", ",\"checkNumber\":\"\"}"), cookie).data().get("checkNumber").isNull())
+                .isTrue();
+        // A savings account has no checks, and money coming in was not paid by one.
+        assertThat(server.post("/api/entries", byCheck.replace("\"accountId\":" + checking, "\"accountId\":" + savings), cookie)
+                .data().get("checkNumber").isNull()).isTrue();
+        assertThat(server.post("/api/entries", byCheck.replace("money_out", "money_in"), cookie).data().get("checkNumber").isNull()).isTrue();
+
+        Reply tooLong = server.post("/api/entries", vet().replace("}", ",\"checkNumber\":\"" + "1".repeat(21) + "\"}"), cookie);
+        assertThat(tooLong.status()).isEqualTo(400);
+        assertThat(tooLong.error()).isEqualTo("Please keep the check number to 20 characters or fewer.");
+    }
+
+    @Test
     void addsMoneyOutWithEverythingKeptForIt() throws Exception {
         long pets = created("/api/categories", "{\"name\":\"Pets\",\"color\":\"#a16207\"}");
         long tag = created("/api/tags", "{\"name\":\"Reimbursable\",\"color\":\"#475569\"}");

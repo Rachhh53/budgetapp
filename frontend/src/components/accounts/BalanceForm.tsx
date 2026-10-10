@@ -1,3 +1,4 @@
+import { Wallet } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { type Account, useSaveBalance } from "../../api/accounts";
 import { todayIso } from "../../lib/dates";
@@ -33,7 +34,7 @@ export function BalanceForm({ account, onClose }: { account: Account; onClose: (
   };
 
   return (
-    <Modal title={`Update balance — ${account.name}`} onClose={onClose}>
+    <Modal title={`Update balance — ${account.name}`} icon={Wallet} tone={account.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <MoneyField
           label={owed ? "Amount owed" : "Balance"}

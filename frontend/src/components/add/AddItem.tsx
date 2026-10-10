@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, Minus, Plus, RotateCw } from "lucide-react";
+import { ArrowLeftRight, CalendarClock, ChevronDown, type LucideIcon, Minus, Plus } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -47,11 +47,11 @@ export function useAddItem(): AddItemContext {
   return context;
 }
 
-const KIND_CHOICES: readonly { value: AddKind; label: string }[] = [
-  { value: "money_out", label: "Money out" },
-  { value: "money_in", label: "Money in" },
-  { value: "transfer", label: "Transfer" },
-  { value: "recurring", label: "Recurring" },
+const KIND_CHOICES: readonly { value: AddKind; label: string; icon: LucideIcon }[] = [
+  { value: "money_out", label: "Money out", icon: Minus },
+  { value: "money_in", label: "Money in", icon: Plus },
+  { value: "transfer", label: "Transfer", icon: ArrowLeftRight },
+  { value: "recurring", label: "Recurring", icon: CalendarClock },
 ];
 
 const EDITABLE = "input, textarea, select, [contenteditable='true']";
@@ -146,7 +146,7 @@ function AddItemForm({
   const failure = accounts.error ?? categories.error ?? tags.error;
 
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} icon={KIND_CHOICES.find((choice) => choice.value === kind)?.icon} onClose={onClose}>
       <div className="mb-4">
         <Segmented legend="What are you adding?" options={choices} value={kind} onChange={setKind} />
       </div>
@@ -181,7 +181,7 @@ const MENU: readonly { kind: AddKind; label: string; about: string; shortcut?: s
   { kind: "money_out", label: "Money out", about: "One-time purchase, gift, donation, emergency", shortcut: "Ctrl+E", icon: Minus },
   { kind: "money_in", label: "Money in", about: "Bonus, refund, gift, reimbursement, side cash", shortcut: "Ctrl+I", icon: Plus },
   { kind: "transfer", label: "Transfer", about: "Between two of your accounts", icon: ArrowLeftRight },
-  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer or card payment that repeats", icon: RotateCw },
+  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer or card payment that repeats", icon: CalendarClock },
 ];
 
 /**

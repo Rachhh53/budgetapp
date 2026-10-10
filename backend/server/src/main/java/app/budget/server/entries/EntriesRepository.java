@@ -13,11 +13,12 @@ import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.SqlStatement;
 
-/** Reads and writes one-off entries (money in, money out, transfers) and their tags. */
+/** Reads and writes one-off entries (money in, money out, transfers), their tags and their bucket splits. */
 public final class EntriesRepository {
 
     private static final String SELECT = """
-            SELECT id, kind, date, amount, is_estimate, description, payee, category_id, account_id, to_account_id, note
+            SELECT id, kind, date, amount, is_estimate, description, payee, category_id, account_id, to_account_id, note,
+                   check_number
             FROM entries
             """;
 
@@ -29,12 +30,17 @@ public final class EntriesRepository {
         this.clock = clock;
     }
 
+    /** Part of an entry set aside in a bucket. Amounts are whole cents, always positive. */
+    public record Split(long bucketId, long amountCents) {}
+
     /**
      * A one-off entry as stored and as the API returns it. Amounts are whole cents, always positive:
      * the kind says which way the money goes.
      *
-     * @param accountId   the account it leaves (money out, transfer) or arrives in (money in)
-     * @param toAccountId where a transfer goes; {@code null} otherwise
+     * @param accountId    the account it leaves (money out, transfer) or arrives in (money in)
+     * @param toAccountId  where a transfer goes; {@code null} otherwise
+     * @param bucketSplits how much of the money arriving goes into which buckets; the rest stays unassigned
+     * @param checkNumber  the check it was paid with, when it left a checking account that way; {@code null} otherwise
      */
     public record Entry(
             long id,
@@ -48,7 +54,9 @@ public final class EntriesRepository {
             long accountId,
             Long toAccountId,
             String note,
-            List<Long> tagIds) {}
+            List<Long> tagIds,
+            List<Split> bucketSplits,
+            String checkNumber) {}
 
     /** What the user can set on an entry. */
     public record Fields(
@@ -62,30 +70,43 @@ public final class EntriesRepository {
             long accountId,
             Long toAccountId,
             String note,
-            List<Long> tagIds) {}
+            List<Long> tagIds,
+            List<Split> bucketSplits,
+            String checkNumber) {}
 
     /** Entries dated within {@code from}–{@code to}, oldest first. */
     public List<Entry> between(LocalDate from, LocalDate to) {
-        return jdbi.withHandle(handle -> {
-            List<Entry> entries = new ArrayList<>();
-            List<Entry> rows = handle.createQuery(SELECT + "WHERE date BETWEEN :from AND :to ORDER BY date, id")
-                    .bind("from", from.toString())
-                    .bind("to", to.toString())
-                    .map((rs, ctx) -> entry(rs, List.of()))
-                    .list();
-            for (Entry row : rows) {
-                entries.add(withTags(handle, row));
-            }
-            return entries;
-        });
+        return jdbi.withHandle(handle -> complete(handle, handle
+                .createQuery(SELECT + "WHERE date BETWEEN :from AND :to ORDER BY date, id")
+                .bind("from", from.toString())
+                .bind("to", to.toString())
+                .map((rs, ctx) -> entry(rs))
+                .list()));
+    }
+
+    /** The date of the oldest entry; empty when there are none. */
+    public Optional<LocalDate> earliestDate() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT min(date) FROM entries")
+                .mapTo(String.class)
+                .findOne()
+                .map(LocalDate::parse));
+    }
+
+    /** Every entry, whenever it is dated, that set something aside in a bucket; oldest first. */
+    public List<Entry> withBucketSplits() {
+        return jdbi.withHandle(handle -> complete(handle, handle
+                .createQuery(SELECT + "WHERE id IN (SELECT entry_id FROM entry_bucket_splits) ORDER BY date, id")
+                .map((rs, ctx) -> entry(rs))
+                .list()));
     }
 
     public Optional<Entry> find(long id) {
         return jdbi.withHandle(handle -> handle.createQuery(SELECT + "WHERE id = :id")
                 .bind("id", id)
-                .map((rs, ctx) -> entry(rs, List.of()))
+                .map((rs, ctx) -> entry(rs))
                 .findOne()
-                .map(row -> withTags(handle, row)));
+                .map(row -> complete(handle, List.of(row)).getFirst()));
     }
 
     public long create(Fields fields) {
@@ -93,15 +114,16 @@ public final class EntriesRepository {
             long id = bind(handle.createQuery("""
                             INSERT INTO entries
                                 (kind, date, amount, is_estimate, description, payee, category_id, account_id,
-                                 to_account_id, note, created_at)
+                                 to_account_id, note, check_number, created_at)
                             VALUES (:kind, :date, :amount, :estimate, :description, :payee, :categoryId, :accountId,
-                                    :toAccountId, :note, :now)
+                                    :toAccountId, :note, :checkNumber, :now)
                             RETURNING id
                             """), fields)
                     .bind("now", clock.instant().toString())
                     .mapTo(Long.class)
                     .one();
             replaceTags(handle, id, fields.tagIds());
+            replaceSplits(handle, id, fields.bucketSplits());
             return id;
         });
     }
@@ -113,13 +135,15 @@ public final class EntriesRepository {
                             UPDATE entries
                             SET kind = :kind, date = :date, amount = :amount, is_estimate = :estimate,
                                 description = :description, payee = :payee, category_id = :categoryId,
-                                account_id = :accountId, to_account_id = :toAccountId, note = :note
+                                account_id = :accountId, to_account_id = :toAccountId, note = :note,
+                                check_number = :checkNumber
                             WHERE id = :id
                             """), fields)
                     .bind("id", id)
                     .execute();
             if (changed > 0) {
                 replaceTags(handle, id, fields.tagIds());
+                replaceSplits(handle, id, fields.bucketSplits());
             }
             return changed > 0;
         });
@@ -140,7 +164,8 @@ public final class EntriesRepository {
                 .bind("categoryId", fields.categoryId())
                 .bind("accountId", fields.accountId())
                 .bind("toAccountId", fields.toAccountId())
-                .bind("note", fields.note());
+                .bind("note", fields.note())
+                .bind("checkNumber", fields.checkNumber());
     }
 
     private static void replaceTags(Handle handle, long entryId, List<Long> tagIds) {
@@ -153,17 +178,39 @@ public final class EntriesRepository {
         }
     }
 
-    private static Entry withTags(Handle handle, Entry row) {
-        List<Long> tagIds = handle.createQuery("SELECT tag_id FROM entry_tags WHERE entry_id = :id ORDER BY tag_id")
-                .bind("id", row.id())
-                .mapTo(Long.class)
-                .list();
-        return new Entry(
-                row.id(), row.kind(), row.date(), row.amountCents(), row.estimate(), row.description(), row.payee(),
-                row.categoryId(), row.accountId(), row.toAccountId(), row.note(), tagIds);
+    private static void replaceSplits(Handle handle, long entryId, List<Split> splits) {
+        handle.createUpdate("DELETE FROM entry_bucket_splits WHERE entry_id = :id").bind("id", entryId).execute();
+        for (Split split : splits) {
+            handle.createUpdate("INSERT INTO entry_bucket_splits (entry_id, bucket_id, amount) VALUES (:entryId, :bucketId, :amount)")
+                    .bind("entryId", entryId)
+                    .bind("bucketId", split.bucketId())
+                    .bind("amount", split.amountCents())
+                    .execute();
+        }
     }
 
-    private static Entry entry(ResultSet rs, List<Long> tagIds) throws SQLException {
+    /** Attaches each row's tags and bucket splits. */
+    private static List<Entry> complete(Handle handle, List<Entry> rows) {
+        List<Entry> entries = new ArrayList<>();
+        for (Entry row : rows) {
+            List<Long> tagIds = handle.createQuery("SELECT tag_id FROM entry_tags WHERE entry_id = :id ORDER BY tag_id")
+                    .bind("id", row.id())
+                    .mapTo(Long.class)
+                    .list();
+            List<Split> splits = handle
+                    .createQuery("SELECT bucket_id, amount FROM entry_bucket_splits WHERE entry_id = :id ORDER BY bucket_id")
+                    .bind("id", row.id())
+                    .map((rs, ctx) -> new Split(rs.getLong("bucket_id"), rs.getLong("amount")))
+                    .list();
+            entries.add(new Entry(
+                    row.id(), row.kind(), row.date(), row.amountCents(), row.estimate(), row.description(), row.payee(),
+                    row.categoryId(), row.accountId(), row.toAccountId(), row.note(), tagIds, splits, row.checkNumber()));
+        }
+        return entries;
+    }
+
+    /** A row of {@code entries}, before its tags and splits are attached. */
+    private static Entry entry(ResultSet rs) throws SQLException {
         return new Entry(
                 rs.getLong("id"),
                 EntryKind.valueOf(rs.getString("kind").toUpperCase(Locale.ROOT)),
@@ -176,7 +223,9 @@ public final class EntriesRepository {
                 rs.getLong("account_id"),
                 nullableLong(rs, "to_account_id"),
                 rs.getString("note"),
-                tagIds);
+                List.of(),
+                List.of(),
+                rs.getString("check_number"));
     }
 
     private static Long nullableLong(ResultSet rs, String column) throws SQLException {

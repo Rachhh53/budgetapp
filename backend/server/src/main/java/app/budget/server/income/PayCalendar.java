@@ -111,6 +111,11 @@ public final class PayCalendar {
         return new Periods(primary.get().id(), result);
     }
 
+    /** The day each income source's pay schedule starts. */
+    public List<LocalDate> sourceStarts() {
+        return income.all().stream().map(source -> source.schedule().startDate()).toList();
+    }
+
     /** The primary source's schedule, which defines the pay periods; empty until a source exists. */
     public Optional<ScheduleRule> payRule() {
         return income.all().stream().filter(Source::primary).findFirst().map(Source::schedule);

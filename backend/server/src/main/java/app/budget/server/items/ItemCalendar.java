@@ -11,6 +11,7 @@ import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Override;
+import app.budget.server.items.ItemsRepository.Pause;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.items.ItemsRepository.Version;
 import java.time.LocalDate;
@@ -56,6 +57,10 @@ public final class ItemCalendar {
      * @param payBy          the day it counts on: the due date, brought inside the period that pays for it
      * @param estimate       true while the amount is the item's estimate, not yet typed over or paid
      * @param projectedCents what the app showed before the amount was typed over; {@code null} if untouched
+     * @param bucketId       the bucket a bucket move, or a transfer, puts this money in
+     * @param saveUpBucketId the bucket this bill is saved up for in
+     * @param fromBucketId   the bucket of the paying account it comes out of; {@code null} for money not in a bucket
+     * @param checkNumber    the check this one was paid with; {@code null} when none was written
      */
     public record Occurrence(
             long itemId,
@@ -78,7 +83,28 @@ public final class ItemCalendar {
             LocalDate paidDate,
             String confirmationCode,
             String note,
-            boolean skipped) {}
+            boolean skipped,
+            Long bucketId,
+            Long saveUpBucketId,
+            Long fromBucketId,
+            String checkNumber) {
+
+        /** This occurrence at another amount: for a bucket move that only has room for part of itself. */
+        public Occurrence withAmount(long cents) {
+            return new Occurrence(
+                    itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, cents, estimate, projectedCents,
+                    autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
+                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber);
+        }
+
+        /** This occurrence with its money going into no bucket: for one dated before its bucket was opened. */
+        public Occurrence withoutBucket() {
+            return new Occurrence(
+                    itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, amountCents, estimate, projectedCents,
+                    autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
+                    skipped, null, saveUpBucketId, fromBucketId, checkNumber);
+        }
+    }
 
     /** Occurrences together with the pay periods they were placed in. */
     public record Expansion(List<PayPeriod> periods, List<Occurrence> occurrences) {}
@@ -130,7 +156,8 @@ public final class ItemCalendar {
                 : new Amounts(amount.cents(), AnnualAmount.yearly(amount, perYear).cents());
     }
 
-    private Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
+    /** As {@link #expand(LocalDate, LocalDate)}, for just these items (archived ones included, if given). */
+    public Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
         LocalDate lo = from.minusMonths(MARGIN_MONTHS);
         LocalDate hi = to.plusMonths(MARGIN_MONTHS);
         List<PayPeriod> periods = pay.payPeriods(lo, hi);
@@ -144,13 +171,19 @@ public final class ItemCalendar {
             edits.computeIfAbsent(edit.itemId(), id -> new HashMap<>()).put(edit.originalDueDate(), edit);
         }
 
+        Map<Long, List<Pause>> pauses = items.pauses();
         List<Occurrence> occurrences = new ArrayList<>();
         for (Item item : chosen) {
+            List<Pause> paused = pauses.getOrDefault(item.id(), List.of());
             List<OccurrencePlanner.Version<Terms>> versions = item.versions().stream()
                     .map(ItemCalendar::planned)
                     .toList();
             Map<LocalDate, Override> edited = edits.getOrDefault(item.id(), Map.of());
             for (Planned<Terms> planned : planner.occurrences(versions, lo, hi)) {
+                // While an item is paused, what its schedule names simply does not happen.
+                if (paused.stream().anyMatch(pause -> pause.covers(planned.scheduled()))) {
+                    continue;
+                }
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
                 occurrences.add(occurrence(item, planned, edit, assigner, payRule));
             }
@@ -204,7 +237,11 @@ public final class ItemCalendar {
                 edit.paidDate(),
                 edit.confirmationCode(),
                 edit.note(),
-                edit.skipped());
+                edit.skipped(),
+                terms.bucketId(),
+                terms.saveUpBucketId(),
+                terms.fromBucketId(),
+                edit.checkNumber());
     }
 
     private static OccurrencePlanner.Version<Terms> planned(Version version) {

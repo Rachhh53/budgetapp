@@ -87,6 +87,16 @@
  */
 @custom-variant short (@media (max-height: 820px));
 
+/*
+ * The window itself never scrolls (each screen scrolls inside its own area), so a touchpad
+ * swipe past an edge has nothing to move. Without this the desktop shell's browser view
+ * rubber-bands the whole app sideways and springs back.
+ */
+html,
+body {
+  overscroll-behavior: none;
+}
+
 body {
   background: var(--bg);
   color: var(--text);

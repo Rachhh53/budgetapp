@@ -2,12 +2,15 @@ package app.budget.server;
 
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.accounts.AccountsRoutes;
+import app.budget.server.accounts.InterestRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.HostGuard;
 import app.budget.server.api.LowerCaseEnumSerializer;
 import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
+import app.budget.server.buckets.BucketsRepository;
+import app.budget.server.buckets.BucketsRoutes;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.CategoriesRoutes;
 import app.budget.server.categories.TagsRepository;
@@ -94,8 +97,10 @@ public final class BudgetServer {
         TagsRepository tags = new TagsRepository(database.jdbi(), clock);
         ItemsRepository items = new ItemsRepository(database.jdbi(), clock);
         EntriesRepository entries = new EntriesRepository(database.jdbi(), clock);
+        BucketsRepository buckets = new BucketsRepository(database.jdbi(), clock);
+        InterestRepository interest = new InterestRepository(database.jdbi());
         ItemCalendar itemCalendar = new ItemCalendar(items, payCalendar);
-        Ledger ledger = new Ledger(accounts, entries, itemCalendar, payCalendar);
+        Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest);
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
@@ -118,13 +123,14 @@ public final class BudgetServer {
             new ChangeRoutes(new ChangeLog(database.jdbi(), clock)).register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
             new SettingsRoutes(settings).register(routes);
-            new AccountsRoutes(accounts, clock).register(routes);
+            new AccountsRoutes(accounts, interest, buckets, ledger, clock).register(routes);
+            new BucketsRoutes(buckets, accounts, ledger, clock).register(routes);
             new HolidaysRoutes(holidays, clock).register(routes);
             new IncomeRoutes(income, accounts, payCalendar).register(routes);
             new CategoriesRoutes(categories, tags, items, itemCalendar, payCalendar).register(routes);
-            new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags).register(routes);
-            new EntriesRoutes(entries, accounts, categories, tags, clock).register(routes);
-            new LedgerRoutes(ledger, payCalendar).register(routes);
+            new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags, buckets, ledger).register(routes);
+            new EntriesRoutes(entries, accounts, categories, tags, buckets, ledger, clock).register(routes);
+            new LedgerRoutes(ledger, payCalendar, accounts).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
 

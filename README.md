@@ -49,6 +49,8 @@ into your shell or IDE run configuration.
 | Ctrl+Z | undo the last change (left alone while typing in a field) |
 | ← / → | previous / next pay period, on the home screen |
 | Enter / Esc / Tab | while typing over an amount: save / cancel / save and move on |
+| `+` `-` in an amount | a sum typed into any amount (`4005+3751`) is worked out when the field is left |
+| digits, `+ - * /`, Enter, Backspace, Esc | in a money field's calculator: type the sum, work it out, delete a digit, cancel |
 
 ## Build the installer
 
@@ -104,8 +106,19 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/session` | lock |
 | GET | `/api/settings` | all settings with effective values |
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
-| GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel? }` |
-| GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances; change; delete (refused while income, an item or an entry uses it) |
+| GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel?, lowBalanceThresholdCents? }` (the threshold is for checking and savings) |
+| GET, PUT, DELETE | `/api/accounts/{id}` | one account with its balances, interest settings and rate history; change; delete (refused while income, an item or an entry uses it) |
+| PUT, DELETE | `/api/items/{id}/pause` | pause a recurring item from today, `{ until? }` (the first day it runs again; left out to pause until resumed); DELETE resumes it today. Paused dates never happen, even after resuming |
+| GET | `/api/account-balances` | what every account holds at the end of today (`balanceCents`) and what of it is outside buckets (`availableCents`): the last balance entered plus everything since, or built up from nothing when none was entered |
+| GET | `/api/accounts/{id}/transactions` | what moved the account, newest first: paychecks, recurring items, one-off entries, transfers arriving, estimated interest and balances entered, each `{ date, label, kind, amountCents, unpaid }`; optional `from`, `to` (default: this year so far through the next month) |
+| GET | `/api/accounts/{id}/projection` | the balance, and what is available after buckets, at each pay period's end; optional `from`, `to` |
+| PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
+| POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |
+| DELETE | `/api/accounts/{id}/rates/{rateId}` | remove one rate |
+| GET, POST | `/api/buckets` | buckets with today's balance; add `{ accountId, name, color, goalCents?, goalDate?, note?, startingCents?, openedOn? }` (checking and savings only); `openedOn` is the day it counts from, today or earlier. With a goal and a `goalDate`, each bucket carries `goalProgress`: `{ projectedCents, shortCents, paydaysLeft, morePerPaycheckCents, morePerMonthCents }` |
+| GET, PUT, DELETE | `/api/buckets/{id}` | one bucket with the money moved by hand; change or archive; delete (refused while a recurring item uses it) |
+| POST | `/api/buckets/{id}/changes` | put money in or take it out by hand `{ date, amountCents, note? }` (negative takes out) |
+| DELETE | `/api/buckets/{id}/changes/{changeId}` | remove one of those |
 | POST | `/api/accounts/{id}/balances` | enter a balance `{ date, amountCents, note? }`; the same day again replaces it |
 | DELETE | `/api/accounts/{id}/balances/{entryId}` | remove one entry |
 | GET, POST | `/api/income-sources` | list; add `{ name, depositAccountId, netCents, grossCents?, netIsEstimate?, primary?, schedule, deductions? }` |
@@ -113,15 +126,18 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
 | GET | `/api/paychecks` | paychecks, today to the horizon; optional `from`, `to` |
 | GET | `/api/pay-periods` | pay periods from the primary source, each with its projected ending balance; optional `from`, `to` |
-| GET | `/api/pay-periods/{start}` | everything in the period that opens on `start`: paychecks, recurring items, one-offs, and each account's starting, in, out, ending and lowest balance |
+| GET | `/api/pay-periods/{start}` | everything in the period that opens on `start`: paychecks, recurring items, one-offs, and each account's starting, in, out, ending and lowest balance, what is in its buckets, what is available after them, projected interest, and whether it dips below its low-balance threshold |
 | GET, POST | `/api/categories` | list with item counts and yearly totals; add `{ name, color, parentId? }` |
 | PUT, DELETE | `/api/categories/{id}` | change; delete (refused while in use or while it has sub-categories) |
 | GET, POST | `/api/tags` | list; add `{ name, color }` |
 | PUT, DELETE | `/api/tags/{id}` | change; delete (refused while on an item) |
-| GET, POST | `/api/items` | recurring items; add `{ name, kind, amountCents, payFromAccountId, schedule, payToAccountId?, amountMode?, estimate?, categoryId?, autopay?, placement?, daysAfterPayday?, tagIds?, note? }` |
-| GET, PUT, DELETE | `/api/items/{id}` | one item; change from `effectiveFrom` on (default today; earlier dates keep what they had); delete |
-| PUT | `/api/items/{id}/occurrences/{scheduledDate}` | "just this one": any of `{ amountCents, dueDate, periodStart, paid, paidDate, confirmationCode, note, skipped }` |
-| GET, POST | `/api/entries` | one-off money in, money out and transfers; optional `from`, `to`; add `{ kind, date, amountCents, description, accountId, toAccountId?, estimate?, payee?, categoryId?, tagIds?, note? }` |
+| GET, POST | `/api/items` | recurring items; add `{ name, kind, amountCents, payFromAccountId, schedule, payToAccountId?, amountMode?, estimate?, categoryId?, autopay?, placement?, daysAfterPayday?, tagIds?, note?, bucketId?, saveUpBucketId?, fromBucketId? }`. `kind` is `bill`, `transfer`, `budget`, `card_payment` or `bucket_move`; `bucketId` is where a bucket move or transfer lands, `saveUpBucketId` the bucket a bill or budget is saved up for in |
+| GET, PUT, DELETE | `/api/items/{id}` | one item; change from `effectiveFrom` on (default today; earlier dates keep what they had, except that a change of `kind` also moves earlier versions to the new accounts and buckets, keeping their dates and amounts); delete |
+| | | buckets also take `stopAtGoal` (stop recurring bucket moves once the goal is held; a move is cut down to what still fits, and left out of the pay period once nothing does) |
+| GET | `/api/goal-pace?goalCents=&goalDate=&bucketId=&heldCents=` | what a goal would take before it is saved: projected amount, shortfall, paydays left, and what to add every paycheck or month. `bucketId` counts what is already scheduled into that bucket; `heldCents` is what it holds (or will start with) |
+| POST | `/api/items/{id}/replacement` | archive that item and add the body (same shape as a new item) as a new one starting today; for changing what kind of item something is without touching its past |
+| PUT | `/api/items/{id}/occurrences/{scheduledDate}` | "just this one": any of `{ amountCents, dueDate, periodStart, paid, paidDate, confirmationCode, note, skipped, checkNumber }` (a check number only for something paid from a checking account) |
+| GET, POST | `/api/entries` | one-off money in, money out and transfers; optional `from`, `to`; add `{ kind, date, amountCents, description, accountId, toAccountId?, estimate?, payee?, categoryId?, tagIds?, note?, bucketSplits?, checkNumber? }` (`checkNumber` is kept only for money leaving a checking account); `bucketSplits` is `[{ bucketId, amountCents }]`, naming a bucket of the receiving account to set part of money in or a transfer aside there, or a bucket of the paying account to pay money out or a transfer from it (refused beyond what the bucket holds that day) |
 | PUT, DELETE | `/api/entries/{id}` | change; delete |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
