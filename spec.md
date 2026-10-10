@@ -535,6 +535,12 @@ Check numbers (decided 2026-10-09; Rachel: "if I choose to pay from a checking a
 
 Wording on the account page (Rachel, 2026-10-09): what an account has outside its buckets is called **Unallocated balance** there (the stat, the chart's dotted line and the Buckets card), not "Available after buckets" or "Not in a bucket". The pay period screen keeps "Available after buckets".
 
+Sums in money fields (decided 2026-10-09 with Rachel):
+- **Typed in**: every amount field reads amounts added and taken away (`4005+3751`, `100-50`); a lone `-50` is still a negative amount. In a form's money field the sum becomes its answer on leaving the field, so what is saved is what is seen. The amounts typed over in place on the pay period and paycheck lists take a typed sum too.
+- **Calculator button** beside each form money field: opens a calculator under the field (not floating, so it stays put in a form and at 375px), starting from what the field holds. `+ − × ÷` chain one after another (300 ÷ 12, then × 2), and every sum worked out since it opened stays listed. **Use $X** puts the answer in the field; **Cancel** or Esc leaves the field as it was. All of it works from the keyboard.
+- Exact throughout: plus and minus work in whole cents; times and divide take a plain number of up to four decimals and round to the cent, a tie going to the even cent. Dividing by zero is refused kindly.
+- A phone's number pad has no plus key, so on a phone sums are done with the calculator button.
+
 ### Carried forward into later phases
 
 | Feature | Notes |
