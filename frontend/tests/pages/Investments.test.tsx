@@ -210,7 +210,7 @@ describe("investment account screen", () => {
 describe("income screen: employer match", () => {
   it("shows the match and, under the cap, what a little more would earn", async () => {
     withInvestments();
-    renderApp("/income");
+    renderApp("/income/1");
 
     const salary = await screen.findByRole("region", { name: "Brightwater Health" });
     expect(salary).toHaveTextContent("50.00% of what you put in, up to 6.00% of gross pay → Brightwater 401(k)");
@@ -221,7 +221,7 @@ describe("income screen: employer match", () => {
 
   it("says nothing more once the whole match is being earned", async () => {
     withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [AT_THE_CAP] }) });
-    renderApp("/income");
+    renderApp("/income/1");
 
     const salary = await screen.findByRole("region", { name: "Brightwater Health" });
     expect(salary).toHaveTextContent("$108.00");
@@ -368,7 +368,7 @@ describe("income screen: employer match", () => {
       matchFigures: { perPaycheckCents: 21600, mostPossibleCents: 21600, contributeMoreCents: 0 },
     };
     withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [byPercent] }) });
-    renderApp("/income");
+    renderApp("/income/1");
 
     expect(await screen.findByText(/401\(k\) · 6\.00% of gross pay → Brightwater 401\(k\)/)).toBeInTheDocument();
     expect(screen.getByText(/takes your word that what you put in is within the 6\.00% of pay that is matched/)).toBeInTheDocument();

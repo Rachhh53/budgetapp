@@ -73,10 +73,20 @@ interface IncomeSourceFormProps {
   isFirst: boolean;
   accounts: readonly Account[];
   onClose: () => void;
+  /** Called after the source was deleted, so the caller can leave its screen. */
+  onDeleted?: () => void;
 }
 
 /** Add or change an income source: who pays, when, how much, and where it goes. */
-export function IncomeSourceForm({ source, terms, startAsPayChange = false, isFirst, accounts, onClose }: IncomeSourceFormProps) {
+export function IncomeSourceForm({
+  source,
+  terms,
+  startAsPayChange = false,
+  isFirst,
+  accounts,
+  onClose,
+  onDeleted,
+}: IncomeSourceFormProps) {
   const id = useId();
   const save = useSaveIncomeSource(source?.id);
   const schedule = source?.schedule;
@@ -701,7 +711,13 @@ export function IncomeSourceForm({ source, terms, startAsPayChange = false, isFi
 
       {source && (
         <div className="mt-6 border-t border-line pt-4">
-          <DeleteSource source={source} onDeleted={onClose} />
+          <DeleteSource
+            source={source}
+            onDeleted={() => {
+              onClose();
+              onDeleted?.();
+            }}
+          />
         </div>
       )}
     </Modal>

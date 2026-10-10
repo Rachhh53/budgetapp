@@ -128,24 +128,59 @@ describe("income screen", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "+ Add income source" })).toBeEnabled());
   });
 
-  it("shows each source with its schedule and where the money goes", async () => {
+  it("is an overview: each source on one row that opens its own page", async () => {
     withIncome();
     renderApp("/income");
 
-    const salary = await screen.findByRole("region", { name: "Northwind Health" });
-    expect(within(salary).getByText("Primary · defines pay periods")).toBeInTheDocument();
+    const sources = await screen.findByRole("region", { name: "Income sources" });
+    const salary = within(sources).getByRole("link", { name: /Northwind Health/ });
+    expect(salary).toHaveAttribute("href", "/income/1");
+    // The desktop shell gives a link no hand cursor by itself, so the row asks for one.
+    expect(salary).toHaveClass("cursor-pointer");
+    expect(salary).toHaveTextContent("Twice a month · 1st & 15th · into Everyday Checking");
+    expect(salary).toHaveTextContent("Primary · defines pay periods");
+    expect(salary).toHaveTextContent("$2,486.20");
+    expect(salary).toHaveTextContent("take-home a paycheck");
+    // The detail stays on the source's page: no deductions, match or pay history here.
+    expect(sources).not.toHaveTextContent("401(k)");
+    expect(screen.queryByText("Pay history")).not.toBeInTheDocument();
+
+    const bakery = within(sources).getByRole("link", { name: /Riverside Bakery/ });
+    expect(bakery).not.toHaveTextContent("Primary");
+    expect(bakery).toHaveTextContent("Every 2 weeks · Fridays");
+    // The varying amount is marked as an estimate in words, not just by its blue box.
+    expect(bakery).toHaveTextContent("$318.40 (estimate)");
+    // Each row still has its visible Edit.
+    expect(within(sources).getByRole("button", { name: "Edit Riverside Bakery" })).toBeInTheDocument();
+  });
+
+  it("shows one source's schedule and where the money goes on its own page", async () => {
+    withIncome();
+    renderApp("/income/1");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Northwind Health" })).toBeInTheDocument();
+    expect(screen.getByText("Primary · its paydays define your pay periods")).toBeInTheDocument();
+    // The way back to the overview sits above the name (the sidebar has its own Income link too).
+    expect(screen.getAllByRole("link", { name: "Income" }).every((link) => link.getAttribute("href") === "/income")).toBe(true);
+    const salary = screen.getByRole("region", { name: "Northwind Health" });
     expect(salary).toHaveTextContent("Twice a month · 1st & 15th");
     expect(salary).toHaveTextContent("Previous business day");
     expect(salary).toHaveTextContent("Everyday Checking");
     expect(salary).toHaveTextContent("$3,600.00 · $2,486.20");
     expect(salary).toHaveTextContent("401(k) → Retirement");
     expect(salary).toHaveTextContent("$150.00");
+    // Only this source's paychecks are listed beside it.
+    const upcoming = screen.getByRole("region", { name: "Upcoming paychecks" });
+    await within(upcoming).findAllByRole("listitem");
+    expect(upcoming).not.toHaveTextContent("Riverside Bakery");
+  });
 
-    const bakery = screen.getByRole("region", { name: "Riverside Bakery" });
-    expect(within(bakery).queryByText(/Primary/)).not.toBeInTheDocument();
-    expect(bakery).toHaveTextContent("Every 2 weeks · Fridays");
-    // The varying amount is marked as an estimate in words, not just by its blue box.
-    expect(bakery).toHaveTextContent("$318.40 (estimate)");
+  it("says so kindly when the income source is not there", async () => {
+    withIncome();
+    renderApp("/income/999");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't find that income source. It may have been removed.");
+    expect(screen.getByRole("link", { name: "Back to all income" })).toHaveAttribute("href", "/income");
   });
 
   it("lists upcoming paychecks and says why one was moved", async () => {
@@ -255,7 +290,7 @@ describe("income screen", () => {
   it("adds a second job paid every two weeks, as an estimate", async () => {
     const fetchMock = withIncome({ "POST /api/income-sources": () => ({ status: 201, data: BAKERY }) });
     renderApp("/income");
-    await screen.findByRole("region", { name: "Northwind Health" });
+    await screen.findByRole("link", { name: /Northwind Health/ });
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add income source" }));
     const dialog = screen.getByRole("dialog");
@@ -283,7 +318,7 @@ describe("income screen", () => {
   it("explains what is missing before sending anything", async () => {
     const fetchMock = withIncome();
     renderApp("/income");
-    await screen.findByRole("region", { name: "Northwind Health" });
+    await screen.findByRole("link", { name: /Northwind Health/ });
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add income source" }));
     const dialog = screen.getByRole("dialog");

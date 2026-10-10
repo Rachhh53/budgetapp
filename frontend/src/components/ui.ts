@@ -19,3 +19,11 @@ export const HINT = "mt-1 text-sm text-muted";
 
 /** Page title, shared by every screen. */
 export const PAGE_TITLE = "text-2xl font-bold md:text-3xl";
+
+/**
+ * A list row that opens its own page (an account, an asset, an income source). The hand cursor
+ * and the highlight are set outright, since inside the desktop shell a link shows neither by
+ * itself, and they are what says the row can be opened.
+ */
+export const ROW_LINK =
+  "-mx-2 flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg px-2 py-3 hover:bg-bg/60";

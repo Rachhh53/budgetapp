@@ -11,7 +11,7 @@ import { AssetForm } from "../components/assets/AssetForm";
 import { ASSET_KIND_LABELS } from "../components/assets/labels";
 import { Card } from "../components/Card";
 import { EditButton } from "../components/EditButton";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE, ROW_LINK } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
 
@@ -243,13 +243,6 @@ function AccountRow({ account, today, onEdit }: { account: Account; today: Accou
     </li>
   );
 }
-
-/**
- * A row that opens its page. The hand cursor and the highlight are set outright, since inside
- * the desktop shell a link shows neither by itself, and they are what says the row can be opened.
- */
-const ROW_LINK =
-  "-mx-2 flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg px-2 py-3 hover:bg-bg/60";
 
 function AssetGroup({ assets, onEdit, wide }: { assets: Asset[]; onEdit: (id: number) => void; wide: boolean }) {
   const total = assets.reduce((sum, asset) => sum + (asset.valueCents ?? 0), 0);

@@ -67,7 +67,7 @@ function withSalary(source: IncomeSource, overrides: Parameters<typeof fakeBacke
 describe("a raise: pay that changes from a date", () => {
   it("records a pay change from a chosen date, leaving earlier paychecks alone", async () => {
     const fetchMock = withSalary(SALARY);
-    renderApp("/income");
+    renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Record a pay change for Brightwater Health" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
@@ -115,21 +115,31 @@ describe("a raise: pay that changes from a date", () => {
     expect(within(dialog).queryByRole("group", { name: "When the amounts below apply" })).not.toBeInTheDocument();
   });
 
-  it("shows no pay history until there is a change of pay", async () => {
-    withSalary(SALARY);
+  it("keeps pay history off the Income overview", async () => {
+    withSalary(WITH_RAISE);
     renderApp("/income");
 
     await screen.findByRole("button", { name: "Edit Brightwater Health" });
     expect(screen.queryByRole("heading", { name: "Pay history" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Record a pay change/ })).not.toBeInTheDocument();
+  });
+
+  it("before any change of pay, the history has the starting amounts and says how to record a raise", async () => {
+    withSalary(SALARY);
+    renderApp("/income/1");
+
+    const history = await screen.findByRole("region", { name: "Pay history" });
+    expect(within(history).getAllByRole("listitem")).toHaveLength(1);
+    expect(history).toHaveTextContent("From the start · in use now");
+    expect(history).toHaveTextContent("No pay changes yet. When you get a raise, or your deductions or match change, choose Record a pay change");
   });
 
   it("lists the pay history newest first, saying what is in use and what is still to come", async () => {
     withSalary(WITH_RAISE);
-    renderApp("/income");
+    renderApp("/income/1");
 
-    const card = await screen.findByRole("region", { name: "Brightwater Health" });
-    expect(within(card).getByRole("heading", { name: "Pay history" })).toBeInTheDocument();
-    const rows = within(card).getAllByRole("listitem").filter((row) => /^From /.test(row.textContent ?? ""));
+    const history = await screen.findByRole("region", { name: "Pay history" });
+    const rows = within(history).getAllByRole("listitem");
     expect(rows).toHaveLength(2);
     const [raise, start] = rows as [HTMLElement, HTMLElement];
     expect(raise).toHaveTextContent("From Jun 1, 2027 · still to come");
@@ -141,7 +151,7 @@ describe("a raise: pay that changes from a date", () => {
 
   it("opens one entry of the history on its own amounts and saves back to that entry", async () => {
     const fetchMock = withSalary(WITH_RAISE);
-    renderApp("/income");
+    renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit the pay from Jun 1, 2027" }));
     let dialog = screen.getByRole("dialog", { name: "Edit income source" });
@@ -165,7 +175,7 @@ describe("a raise: pay that changes from a date", () => {
     const fetchMock = withSalary(WITH_RAISE, {
       "DELETE /api/income-sources/1/pay-changes/7": () => ({ status: 200, data: SALARY, changed: true }),
     });
-    renderApp("/income");
+    renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Remove the pay change from Jun 1, 2027" }));
 
@@ -176,7 +186,7 @@ describe("a raise: pay that changes from a date", () => {
     withSalary(WITH_RAISE, {
       "DELETE /api/income-sources/1/pay-changes/7": () => ({ status: 500, error: "Something went wrong on our side. Please try again." }),
     });
-    renderApp("/income");
+    renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Remove the pay change from Jun 1, 2027" }));
 
