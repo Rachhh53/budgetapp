@@ -521,24 +521,18 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
-        void aBackdatedTransferFillsTheBucketOnlyFromTheAccountsFirstBalance() throws Exception {
-            // The bucket counts from January, and the transfer has run since January too …
+        void aTransferSinceJanuaryKeepsFillingItsBucketWhenABalanceIsEnteredLater() throws Exception {
+            // The bucket counts from January, and the transfer has run since January too.
             server.put("/api/buckets/" + emergency,
                     "{\"name\":\"Emergency fund\",\"color\":\"#b45309\",\"openedOn\":\"2026-01-01\"}", cookie);
             created("/api/items", transfer(emergency));
 
-            // … but savings only adds up from its first balance, on Oct 1. The bucket takes the
-            // transfer from then as well, so it never holds money the account's balance does not show.
+            // The savings balance was entered on Oct 1. That balance already holds what arrived
+            // before it; every transfer since January is still set aside in the bucket.
             JsonNode october = account(period("2026-10-01"), savings);
             assertThat(october.get("endingCents").asLong()).isEqualTo(520000);
-            assertThat(october.get("bucketsCents").asLong()).isEqualTo(20000);
-
-            // An earlier first balance builds both up together from that day.
-            enterBalance(savings, "2026-07-31", 440000);
-            JsonNode built = account(period("2026-10-01"), savings);
-            // Aug 2 and Sep 2 before the Oct 1 balance, then Oct 2 after it.
-            assertThat(built.get("bucketsCents").asLong()).isEqualTo(60000);
-            assertThat(built.get("endingCents").asLong()).isEqualTo(520000);
+            assertThat(october.get("bucketsCents").asLong()).isEqualTo(10 * 20000L);
+            assertThat(october.get("availableCents").asLong()).isEqualTo(520000 - 200000);
         }
 
         @Test
