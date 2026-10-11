@@ -1,0 +1,377 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import type { Account } from "../../src/api/accounts";
+import type { Attached } from "../../src/api/attachments";
+import type { Tag } from "../../src/api/categories";
+import type { Entry } from "../../src/api/entries";
+import { todayIso } from "../../src/lib/dates";
+import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
+
+const YEAR = todayIso().slice(0, 4);
+
+const CHECKING: Account = {
+  id: 1,
+  name: "Everyday Checking",
+  institution: null,
+  type: "checking",
+  subtypeLabel: null,
+  color: "#0f766e",
+  archived: false,
+  lowBalanceThresholdCents: null,
+  latestBalance: null,
+};
+const VISA: Account = { ...CHECKING, id: 2, name: "Visa", type: "credit_card", color: "#1d4ed8" };
+
+const OUT_OF_POCKET: Tag = { id: 1, name: "Medical – out of pocket", color: "#be185d", itemCount: 0, perYearCents: 0 };
+const HOME_REPAIR: Tag = { id: 2, name: "Home repair", color: "#a16207", itemCount: 0, perYearCents: 0 };
+
+const NOT_REPAID = { status: "none", submittedOn: null, to: null, paidBackCents: 0, reimbursedCents: 0, owedCents: 0 } as const;
+
+/** Sent in, with $60.00 of $85.00 back so far. */
+const PEDS: Entry = {
+  id: 9,
+  kind: "money_out",
+  date: `${YEAR}-09-28`,
+  amountCents: 8500,
+  estimate: false,
+  description: "Copay plus lab work",
+  payee: "Valley Pediatrics",
+  categoryId: null,
+  accountId: 2,
+  toAccountId: null,
+  note: "Zadie's check-up",
+  checkNumber: null,
+  tagIds: [1],
+  bucketSplits: [],
+  reimbursement: { status: "submitted", submittedOn: `${YEAR}-09-29`, to: "HSA", paidBackCents: 6000, reimbursedCents: 6000, owedCents: 2500 },
+  reimbursesEntryId: null,
+  fileCount: 2,
+};
+const ROOF: Entry = {
+  ...PEDS,
+  id: 10,
+  date: `${YEAR}-03-17`,
+  amountCents: 41000,
+  description: "Patched the roof",
+  payee: null,
+  accountId: 1,
+  note: null,
+  tagIds: [2],
+  reimbursement: NOT_REPAID,
+  fileCount: 0,
+};
+const HSA_PAYOUT: Entry = {
+  ...PEDS,
+  id: 11,
+  kind: "money_in",
+  date: `${YEAR}-09-30`,
+  amountCents: 6000,
+  description: "HSA payout",
+  payee: null,
+  accountId: 1,
+  note: null,
+  tagIds: [],
+  reimbursement: null,
+  reimbursesEntryId: 9,
+  fileCount: 0,
+};
+
+const INVOICE = { id: 5, name: "invoice-valley-peds.pdf", mime: "application/pdf", sizeBytes: 186368, pages: 2 } as const;
+const PHOTO = { id: 6, name: "receipt.jpg", mime: "image/jpeg", sizeBytes: 98304, pages: null } as const;
+const TWO_FILES: Attached = { attachments: [INVOICE, PHOTO], maxBytes: 25 * 1024 * 1024, maxFiles: 20 };
+
+function withExpenses(overrides: Parameters<typeof fakeBackend>[0] = {}) {
+  return fakeBackend({
+    "GET /api/accounts": () => ({ status: 200, data: [CHECKING, VISA] }),
+    "GET /api/tags": () => ({ status: 200, data: [OUT_OF_POCKET, HOME_REPAIR] }),
+    "GET /api/entries": () => ({ status: 200, data: [ROOF, PEDS, HSA_PAYOUT] }),
+    "GET /api/expense-years": () => ({ status: 200, data: { years: [Number(YEAR), 2024] } }),
+    "GET /api/payees": () => ({ status: 200, data: { payees: ["Valley Pediatrics"], reimbursers: ["HSA", "Work"] } }),
+    "GET /api/entries/9": () => ({ status: 200, data: { entry: PEDS, paybacks: [HSA_PAYOUT], reimburses: null } }),
+    "GET /api/entries/9/attachments": () => ({ status: 200, data: TWO_FILES }),
+    ...overrides,
+  });
+}
+
+describe("Expenses & receipts", () => {
+  it("says what the screen is for before anything is entered", async () => {
+    fakeBackend({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }),
+      "GET /api/entries": () => ({ status: 200, data: [] }),
+      "GET /api/expense-years": () => ({ status: 200, data: { years: [] } }),
+    });
+    renderApp("/expenses");
+
+    expect(await screen.findByText(`No one-off spending in ${YEAR} yet.`)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ Add expense" })).toBeEnabled();
+  });
+
+  it("asks for an account first when there is none to pay from", async () => {
+    fakeBackend({ "GET /api/entries": () => ({ status: 200, data: [] }), "GET /api/expense-years": () => ({ status: 200, data: { years: [] } }) });
+    renderApp("/expenses");
+
+    expect(await screen.findByText("Add an account first.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ Add expense" })).toBeDisabled();
+  });
+
+  it("lists the year's one-off spending, newest first, with what is still owed", async () => {
+    const fetchMock = withExpenses();
+    renderApp("/expenses");
+
+    const list = await screen.findByRole("region", { name: `Expenses in ${YEAR}` });
+    const rows = await within(list).findAllByRole("link");
+    // Money coming in is not an expense: only the two that went out are listed.
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Valley Pediatrics");
+    expect(rows[0]).toHaveTextContent("$85.00");
+    expect(rows[0]).toHaveTextContent("Submitted");
+    expect(rows[0]).toHaveTextContent("2 files");
+    expect(rows[0]).toHaveTextContent("Visa");
+    expect(rows[0]).toHaveAttribute("href", "/expenses/9");
+    expect(rows[1]).toHaveTextContent("Patched the roof");
+    expect(rows[1]).toHaveTextContent("None");
+
+    expect(screen.getByText("2 expenses")).toBeInTheDocument();
+    expect(screen.getByText("$495.00")).toBeInTheDocument();
+    expect(screen.getByText("Still owed to you").parentElement).toHaveTextContent("$25.00");
+    expect(screen.getByText("Reimbursed", { selector: "p" }).parentElement).toHaveTextContent("$60.00");
+    // The whole year was asked for.
+    expect(calls(fetchMock)).toContain(`GET /api/entries?from=${YEAR}-01-01&to=${YEAR}-12-31`);
+  });
+
+  it("narrows by tag and by where the reimbursement stands", async () => {
+    withExpenses();
+    renderApp("/expenses");
+
+    const tagFilter = await screen.findByRole("group", { name: "Show expenses with tag" });
+    await userEvent.click(within(tagFilter).getByRole("button", { name: "Home repair" }));
+
+    const list = screen.getByRole("region", { name: `Expenses in ${YEAR}` });
+    expect(within(list).getAllByRole("link")).toHaveLength(1);
+    expect(within(list).getByRole("link")).toHaveTextContent("Patched the roof");
+    expect(screen.getByText("1 expense")).toBeInTheDocument();
+    expect(within(tagFilter).getByRole("button", { name: "Home repair" })).toHaveAttribute("aria-pressed", "true");
+
+    // Nothing tagged Home repair was sent in to anyone.
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Reimbursement" }), "submitted");
+    expect(within(list).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing in \d+ matches what is chosen above/)).toBeInTheDocument();
+
+    await userEvent.click(within(tagFilter).getByRole("button", { name: "All" }));
+    expect(within(list).getByRole("link")).toHaveTextContent("Valley Pediatrics");
+  });
+
+  it("shows another year when one is chosen", async () => {
+    const fetchMock = withExpenses();
+    renderApp("/expenses");
+
+    await screen.findByRole("option", { name: "2024" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Year" }), "2024");
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("GET /api/entries?from=2024-01-01&to=2024-12-31"));
+    expect(screen.getByRole("heading", { name: "Expenses in 2024" })).toBeInTheDocument();
+  });
+
+  it("says kindly when the expenses cannot be loaded", async () => {
+    withExpenses({ "GET /api/entries": () => ({ status: 500, error: "Something went wrong on our side. Your data is safe — please try again." }) });
+    renderApp("/expenses");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your data is safe");
+  });
+
+  it("adds an expense that will be paid back", async () => {
+    const fetchMock = withExpenses({ "POST /api/entries": () => ({ status: 201, data: { ...PEDS, id: 12 }, changed: true }) });
+    renderApp("/expenses");
+
+    await userEvent.click(await screen.findByRole("button", { name: "+ Add expense" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(await within(dialog).findByRole("textbox", { name: "Amount" }), "95.20");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Prescription");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("combobox", { name: "Paid from" }));
+    await userEvent.click(await within(dialog).findByRole("option", { name: "Everyday Checking" }));
+    // Who it was paid to, its tags, its receipt and whether it comes back wait behind "More options".
+    await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
+    expect(within(dialog).getByRole("combobox", { name: "Paid to (optional)" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByLabelText("Receipt or document (optional)")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "I'll be paid back for this" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({
+      kind: "money_out",
+      amountCents: 9520,
+      accountId: 1,
+      reimbursementStatus: "to_submit",
+      reimbursesEntryId: null,
+    });
+  });
+
+  it("takes a receipt along with a new expense, and attaches it once the expense is in", async () => {
+    const fetchMock = withExpenses({
+      "POST /api/entries": () => ({ status: 201, data: { ...PEDS, id: 12 }, changed: true }),
+      "POST /api/entries/12/attachments": () => ({ status: 201, data: TWO_FILES, changed: true }),
+    });
+    renderApp("/expenses");
+
+    await userEvent.click(await screen.findByRole("button", { name: "+ Add expense" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(await within(dialog).findByRole("textbox", { name: "Amount" }), "95.20");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Prescription");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("combobox", { name: "Paid from" }));
+    await userEvent.click(await within(dialog).findByRole("option", { name: "Everyday Checking" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.upload(
+      within(dialog).getByLabelText("Receipt or document (optional)"),
+      new File(["%PDF-1.7"], "pharmacy.pdf", { type: "application/pdf" }),
+    );
+    // Said in words, because the chooser itself forgets when the screen is left.
+    expect(within(dialog).getByText(/Chosen: pharmacy.pdf/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("POST /api/entries/12/attachments"));
+    expect(calls(fetchMock).indexOf("POST /api/entries")).toBeLessThan(calls(fetchMock).indexOf("POST /api/entries/12/attachments"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+describe("One expense", () => {
+  it("opens with the amount, where its reimbursement stands, its details and its receipts", async () => {
+    withExpenses();
+    renderApp("/expenses/9");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Valley Pediatrics" })).toBeInTheDocument();
+    expect(screen.getByText(/paid from Visa, so it adds to what is owed there/)).toBeInTheDocument();
+    expect(screen.getByText("Paid back so far").parentElement).toHaveTextContent("$60.00");
+    expect(screen.getByText("Still owed to you").parentElement).toHaveTextContent("$25.00");
+
+    const reimbursement = screen.getByRole("region", { name: "Reimbursement" });
+    expect(within(reimbursement).getByRole("radio", { name: "Submitted" })).toBeChecked();
+    expect(within(reimbursement).getByText(/Submitted to HSA on Sep 29, \d+ · \$25.00 still to come\./)).toBeInTheDocument();
+    expect(within(reimbursement).getByRole("button", { name: "Edit HSA payout" })).toBeInTheDocument();
+
+    const details = screen.getByRole("region", { name: "Details" });
+    expect(within(details).getByText("Medical – out of pocket")).toBeInTheDocument();
+    expect(within(details).getByText("Zadie's check-up")).toBeInTheDocument();
+
+    const receipts = screen.getByRole("region", { name: "Receipts & documents" });
+    expect(await within(receipts).findByRole("button", { name: "Show invoice-valley-peds.pdf" })).toBeInTheDocument();
+    expect(within(receipts).getByText("182 KB")).toBeInTheDocument();
+    // The first file is shown, a page at a time.
+    expect(within(receipts).getByRole("img", { name: "invoice-valley-peds.pdf, page 1 of 2" })).toHaveAttribute(
+      "src",
+      "/api/attachments/5/preview?page=1",
+    );
+    expect(within(receipts).getByRole("link", { name: "Save a copy of receipt.jpg" })).toHaveAttribute("href", "/api/attachments/6/file");
+  });
+
+  it("pages through a PDF and switches to another file", async () => {
+    withExpenses();
+    renderApp("/expenses/9");
+
+    const receipts = await screen.findByRole("region", { name: "Receipts & documents" });
+    await userEvent.click(await within(receipts).findByRole("button", { name: "Next page" }));
+    expect(within(receipts).getByRole("img", { name: "invoice-valley-peds.pdf, page 2 of 2" })).toHaveAttribute(
+      "src",
+      "/api/attachments/5/preview?page=2",
+    );
+    expect(within(receipts).getByRole("button", { name: "Next page" })).toBeDisabled();
+
+    await userEvent.click(within(receipts).getByRole("button", { name: "Show receipt.jpg" }));
+    expect(within(receipts).getByRole("img", { name: "receipt.jpg" })).toHaveAttribute("src", "/api/attachments/6/preview");
+  });
+
+  it("saves where the reimbursement stands the moment it is changed", async () => {
+    const fetchMock = withExpenses({ "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: PEDS, changed: true }) });
+    renderApp("/expenses/9");
+
+    await userEvent.click(await screen.findByRole("radio", { name: "Reimbursed" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(1));
+    // The day it was sent in and who to are kept.
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[0]).toEqual({
+      status: "reimbursed",
+      submittedOn: `${YEAR}-09-29`,
+      to: "HSA",
+    });
+  });
+
+  it("marking something sent in with no day given means today", async () => {
+    const waiting: Entry = { ...PEDS, reimbursement: { ...NOT_REPAID, status: "to_submit", owedCents: 8500 } };
+    const fetchMock = withExpenses({
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: waiting, paybacks: [], reimburses: null } }),
+      "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: waiting, changed: true }),
+    });
+    renderApp("/expenses/9");
+
+    expect(await screen.findByText("Still to send in · $85.00 to ask for.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Submitted" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[0]).toEqual({ status: "submitted", submittedOn: todayIso(), to: null });
+  });
+
+  it("adds the money that came back, already pointing at this expense for what is still owed", async () => {
+    const fetchMock = withExpenses({ "POST /api/entries": () => ({ status: 201, data: HSA_PAYOUT, changed: true }) });
+    renderApp("/expenses/9");
+
+    await userEvent.click(await screen.findByRole("button", { name: "+ Add money that came back" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("textbox", { name: "Amount" })).toHaveValue("25.00");
+    expect(within(dialog).getByRole("textbox", { name: "What is it" })).toHaveValue("Reimbursement: Valley Pediatrics");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("combobox", { name: "Into" }));
+    await userEvent.click(await within(dialog).findByRole("option", { name: "Everyday Checking" }));
+    // The expense is already chosen; it can be seen, and changed, under "More options".
+    await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    const paysBack = within(dialog).getByRole<HTMLInputElement>("combobox", { name: "Pays back an expense (optional)" });
+    expect(paysBack.value).toContain("Valley Pediatrics");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({ kind: "money_in", amountCents: 2500, reimbursesEntryId: 9 });
+  });
+
+  it("attaches a file, and refuses one it cannot keep before sending anything", async () => {
+    const fetchMock = withExpenses({ "POST /api/entries/9/attachments": () => ({ status: 201, data: TWO_FILES, changed: true }) });
+    renderApp("/expenses/9");
+
+    const chooser = await screen.findByLabelText("Drop files here or browse");
+    // applyAccept off: the point is that a file the chooser let through is still checked.
+    await userEvent.upload(chooser, new File(["notes"], "notes.txt", { type: "text/plain" }), { applyAccept: false });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Budget can keep PDFs and JPEG or PNG pictures");
+    expect(calls(fetchMock)).not.toContain("POST /api/entries/9/attachments");
+
+    await userEvent.upload(chooser, new File(["%PDF-1.7"], "explanation-of-benefits.pdf", { type: "application/pdf" }));
+    await waitFor(() => expect(calls(fetchMock)).toContain("POST /api/entries/9/attachments"));
+    const sent = fetchMock.mock.calls.find(([path, init]) => path === "/api/entries/9/attachments" && init?.method === "POST")?.[1]?.body;
+    expect(sent).toBeInstanceOf(FormData);
+    expect(((sent as FormData).get("file") as File).name).toBe("explanation-of-benefits.pdf");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("removes a file without asking, since Undo brings it back", async () => {
+    const fetchMock = withExpenses({
+      "DELETE /api/attachments/6": () => ({ status: 200, data: { ...TWO_FILES, attachments: [INVOICE] }, changed: true }),
+    });
+    renderApp("/expenses/9");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Remove receipt.jpg" }));
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/attachments/6"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("says so when the expense is not there", async () => {
+    withExpenses();
+    renderApp("/expenses/404");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't find that expense. It may have been removed.");
+    expect(screen.getByRole("link", { name: "Back to all expenses" })).toHaveAttribute("href", "/expenses");
+  });
+});

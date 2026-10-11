@@ -88,6 +88,8 @@ export function useFormParts<P extends string>({
 
   return {
     ref: form,
+    /** Which screen is in view, counted from 0, for whatever frames the form and makes room for it. */
+    step: current,
     /** Whether this part is on the screen in view. */
     shows: (part: P) => groups[current]?.parts.includes(part) ?? false,
     problem,

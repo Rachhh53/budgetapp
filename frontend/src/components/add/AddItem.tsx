@@ -25,8 +25,11 @@ import { EntryFields } from "./EntryFields";
 export type AddKind = EntryKind | "recurring";
 
 interface AddItemContext {
-  /** Opens the form with `kind` chosen and, when given, the account it is for (a charge on one card, say). */
-  add: (kind: AddKind, accountId?: number) => void;
+  /**
+   * Opens the form with `kind` chosen and, when given, the account it is for (a charge on one card, say)
+   * or the expense that money coming in pays back.
+   */
+  add: (kind: AddKind, accountId?: number, paysBack?: Entry) => void;
   /** Opens the form on a one-off that already exists, to change or delete it. */
   editEntry: (entry: Entry) => void;
   menuOpen: boolean;
@@ -61,14 +64,14 @@ const EDITABLE = "input, textarea, select, [contenteditable='true']";
  * screen: Ctrl+N opens the menu, Ctrl+E goes straight to money out and Ctrl+I to money in.
  */
 export function AddItemProvider({ children }: { children: ReactNode }) {
-  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number } | null>(null);
+  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number; paysBack?: Entry } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hasMenu, setHasMenu] = useState(false);
   const [period, setPeriod] = useState<PeriodDetail>();
 
-  const add = useCallback((kind: AddKind, accountId?: number) => {
+  const add = useCallback((kind: AddKind, accountId?: number, paysBack?: Entry) => {
     setMenuOpen(false);
-    setForm({ kind, accountId });
+    setForm({ kind, accountId, paysBack });
   }, []);
   const editEntry = useCallback((entry: Entry) => setForm({ kind: entry.kind, entry }), []);
 
@@ -109,6 +112,7 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
           initialKind={form.kind}
           entry={form.entry}
           accountId={form.accountId}
+          paysBack={form.paysBack}
           period={period}
           onClose={() => setForm(null)}
         />
@@ -125,11 +129,14 @@ function AddItemForm({
   initialKind,
   entry,
   accountId,
+  paysBack,
   period,
   onClose,
 }: {
   initialKind: AddKind;
   entry?: Entry;
+  /** The expense a new money-in entry pays back, when the form was opened from that expense. */
+  paysBack?: Entry;
   /** The account a new one-off starts on, when the form was opened for one. */
   accountId?: number;
   period?: PeriodDetail;
@@ -139,9 +146,9 @@ function AddItemForm({
   const categories = useCategories();
   const tags = useTags();
   const [kind, setKind] = useState<AddKind>(initialKind);
-  // Past its first screen, a recurring item has been chosen: the switch steps aside so each screen fits the window.
-  const [recurringStep, setRecurringStep] = useState(0);
-  const choosing = kind !== "recurring" || recurringStep === 0;
+  // Past its first screen, what is being added has been chosen: the switch steps aside so each screen fits the window.
+  const [step, setStep] = useState(0);
+  const choosing = step === 0;
 
   const title = entry
     ? `Edit ${entry.description}`
@@ -170,17 +177,19 @@ function AddItemForm({
       )}
       {accounts.data && categories.data && tags.data && accounts.data.length > 0 &&
         (kind === "recurring" ? (
-          <ItemFormBody accounts={accounts.data} categories={categories.data} tags={tags.data} onClose={onClose} onStep={setRecurringStep} />
+          <ItemFormBody accounts={accounts.data} categories={categories.data} tags={tags.data} onClose={onClose} onStep={setStep} />
         ) : (
           <EntryFields
             kind={kind}
             entry={entry}
             accountId={accountId}
+            paysBack={paysBack}
             period={period}
             accounts={accounts.data}
             categories={categories.data}
             tags={tags.data}
             onClose={onClose}
+            onStep={setStep}
           />
         ))}
     </Modal>

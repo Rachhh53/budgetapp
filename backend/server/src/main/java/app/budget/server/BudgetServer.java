@@ -30,6 +30,9 @@ import app.budget.server.data.DataRoutes;
 import app.budget.server.db.Database;
 import app.budget.server.entries.EntriesRepository;
 import app.budget.server.entries.EntriesRoutes;
+import app.budget.server.files.AttachmentsRepository;
+import app.budget.server.files.AttachmentsRoutes;
+import app.budget.server.files.FileStore;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRoutes;
 import app.budget.server.income.PayCalendar;
@@ -42,6 +45,9 @@ import app.budget.server.loans.LoansRepository;
 import app.budget.server.loans.LoansRoutes;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import app.budget.server.reports.ReportRunner;
+import app.budget.server.reports.ReportsRepository;
+import app.budget.server.reports.ReportsRoutes;
 import app.budget.server.schedule.HolidaysRepository;
 import app.budget.server.schedule.HolidaysRoutes;
 import app.budget.server.settings.SettingKey;
@@ -52,6 +58,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.javalin.Javalin;
+import io.javalin.config.SizeUnit;
 import io.javalin.http.Context;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
@@ -93,6 +100,9 @@ public final class BudgetServer {
             "form-action 'self'",
             "frame-ancestors 'none'");
 
+    /** How many megabytes of an upload are held in memory before it is written to a temporary file. */
+    private static final int UPLOAD_IN_MEMORY_MB = 1;
+
     private static final String GENERIC_ERROR =
             "Something went wrong on our side. Your data is safe — please try again.";
 
@@ -128,10 +138,23 @@ public final class BudgetServer {
         Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest, cards, loans);
         AssetsRepository assets = new AssetsRepository(database.jdbi(), clock);
         NetWorthCalculator netWorth = new NetWorthCalculator(assets, accounts, ledger);
+        FileStore fileStore = new FileStore(config.dataDir(), config.maxUploadMb() * 1024L * 1024L);
+        AttachmentsRepository attachments = new AttachmentsRepository(database.jdbi(), clock);
+        // Nothing is being recorded yet, so this is the moment to delete files nothing can want any more:
+        // ones taken off whatever they were attached to, once Undo can no longer put them back.
+        fileStore.sweep(attachments.forgetUnused());
+        ReportsRepository reports = new ReportsRepository(database.jdbi(), clock, jsonMapper());
+        ReportRunner reportRunner = new ReportRunner(entries, items, itemCalendar, payCalendar, accounts, categories, tags, attachments);
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
             javalin.jsonMapper(new JavalinJackson(jsonMapper(), false));
+            // Uploads: a little over what one request may carry, so a file that is too large is
+            // refused by AttachmentsRoutes in words, not by the server with a bare error.
+            javalin.jetty.multipartConfig.cacheDirectory(config.dataDir().resolve("upload-cache").toString());
+            javalin.jetty.multipartConfig.maxInMemoryFileSize(UPLOAD_IN_MEMORY_MB, SizeUnit.MB);
+            javalin.jetty.multipartConfig.maxFileSize(config.maxUploadMb() + 1L, SizeUnit.MB);
+            javalin.jetty.multipartConfig.maxTotalRequestSize((config.maxUploadMb() + 1L) * AttachmentsRoutes.MAX_PER_OWNER, SizeUnit.MB);
             if (indexHtml != null) {
                 javalin.staticFiles.add(files -> {
                     files.hostedPath = "/";
@@ -161,6 +184,9 @@ public final class BudgetServer {
             new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
             new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
+            new AttachmentsRoutes(attachments, fileStore, entries, items, itemCalendar, cards, accounts, clock).register(routes);
+            new ReportsRoutes(reports, reportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir())
+                    .register(routes);
             new DataRoutes(database, sessions).register(routes);
             new BackupRoutes(backups, folders, settings, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);

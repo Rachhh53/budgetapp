@@ -191,11 +191,17 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
   - Used for one-off expenses (vet emergency, gift, donation), one-off income (bonus, refund, gift, side cash), and one-off transfers.
   - **entry_bucket_splits** — `entry_id, bucket_id, amount` (e.g. put $500 of a bonus into a bucket).
   - **Reimbursement** — `reimbursement_status (none | to_submit | submitted | reimbursed)` on money-out entries; a money-in entry can link to the expense it pays back.
+  - As built (Phase 7, migration `V21`): a money-out entry also has `reimbursement_submitted_on` and `reimbursement_to` (who pays it back). Several money-in entries can name the same expense in `reimburses_entry_id`, so it can be paid back in parts; what is still owed is the expense less those, never below zero. A payback that covers the expense marks it reimbursed, and one that arrives while it is still "to submit" marks it submitted. Deleting an expense, or changing it to something that is not money out, lets its paybacks go (they stay as ordinary money in).
 - **card_charges** are entries whose account is a credit card.
 
 ### 4.8 Attachments
 - **files** — `id, hash, original_name, mime, size, created_at`.
 - **attachments** — `file_id, owner_type (entry | occurrence | pay_stub | statement), owner_id`.
+- As built (Phase 7, migration `V21`):
+  - `files` is `id, hash (unique), mime, size, pages (PDFs only), created_at`: one row per distinct file, stored once under `files/<first two of the hash>/<SHA-256>` however many things it is attached to.
+  - `attachments` is `id, file_id, name, entry_id | (item_id, scheduled_date) | statement_id, created_at`, with a check that exactly one owner is set. The name is on the attachment, not the file, because the same file can be added twice under different names. Real columns in place of `owner_type, owner_id` let the database remove an attachment with its owner. A pay stub owner is added with pay stubs (Phase 8).
+  - Accepted: PDF, JPEG and PNG, told apart by their content and never by the name; up to 25 MB each (`BUDGET_MAX_UPLOAD_MB`) and 20 per thing. A file is never changed. WebP was dropped (the PDF export cannot embed it); iPhone HEIC photos wait for phone access (Phase 12).
+  - Removing an attachment only unlinks it, so Undo can put it back. The file itself is deleted at the next start once no attachment and no change that could still be undone names it.
 
 ### 4.9 Credit cards and loans
 - **card_settings** — `account_id, statement_close_day, due_day, payment_mode (full_balance | statement_balance | minimum | fixed), fixed_payment_amount, autopay, pay_from_account_id`.
@@ -216,6 +222,7 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
 
 ### 4.11 Reports
 - **saved_reports** — `id, name, definition_json` (date range, filters by tag/category/account/payee/kind, group by, chart type).
+- As built (Phase 7, migration `V21`): the name is unique whatever its capitals; up to 100 reports. The definition holds `range` (this year, last year, last 12 months, last 90 days, or custom with `from` and `to` up to ten years apart), `include` (one-off spending, bills, budgets), `groupBy` (month, year, category, tag, payee, account), `show` (chart and table, or table), and the filters `tagIds`, `categoryIds`, `accountIds`, `payees` and `reimbursement`. Within one filter any choice matches; across filters all must. A relative range is worked out on the day the report is opened, so "This year" saved in 2026 shows 2027 next year.
 
 ---
 
@@ -348,6 +355,7 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 - **As built (Phase 6):** the PIN is optional (decided 2026-10-11). Without one, `POST /api/session` still opens a session for this PC only, and nothing locks. `GET /api/session` is open and says whether the app is unlocked, whether a PIN is set, how long to wait after wrong tries, and whether to offer a PIN. Setting or changing it is `PUT /api/pin`, removing it `DELETE /api/pin`, both asking for the current PIN; `POST /api/pin/recovery` (open) takes the recovery code and a new PIN, and answers with a new code; `POST /api/pin/recovery-code` makes a new code. Wrong PINs and wrong codes share one count: two free tries, then waits of 30 s, 1 min, 5 min, 15 min and 1 hour, kept in the database so a restart does not clear them. The idle limit is the `auto_lock_minutes` setting, read on every request, and the screen locks itself at the same limit.
 - **Backups:** daily copy (SQLite backup API) plus the `files/` folder to a user-chosen folder; keep the last N. "Back up now" and "Restore…". As built (Phase 6): one zip per backup, taken once a day while the app is open (checked half a minute after start and then hourly); the folder is chosen in an in-app browser of this PC's drives and folders (`GET`, `POST /api/folders`); restoring, choosing the folder and browsing folders work from this PC only. A restore keeps the current PIN and backup folder and first saves what is there now. The zips are not encrypted.
 - **Erase all data** (Settings; built in Phase 0): permanently removes everything and leaves a fresh app, as if newly installed. The database files are deleted outright and rebuilt from the migrations (so nothing lingers in free pages or the write-ahead log), and the `files/` and in-app `backups/` folders are deleted. Logs stay; backups the user saved to another folder are not touched. It asks for confirmation with "Keep my data" as the focused default, cannot be undone (Undo does not cover it), ends every session, and from Phase 6 also removes the PIN. `DELETE /api/data` requires a session, an explicit confirmation phrase in the body, and a request from this PC — it is never available from the phone.
+- **Attached files (Phase 7):** served only by attachment id behind the session, never by path or name; downloads carry `Content-Disposition: attachment` and `nosniff`, and a PDF is previewed as a picture the backend draws, so nothing inside an uploaded file is ever run by the window. File names and payees are not logged. Exports guard spreadsheet cells against formulas.
 - Docs recommend Windows BitLocker for at-rest protection.
 
 ### Dependencies and the build pipeline
@@ -372,8 +380,8 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 | Credit cards | `cards.png` | Card list; promo warning; balance, payment setting, statement/due days, APR; promos with progress; statements; payoff helper; "if it's not paid off" estimate. **As built (2026-10-10): not a screen of its own.** Cards are the Credit cards group on Accounts, and each card's account page is its card page. |
 | Income | `income.png` | Sources (primary defines periods), schedule, weekend rule, gross/net, money to accounts, taxes & benefits from stubs, match (fixed or formula) with a hint when under the cap; second job with estimated pay; pay stub list and drop zone; upcoming paychecks with weekend shifts. |
 | Pay stub review | `pay-stub.png` | Preview of the PDF; every line read, this stub and YTD, grouped (earnings, before tax, taxes, paid to you/from employer), what each tracks as; check that gross − deductions = net; hard-to-read lines flagged; layout remembered per employer. |
-| Expenses & receipts | `expenses.png` | One-off spending list filtered by tag; detail panel with tags, reimbursement status, note, attachments with preview and drop zone. |
-| Reports | `reports.png` | Saved reports; builder (dates, include, filters, group by, show); totals; chart; table; export CSV or PDF with receipts. |
+| Expenses & receipts | `expenses.png` | One-off spending list filtered by tag; detail panel with tags, reimbursement status, note, attachments with preview and drop zone. **As built (Phase 7, decided 2026-10-11):** a list page and a page per expense, like Accounts and Income, in place of the side panel. The list has the year's figures on top (spent, still owed to you, reimbursed), a year and a tag filter, and rows that open on a click (cards below `md`). The expense's page has a frozen header, its figures (amount, paid back so far, still owed), and cards for Receipts & documents, Reimbursement (or Pays back, for money in) and Details. |
+| Reports | `reports.png` | Saved reports; builder (dates, include, filters, group by, show); totals; chart; table; export CSV or PDF with receipts. **As built (Phase 7):** as the mockup; the report redraws as the builder changes, and every line opens its expense or recurring item. |
 | Categories & tags | `categories.png` | Categories (with sub-categories, colors, counts, totals) and tags. Color dots open the color picker. |
 | Annual costs | `annual.png` | Calendar years / rolling 12 months switch; totals and change; per-item table; selected item's monthly history and whether its budget is too low; "Plan next year →". |
 | Plan next year | `plan-year.png` | Plans list (active, draft), **Delete draft & start over**; six steps (Income & benefits, Bills, Annual & save-ups, Spending budgets, Saving & investing, Review); suggestion basis switch; table of last 12 months, trend, suggestion, your amount ("YOURS" when typed), per-month/per-paycheck. First-time setup reuses this wizard. |
@@ -666,7 +674,7 @@ Not in this phase: the control for how early promo warnings start (Phase 6, Sett
 
 ### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
 
-**Status: complete; Rachel confirmed it on 2026-10-11. Waiting to be merged.** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 500 server and 375 frontend tests passing; the installer was last built from `6c26e6c`.
+**Status: complete; Rachel confirmed it on 2026-10-11. Merged to main (PR #11).** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 500 server and 375 frontend tests passing; the installer was last built from `6c26e6c`.
 
 Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 12); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
 
@@ -693,6 +701,37 @@ Not shown in Settings yet, because nothing would act on them: **budget year star
 **Dates for the account chart** (Rachel, 2026-10-11: "options for the graph. like custom dates to view, 30, 60 90, 1 year"). "Where it's heading" on an account's page has a **Dates to show** list: Everything (as before, and what it opens on), the next 30, 60 or 90 days, the next year, or Custom dates with a From and a To. The dates chosen are asked of the backend (`GET /api/accounts/{id}/projection?from=&to=`, up to ten years, between 2000 and 2100), so Custom dates are not held to what the chart opened on: they can start before the first balance entered, where the dashed line (named "Worked out") is what the app works out the account held from the balances entered and everything that moved, and they can run past the look-ahead setting. An account no balance was ever entered for is built up from nothing, and has the chart too once money moves through it. Dates half typed, the wrong way round or too far apart are said kindly and nothing is drawn. The sentence under the chart speaks for the pay periods that end inside the dates. A loan's chart is unchanged: it shows the loan's whole life.
 
 **An asset can lose value each year** (Rachel, 2026-10-11; §4.2, §5.7). The asset form's last screen, now "Loan and annual change", asks what the value does between the values entered — stays the same, goes up, or goes down — and by what percent a year. A car set to lose 15% drops a little each month until a real value is entered; its page says "losing your assumed 15.00% a year", and net worth follows it.
+
+### Phase 7 — Expenses, receipts, reimbursements, reports (`milestone/7-expenses-reports`)
+
+**Status: built; waiting for Rachel to confirm.** Branched from `milestone/6-lock-settings-backups` while that was being merged, and moved onto `main` once it had (PR #11).
+
+Decided with Rachel before building (2026-10-11): one branch; Expenses is a list page and a page per expense, like Accounts and Income, not the mockup's side panel; a reimbursement tracks its status, the day it was submitted, who pays it back, and the money in linked to it, with part payments; receipts attach to a one-off entry, to one time a recurring bill was paid, and to a card statement.
+
+Migration on this branch: `V21` (`files`, `attachments`, `saved_reports`, two reimbursement columns on `entries`). New dependency: Apache PDFBox 3.0.8 (reads PDFs, draws previews, writes the PDF export), older than 14 days and clean in OSV. New environment variables: `BUDGET_MAX_UPLOAD_MB`, `BUDGET_FONTS_DIR`.
+
+| Feature | Status | Notes |
+|---|---|---|
+| Persist attachments on disk with previews | Done | PDF, JPEG and PNG, up to 25 MB each and 20 per thing, recognised by content. Kept unchanged under `files/` by SHA-256, so the same file is stored once; in every backup and removed by Erase all data. A picture previews as it is; a PDF one page at a time, drawn by the backend. Drop files or browse; several at once is all or nothing. **Save a copy** downloads the original. Removing unlinks at once and Undo restores; the file is deleted at the next start once nothing can bring it back. Attached on an expense's page, in the Add form (one file, sent after the entry is saved), in a pay period row's form for that one time, and from **Files** beside each statement entered on a card. |
+| Display the expenses screen with reimbursement tracking and fully wired tags | Done | **Expenses** lists one-off money out by year, filtered by tag, with what was spent, what is still owed and what has come back. Each opens its own page. Reimbursement: not expected, to submit, submitted (with the day and who to) or reimbursed. Money in can be marked **Pays back an expense** in the Add form or from the expense's page ("Add money that came back"); part payments add up, the page shows what is still owed, and the status moves on by itself. "I'll be paid back for this" in the Add form starts an expense at "to submit". Payees and who pays back are pickers of the names used before. |
+| Add the report builder with saved reports and CSV/PDF export | Done | **Reports**: saved reports on the left (above, on a phone), the builder beside them: dates, what to include, filters added from pickers and shown as removable chips, group by, show. Totals (with reimbursed, waiting and not submitted when anything in it is paid back, and how much is estimated or still to come), a bar chart, the table per group, and every line. **Save…** asks for a name; a saved report says when it has been changed and offers **Save changes**. Export CSV (opens in Excel; cells cannot run formulas) or PDF, with or without receipts: the totals and table, then every receipt's pages, each captioned with its expense. |
+
+How it works, where the spec left it open:
+
+- A report covers whatever falls in its dates. Days still to come and amounts marked as estimates are counted, shaded light blue, and totalled separately as "Estimated or still to come".
+- Bills and budgets in a report come from recurring items that are not archived, the same as the pay period screens. Reimbursement applies to one-off spending only.
+- There is no "all time" range: Custom dates reach ten years.
+- A saved report whose tag, category or account has since been deleted opens without that filter and says it has changed.
+- A PDF holds at most 300 receipts; a report with more says so and asks for narrower dates. A receipt that cannot be read is listed on a last page, "Files that could not be added", and the rest still export.
+- The PDF is set in Segoe UI or Arial from the PC's own fonts folder (nothing is bundled or downloaded), falling back to the built-in Helvetica.
+- The desktop window no longer handles dropped files itself, so a drop reaches the page; and it now allows the backend's own `blob:` addresses, which is how an export is handed over to be saved.
+
+**Pop-up forms measured** at 1366×768 and 375×812 in headless Edge, with room left for an error message; none scrolls:
+
+- **The one-off form** (money out, money in, transfer) was the last long form left, and the new fields made it longer. It now goes a screen at a time like the others. Adding: the amount and what it is, then when and which account, and **Add** is there; **More options** leads to who it was paid to, category, tags and note, then the receipt and paying back, then setting aside in buckets (two buckets at a time). The switch between money out, money in, transfer and recurring is on the first screen only. Changing: one group at a time under "What to change", Delete being the last.
+- **Receipts in a dialog** (a pay period row, a card statement) show one file at a time with "File 2 of 5", so twenty files take no more room than one. An expense's own page lists them all.
+
+Not in this phase: a paperclip on pay period rows that have a receipt (the count is shown in the row's form); WebP and HEIC pictures (§4.8); receipts on pay stubs (Phase 8); adding a receipt from the phone's camera (Phase 12).
 
 ### Carried forward into later phases
 

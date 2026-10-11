@@ -2,6 +2,7 @@ import { Clock, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { type Account, type AccountDetail, useAccountPerformance, useAccountProjection, useAccounts } from "../api/accounts";
+import { useAttachmentCounts } from "../api/attachments";
 import { useCategories, useTags } from "../api/categories";
 import {
   type CardStatement,
@@ -30,9 +31,10 @@ import {
   STATEMENT_STATUS_LABELS,
 } from "../components/cards/labels";
 import { EditButton, EditPageButton } from "../components/EditButton";
+import { FilesButton, ReceiptsDialog } from "../components/files/ReceiptsDialog";
 import { ItemForm } from "../components/items/ItemForm";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, PAGE_TITLE } from "../components/ui";
-import { formatDate, formatDay } from "../lib/dates";
+import { formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
 
@@ -519,6 +521,10 @@ function IfNotPaidCard({ promos }: { promos: readonly Promo[] }) {
 /** The next statement as projected, then the ones entered as they arrived. */
 function StatementsCard({ account, statements, onAdd }: { account: Account; statements: readonly CardStatement[]; onAdd: () => void }) {
   const remove = useDeleteStatement(account.id);
+  // Which statements have their PDF (or anything else) attached; the dates asked for do not matter to statements.
+  const today = todayIso();
+  const counts = useAttachmentCounts(today, today);
+  const [filesOf, setFilesOf] = useState<CardStatement>();
   return (
     <Card title="Statements">
       {statements.length === 0 ? (
@@ -556,7 +562,14 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
                 <span className="col-span-2 md:col-span-1">
                   Due {formatDate(statement.dueDate)} · <span className="font-semibold">{STATEMENT_STATUS_LABELS[statement.status]}</span>
                 </span>
-                <span className="col-span-2 text-right md:col-span-1">
+                <span className="col-span-2 flex items-center justify-end gap-1 md:col-span-1">
+                  {statement.id !== null && (
+                    <FilesButton
+                      count={counts.data?.statements.find((files) => files.statementId === statement.id)?.count ?? 0}
+                      name={`the statement that closed ${formatDate(statement.closeDate)}`}
+                      onClick={() => setFilesOf(statement)}
+                    />
+                  )}
                   {statement.id !== null && (
                     <button
                       type="button"
@@ -582,6 +595,13 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
       <button type="button" onClick={onAdd} className={`${BUTTON_SECONDARY} mt-3`}>
         + Add a statement
       </button>
+      {filesOf?.id != null && (
+        <ReceiptsDialog
+          title={`Statement closed ${formatDate(filesOf.closeDate)}`}
+          owner={{ type: "statement", cardId: account.id, statementId: filesOf.id }}
+          onClose={() => setFilesOf(undefined)}
+        />
+      )}
     </Card>
   );
 }

@@ -15,11 +15,14 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
+import { ExpenseDetailPage } from "./pages/ExpenseDetailPage";
+import { ExpensesPage } from "./pages/ExpensesPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodPage } from "./pages/PayPeriodPage";
 import { RecurringItemDetailPage } from "./pages/RecurringItemDetailPage";
 import { RecurringItemsPage } from "./pages/RecurringItemsPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useApplyTheme } from "./theme/useApplyTheme";
 
@@ -29,6 +32,8 @@ const PAGES: Record<string, ReactNode> = {
   "/recurring": <RecurringItemsPage />,
   "/accounts": <AccountsPage />,
   "/income": <IncomePage />,
+  "/expenses": <ExpensesPage />,
+  "/reports": <ReportsPage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
 };
@@ -133,6 +138,7 @@ function Screens() {
         <Route path="/cards/:id" element={<CardRedirect />} />
         <Route path="/assets/:id" element={<AssetDetailPage />} />
         <Route path="/income/:id" element={<IncomeDetailPage />} />
+        <Route path="/expenses/:id" element={<ExpenseDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
         <Route path="*" element={<ComingSoonPage title="We couldn't find that screen" />} />
       </Route>

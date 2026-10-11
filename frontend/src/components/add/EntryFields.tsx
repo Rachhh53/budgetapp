@@ -1,16 +1,27 @@
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { useBuckets } from "../../api/buckets";
+import { ACCEPTED_FILES, DEFAULT_MAX_BYTES, problemWith, useAttachToEntry } from "../../api/attachments";
 import type { Category, Tag } from "../../api/categories";
-import { type BucketSplit, type Entry, type EntryInput, type EntryKind, useDeleteEntry, useSaveEntry } from "../../api/entries";
+import {
+  type BucketSplit,
+  type Entry,
+  type EntryInput,
+  type EntryKind,
+  useDeleteEntry,
+  useEntries,
+  useNames,
+  useSaveEntry,
+} from "../../api/entries";
 import type { PeriodDetail } from "../../api/periods";
-import { todayIso } from "../../lib/dates";
+import { addDays, formatDay, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
+import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { FormSection } from "../FormSection";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
-import { Picker } from "../Picker";
-import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { Picker, TextPicker } from "../Picker";
+import { BUTTON_DANGER_OUTLINE, BUTTON_LINK, BUTTON_PRIMARY, HINT, INPUT, LABEL } from "../ui";
 
 /** Accounts whose balance is what is owed: spending raises it and money in pays it down. */
 const OWED: readonly Account["type"][] = ["credit_card", "loan"];
@@ -21,12 +32,16 @@ interface EntryFieldsProps {
   entry?: Entry;
   /** When adding: the account to start on, for a form opened for one account (a charge on a card). */
   accountId?: number;
+  /** When adding money coming in: the expense it pays back, for a form opened from that expense. */
+  paysBack?: Entry;
   /** The pay period on screen, if any: it gives the form its first date and account, and the preview. */
   period?: PeriodDetail;
   accounts: readonly Account[];
   categories: readonly Category[];
   tags: readonly Tag[];
   onClose: () => void;
+  /** Told which screen of the form is showing (0 is the first), so whatever frames it can make room. */
+  onStep?: (step: number) => void;
 }
 
 /**
@@ -36,16 +51,27 @@ interface EntryFieldsProps {
  *
  * Money coming in (or a transfer arriving) can be partly set aside in the buckets of the
  * account it lands in. Money leaving an account that has buckets has to say where it comes
- * out of — one of them, or what is not in any — so a bucket and its account go down together. "Pays back an expense" and uploads arrive with expenses and pay
- * stubs (Phases 8 and 9).
+ * out of — one of them, or what is not in any — so a bucket and its account go down together.
+ *
+ * Money going out can be marked as something that will be paid back, and money coming in can
+ * say which expense it pays back. A new entry can take its receipts with it: they are attached
+ * as soon as it has been added. An existing one keeps its receipts on its own page.
+ *
+ * The form is shown a screen at a time (see `useFormParts`), so it never needs scrolling.
  */
-export function EntryFields({ kind, entry, accountId: startOn, period, accounts, categories, tags, onClose }: EntryFieldsProps) {
+export function EntryFields({ kind, entry, accountId: startOn, paysBack, period, accounts, categories, tags, onClose, onStep }: EntryFieldsProps) {
   const id = useId();
   const save = useSaveEntry(entry?.id);
+  const attach = useAttachToEntry();
+  const names = useNames();
 
-  const [amount, setAmount] = useState(entry ? centsToInput(entry.amountCents) : "");
+  // Opened from an expense to record what came back: what is still owed is the likely amount.
+  const owed = entry === undefined ? paysBack?.reimbursement?.owedCents : undefined;
+  const [amount, setAmount] = useState(entry ? centsToInput(entry.amountCents) : owed ? centsToInput(owed) : "");
   const [estimate, setEstimate] = useState(entry?.estimate ?? false);
-  const [description, setDescription] = useState(entry?.description ?? "");
+  const [description, setDescription] = useState(
+    entry?.description ?? (paysBack ? `Reimbursement: ${paysBack.payee ?? paysBack.description}` : ""),
+  );
   const [payee, setPayee] = useState(entry?.payee ?? "");
   const [date, setDate] = useState(entry?.date ?? firstDate(period));
   const [accountId, setAccountId] = useState<string | null>(
@@ -63,7 +89,29 @@ export function EntryFields({ kind, entry, accountId: startOn, period, accounts,
   );
   // Where money going out comes from: a bucket's id, NOT_IN_A_BUCKET, or "" until it is chosen.
   const [chosenFrom, setChosenFrom] = useState<string>();
-  const [problem, setProblem] = useState<string>();
+  const [toBeRepaid, setToBeRepaid] = useState(false);
+  const [paysBackId, setPaysBackId] = useState<string | null>(
+    entry?.reimbursesEntryId != null ? String(entry.reimbursesEntryId) : paysBack ? String(paysBack.id) : null,
+  );
+  // Receipts chosen for an entry that does not exist yet: sent once it does.
+  const [files, setFiles] = useState<File[]>([]);
+  // Set when the entry was added but its files were not: the form then only says so, and closes.
+  const [notAttached, setNotAttached] = useState<string>();
+
+  // What money coming in could be paying back: expenses still owed, and whichever one it already pays back.
+  const today = todayIso();
+  const recent = useEntries(addDays(today, -PAYS_BACK_DAYS), addDays(today, PAYS_BACK_DAYS), kind === "money_in");
+  const owedExpenses = [...(recent.data ?? []), ...(paysBack ? [paysBack] : [])]
+    .filter(
+      (candidate, index, all) =>
+        candidate.kind === "money_out" &&
+        all.findIndex((other) => other.id === candidate.id) === index &&
+        ((candidate.reimbursement?.owedCents ?? 0) > 0 || String(candidate.id) === paysBackId),
+    )
+    .map((expense) => ({
+      id: String(expense.id),
+      label: `${formatDay(expense.date)} · ${expense.payee ?? expense.description} · ${formatCents(expense.amountCents)}`,
+    }));
 
   // Only money arriving can be set aside, and only in the buckets of the account it arrives in.
   const arrivesIn = kind === "money_in" ? accountId : kind === "transfer" ? toAccountId : null;
@@ -89,44 +137,98 @@ export function EntryFields({ kind, entry, accountId: startOn, period, accounts,
   const paidFromChecking =
     kind !== "money_in" && accounts.some((account) => String(account.id) === accountId && account.type === "checking");
 
-  /** Turns the form into a request, or explains what still needs attention. */
-  const toInput = (): EntryInput | string => {
+  // What money coming in can be said to pay back; nothing to ask when there is no such expense.
+  const canPayBack = kind === "money_in" && (owedExpenses.length > 0 || paysBackId !== null);
+  // Asked only of an account that has buckets, or that checks are written on.
+  const fromTitle =
+    payingBuckets.length === 0 ? "Check number" : paidFromChecking ? "Bucket and check number" : "Which bucket it comes out of";
+  const hasFrom = payingBuckets.length > 0 || paidFromChecking;
+  const adding = entry === undefined;
+  const labelsTitle = kind === "money_out" ? "Paid to, tags and note" : "Category, tags and note";
+  // Adding: two short steps everyone takes, and the rest behind "More options". Changing: one group at a
+  // time, chosen from a list that takes room of its own, so the two fullest screens are each shared out over two.
+  const groups: FormGroup<EntryPart>[] = [
+    { label: "Amount", parts: ["amount"] },
+    ...(adding || !hasFrom
+      ? [{ label: "When and where", parts: ["where", "from"] } as const]
+      : [{ label: "When and where", parts: ["where"] } as const, { label: fromTitle, parts: ["from"] } as const]),
+    ...(adding || kind !== "money_out"
+      ? [{ label: labelsTitle, parts: ["who", "tags"] } as const]
+      : [{ label: "Paid to and category", parts: ["who"] } as const, { label: "Tags and note", parts: ["tags"] } as const]),
+    ...(entry === undefined
+      ? [{ label: "Receipt and paying back", parts: ["extras"] } as const]
+      : canPayBack
+        ? [{ label: "Pays back", parts: ["extras"] } as const]
+        : []),
+    ...(buckets.length > 0 ? [{ label: "Set aside in a bucket", parts: ["aside"] } as const] : []),
+    ...(entry ? [{ label: "Delete", parts: ["delete"] } as const] : []),
+  ];
+  const parts = useFormParts<EntryPart>({ groups, adding, required: 2 });
+  const step = parts.step;
+  useEffect(() => {
+    onStep?.(step);
+    // Only a change of screen is news; the callback itself may be a new function on every render.
+  }, [step]);
+
+  // The buckets money can be set aside in come a few at a time, so that screen fits however many there are.
+  const [asidePage, setAsidePage] = useState(0);
+  const asidePages = Math.max(1, Math.ceil(buckets.length / ASIDE_PAGE_SIZE));
+  const asideFirst = Math.min(asidePage, asidePages - 1) * ASIDE_PAGE_SIZE;
+  const asideInView = buckets.slice(asideFirst, asideFirst + ASIDE_PAGE_SIZE);
+
+  /** Turns the form into a request, or names what still needs attention and the screen it is on. */
+  const toInput = (): EntryInput | PartProblem<EntryPart> => {
     if (amountCents === null || amountCents < 0) {
-      return AMOUNT_HELP;
+      return { part: "amount", problem: AMOUNT_HELP };
+    }
+    if (description.trim() === "") {
+      return { part: "amount", problem: "Please say what this is, in a word or two." };
+    }
+    if (date === "") {
+      return { part: "where", problem: "Please choose the date." };
     }
     if (accountId === null) {
-      return kind === "money_in" ? "Please choose the account this money goes into." : "Please choose the account this money comes from.";
+      return {
+        part: "where",
+        problem: kind === "money_in" ? "Please choose the account this money goes into." : "Please choose the account this money comes from.",
+      };
     }
     if (kind === "transfer" && toAccountId === null) {
-      return "Please choose the account this money goes to.";
+      return { part: "where", problem: "Please choose the account this money goes to." };
     }
     if (kind === "transfer" && toAccountId === accountId) {
-      return "Please choose two different accounts.";
+      return { part: "where", problem: "Please choose two different accounts." };
     }
     const bucketSplits: BucketSplit[] = [];
-    for (const bucket of settingAside ? buckets : []) {
+    for (const [position, bucket] of (settingAside ? buckets : []).entries()) {
       const typed = (aside[bucket.id] ?? "").trim();
       if (typed === "") {
         continue;
       }
       const cents = parseDollars(typed);
       if (cents === null || cents < 0) {
-        return `Please enter an amount like 250.00 for ${bucket.name}, or leave it empty.`;
+        // Show the buckets the one in question is among.
+        setAsidePage(Math.floor(position / ASIDE_PAGE_SIZE));
+        return { part: "aside", problem: `Please enter an amount like 250.00 for ${bucket.name}, or leave it empty.` };
       }
       if (cents > 0) {
         bucketSplits.push({ bucketId: bucket.id, amountCents: cents });
       }
     }
     if (bucketSplits.reduce((sum, split) => sum + split.amountCents, 0) > amountCents) {
-      return "That sets aside more than the amount itself. Please lower one of the buckets.";
+      return { part: "aside", problem: "That sets aside more than the amount itself. Please lower one of the buckets." };
     }
     if (payingBuckets.length > 0) {
       if (comesFrom === "") {
-        return "Please say where this comes out of: one of the buckets, or money that is not in a bucket.";
+        return { part: "from", problem: "Please say where this comes out of: one of the buckets, or money that is not in a bucket." };
       }
       if (comesFrom !== NOT_IN_A_BUCKET && amountCents > 0) {
         bucketSplits.push({ bucketId: Number(comesFrom), amountCents });
       }
+    }
+    const unfit = problemWith(files, 0, DEFAULT_MAX_BYTES, MAX_FILES);
+    if (unfit !== null) {
+      return { part: "extras", problem: unfit };
     }
     return {
       kind,
@@ -142,26 +244,61 @@ export function EntryFields({ kind, entry, accountId: startOn, period, accounts,
       checkNumber: paidFromChecking && checkNumber.trim() !== "" ? checkNumber.trim() : null,
       tagIds,
       bucketSplits,
+      reimbursesEntryId: kind === "money_in" && paysBackId !== null ? Number(paysBackId) : null,
+      // Only said when adding: from then on where it stands is kept on the expense's own page.
+      ...(entry === undefined && kind === "money_out" && toBeRepaid ? { reimbursementStatus: "to_submit" as const } : {}),
     };
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const check = (): PartProblem<EntryPart> | null => {
     const input = toInput();
-    if (typeof input === "string") {
-      setProblem(input);
-      return;
-    }
-    setProblem(undefined);
-    save.mutate(input, { onSuccess: onClose });
+    return "part" in input ? input : null;
   };
 
+  const send = () => {
+    const input = toInput();
+    if ("part" in input) {
+      // Checked a moment ago by the same rules; nothing to send if it somehow no longer passes.
+      return;
+    }
+    save.mutate(input, {
+      onSuccess: (saved) => {
+        if (files.length === 0) {
+          onClose();
+          return;
+        }
+        attach.mutate({ entryId: saved.id, files }, { onSuccess: onClose, onError: (error) => setNotAttached(error.message) });
+      },
+    });
+  };
+
+  if (notAttached !== undefined) {
+    // Nothing is lost and nothing should be sent twice: the entry is in, only its files are not.
+    return (
+      <div className="space-y-4">
+        <p role="alert" className="font-medium">
+          {description} was added, but {files.length === 1 ? "its file" : "its files"} could not be attached.
+        </p>
+        <p className="text-danger">{notAttached}</p>
+        <p className="text-muted">You can attach {files.length === 1 ? "it" : "them"} from its page, under Expenses &amp; receipts.</p>
+        <div className="flex justify-end">
+          <button type="button" data-autofocus onClick={onClose} className={BUTTON_PRIMARY}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const preview = entry ? null : previewEnding(period, accounts, kind, date, accountId, amountCents);
-  const failure = problem ?? save.error?.message;
+  const failure = parts.problem ?? save.error?.message;
+  const saving = save.isPending || attach.isPending;
 
   return (
-    <>
-      <form onSubmit={submit} className="space-y-4">
+    <form ref={parts.ref} onSubmit={(event: FormEvent) => parts.submit(event, check, send)} className="space-y-4">
+      {parts.header()}
+
+      {parts.shows("amount") && (
         <FormSection title="Amount">
           <div>
             <MoneyField label="Amount" value={amount} onChange={setAmount} required autoFocus hero />
@@ -175,9 +312,6 @@ export function EntryFields({ kind, entry, accountId: startOn, period, accounts,
               <span>Estimate, not final yet</span>
             </label>
           </div>
-        </FormSection>
-
-        <FormSection title="What it is">
           <div>
             <label htmlFor={`${id}-description`} className={LABEL}>
               What is it
@@ -193,72 +327,68 @@ export function EntryFields({ kind, entry, accountId: startOn, period, accounts,
               className={INPUT}
             />
           </div>
-          {/* Two side by side only when there are two: a lone picker gets the full width. */}
-          <div className={`grid grid-cols-1 gap-4 ${kind === "money_out" ? "sm:grid-cols-2" : ""}`}>
-            {kind === "money_out" && (
-              <div>
-                <label htmlFor={`${id}-payee`} className={LABEL}>
-                  Paid to (optional)
-                </label>
-                <input
-                  id={`${id}-payee`}
-                  value={payee}
-                  onChange={(event) => setPayee(event.target.value)}
-                  maxLength={120}
-                  autoComplete="off"
-                  className={INPUT}
-                />
-              </div>
-            )}
-            <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
-          </div>
         </FormSection>
+      )}
 
-        <FormSection title={SECTION_TITLES[kind]}>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor={`${id}-date`} className={LABEL}>
-                Date
-              </label>
-              <input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} required className={INPUT} />
+      {(parts.shows("where") || parts.shows("from")) && (
+        <FormSection title={parts.shows("where") ? SECTION_TITLES[kind] : fromTitle}>
+          {(parts.shows("where") || paidFromChecking) && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {parts.shows("where") && (
+                <>
+                  <div>
+                    <label htmlFor={`${id}-date`} className={LABEL}>
+                      Date
+                    </label>
+                    <input
+                      id={`${id}-date`}
+                      type="date"
+                      value={date}
+                      onChange={(event) => setDate(event.target.value)}
+                      required
+                      className={INPUT}
+                    />
+                  </div>
+                  <Picker
+                    label={ACCOUNT_LABELS[kind]}
+                    noun="account"
+                    placeholder="Choose or type an account"
+                    options={accountOptions}
+                    value={accountId}
+                    onChange={setAccountId}
+                  />
+                  {kind === "transfer" && (
+                    <Picker
+                      label="To"
+                      noun="account"
+                      placeholder="Choose or type an account"
+                      options={accountOptions}
+                      value={toAccountId}
+                      onChange={setToAccountId}
+                    />
+                  )}
+                </>
+              )}
+              {parts.shows("from") && paidFromChecking && (
+                <div>
+                  <label htmlFor={`${id}-check-number`} className={LABEL}>
+                    Check number (optional)
+                  </label>
+                  <input
+                    id={`${id}-check-number`}
+                    value={checkNumber}
+                    onChange={(event) => setCheckNumber(event.target.value)}
+                    maxLength={20}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    className={INPUT}
+                  />
+                </div>
+              )}
             </div>
-            <Picker
-              label={ACCOUNT_LABELS[kind]}
-              noun="account"
-              placeholder="Choose or type an account"
-              options={accountOptions}
-              value={accountId}
-              onChange={setAccountId}
-            />
-            {kind === "transfer" && (
-              <Picker
-                label="To"
-                noun="account"
-                placeholder="Choose or type an account"
-                options={accountOptions}
-                value={toAccountId}
-                onChange={setToAccountId}
-              />
-            )}
-            {paidFromChecking && (
-              <div>
-                <label htmlFor={`${id}-check-number`} className={LABEL}>
-                  Check number (optional)
-                </label>
-                <input
-                  id={`${id}-check-number`}
-                  value={checkNumber}
-                  onChange={(event) => setCheckNumber(event.target.value)}
-                  maxLength={20}
-                  inputMode="numeric"
-                  autoComplete="off"
-                  className={INPUT}
-                />
-              </div>
-            )}
-          </div>
+          )}
 
-          {payingBuckets.length > 0 && (
+          {parts.shows("from") && payingBuckets.length > 0 && (
             <div>
               <label htmlFor={`${id}-from-bucket`} className={LABEL}>
                 Comes out of
@@ -285,79 +415,185 @@ export function EntryFields({ kind, entry, accountId: startOn, period, accounts,
               </p>
             </div>
           )}
+        </FormSection>
+      )}
 
-          {buckets.length > 0 && (
-            <div>
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={settingAside}
-                  onChange={(event) => setSettingAside(event.target.checked)}
-                  className="size-5 accent-(--accent)"
+      {(parts.shows("who") || parts.shows("tags")) && (
+        <FormSection title={!parts.shows("tags") ? "Paid to and category" : !parts.shows("who") ? "Tags and note" : labelsTitle}>
+          {parts.shows("who") && (
+            // Two side by side only when there are two: a lone picker gets the full width.
+            <div className={`grid grid-cols-1 gap-4 ${kind === "money_out" ? "sm:grid-cols-2" : ""}`}>
+              {kind === "money_out" && (
+                <TextPicker
+                  label="Paid to (optional)"
+                  noun="payee"
+                  placeholder="Type to search or add new"
+                  suggestions={names.data?.payees ?? []}
+                  value={payee}
+                  onChange={setPayee}
                 />
-                <span className="font-medium">Set some aside in a bucket</span>
-              </label>
-              {settingAside && (
-                <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {buckets.map((bucket) => (
-                    <MoneyField
-                      key={bucket.id}
-                      label={bucket.name}
-                      value={aside[bucket.id] ?? ""}
-                      onChange={(text) => setAside((current) => ({ ...current, [bucket.id]: text }))}
-                      hint={`Holds ${formatCents(bucket.balanceCents)} today`}
-                    />
-                  ))}
-                  <p className="text-sm text-muted sm:col-span-2">Whatever is not set aside stays available in the account.</p>
-                </div>
               )}
+              <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
             </div>
           )}
+          {parts.shows("tags") && (
+            <>
+              <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+              <div>
+                <label htmlFor={`${id}-note`} className={LABEL}>
+                  Note (optional)
+                </label>
+                <input
+                  id={`${id}-note`}
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  maxLength={500}
+                  autoComplete="off"
+                  className={INPUT}
+                />
+              </div>
+            </>
+          )}
         </FormSection>
+      )}
 
-        <FormSection title="Tags and notes">
-          <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
-          <div>
-            <label htmlFor={`${id}-note`} className={LABEL}>
-              Note (optional)
+      {parts.shows("extras") && (
+        <FormSection title={entry === undefined ? "Receipt and paying back" : "Pays back"}>
+          {/* The receipt first: the screen opens with the keyboard on its first field, and a picker there would open its list. */}
+          {entry === undefined && (
+            <div>
+              <label htmlFor={`${id}-files`} className={LABEL}>
+                Receipt or document (optional)
+              </label>
+              <input
+                id={`${id}-files`}
+                type="file"
+                multiple
+                accept={ACCEPTED_FILES}
+                onChange={(event) => setFiles([...(event.target.files ?? [])])}
+                className="block w-full min-w-0 text-sm file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-lg file:border file:border-solid file:border-line file:bg-surface file:px-4 file:font-semibold file:text-ink"
+              />
+              {/* The chooser forgets what it held when this screen is left, so say what is still coming along. */}
+              <p className={HINT}>
+                {files.length > 0
+                  ? `Chosen: ${files.map((file) => file.name).join(", ")}. Attached when this is added.`
+                  : "PDFs and JPEG or PNG pictures. Kept on this PC only."}
+              </p>
+            </div>
+          )}
+          {entry === undefined && kind === "money_out" && (
+            <label className="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={toBeRepaid}
+                onChange={(event) => setToBeRepaid(event.target.checked)}
+                className="size-5 accent-(--accent)"
+              />
+              <span>I'll be paid back for this</span>
             </label>
-            <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} autoComplete="off" className={INPUT} />
-          </div>
+          )}
+          {canPayBack && (
+            <Picker
+              label="Pays back an expense (optional)"
+              noun="expense"
+              placeholder="Choose the expense this pays back"
+              options={owedExpenses}
+              value={paysBackId}
+              onChange={setPaysBackId}
+              clearable
+            />
+          )}
         </FormSection>
+      )}
 
-        {failure && (
-          <p role="alert" className="text-danger">
-            {failure}
-          </p>
-        )}
+      {parts.shows("aside") && (
+        <FormSection title="Set aside in a bucket">
+          <label className="flex min-h-11 items-center gap-3">
+            <input
+              type="checkbox"
+              checked={settingAside}
+              onChange={(event) => setSettingAside(event.target.checked)}
+              className="size-5 accent-(--accent)"
+            />
+            <span className="font-medium">Set some aside in a bucket</span>
+          </label>
+          {settingAside && (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {asideInView.map((bucket) => (
+                  <MoneyField
+                    key={bucket.id}
+                    label={bucket.name}
+                    value={aside[bucket.id] ?? ""}
+                    onChange={(text) => setAside((current) => ({ ...current, [bucket.id]: text }))}
+                    hint={`Holds ${formatCents(bucket.balanceCents)} today`}
+                  />
+                ))}
+              </div>
+              {asidePages > 1 && (
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAsidePage(asideFirst / ASIDE_PAGE_SIZE - 1)}
+                    disabled={asideFirst === 0}
+                    aria-label="Earlier buckets"
+                    className={`${BUTTON_LINK} disabled:opacity-40`}
+                  >
+                    Earlier
+                  </button>
+                  <span aria-live="polite" className="text-sm whitespace-nowrap text-muted tabular-nums">
+                    Buckets {asideFirst + 1}–{asideFirst + asideInView.length} of {buckets.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAsidePage(asideFirst / ASIDE_PAGE_SIZE + 1)}
+                    disabled={asideFirst + ASIDE_PAGE_SIZE >= buckets.length}
+                    aria-label="More buckets"
+                    className={`${BUTTON_LINK} disabled:opacity-40`}
+                  >
+                    More
+                  </button>
+                </div>
+              )}
+              <p className="text-sm text-muted">The rest stays available in the account.</p>
+            </>
+          )}
+        </FormSection>
+      )}
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          {/* Announced as it changes, so the effect of what is being typed is known before saving. */}
-          <p aria-live="polite" className="min-w-0 text-sm text-muted">
-            {preview && (
-              <>
-                Projected ending for {preview.accountName} this period becomes{" "}
-                <span data-amount className="font-semibold text-ink tabular-nums">
-                  {formatCents(preview.endingCents)}
-                </span>
-              </>
-            )}
-          </p>
-          <div className="flex shrink-0 flex-col-reverse gap-2 sm:flex-row">
-            <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
-              Cancel
-            </button>
-            <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
-              {save.isPending ? "Saving…" : entry ? "Save changes" : "Add"}
-            </button>
-          </div>
-        </div>
-      </form>
+      {entry && parts.shows("delete") && <DeleteEntry entry={entry} onDeleted={onClose} />}
 
-      {entry && <DeleteEntry entry={entry} onDeleted={onClose} />}
-    </>
+      {failure && (
+        <p role="alert" className="text-danger">
+          {failure}
+        </p>
+      )}
+
+      {/* Announced as it changes, so the effect of what is being typed is known before saving. */}
+      {preview && (
+        <p aria-live="polite" className="text-sm text-muted">
+          Projected ending for {preview.accountName} this period becomes{" "}
+          <span data-amount className="font-semibold text-ink tabular-nums">
+            {formatCents(preview.endingCents)}
+          </span>
+        </p>
+      )}
+      {parts.buttons({ onClose, pending: saving, saveLabel: entry ? "Save changes" : "Add" })}
+    </form>
   );
 }
+
+/** The screens of the form (see `useFormParts`). */
+type EntryPart = "amount" | "where" | "from" | "who" | "tags" | "extras" | "aside" | "delete";
+
+/** How many buckets the "set aside" screen shows at once, so it fits a phone with its hints. */
+const ASIDE_PAGE_SIZE = 2;
+
+/** How far back, and ahead, to look for expenses that money coming in might be paying back: two years. */
+const PAYS_BACK_DAYS = 730;
+
+/** As many files as one entry can have (the backend's own limit). */
+const MAX_FILES = 20;
 
 /** The choice that takes nothing out of any bucket. Not a number, so it can never be mistaken for a bucket's id. */
 const NOT_IN_A_BUCKET = "none";
@@ -413,7 +649,8 @@ function previewEnding(
 function DeleteEntry({ entry, onDeleted }: { entry: Entry; onDeleted: () => void }) {
   const remove = useDeleteEntry(entry.id);
   return (
-    <div className="mt-6 border-t border-line pt-4">
+    <FormSection title="Delete">
+      <p className="text-muted">It is taken out of every total at once. Undo brings it back.</p>
       <button
         type="button"
         onClick={() => remove.mutate(undefined, { onSuccess: onDeleted })}
@@ -427,6 +664,6 @@ function DeleteEntry({ entry, onDeleted }: { entry: Entry; onDeleted: () => void
           {remove.error.message}
         </p>
       )}
-    </div>
+    </FormSection>
   );
 }

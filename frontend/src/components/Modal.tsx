@@ -8,6 +8,9 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 /** Choices that are not form fields, so they raise no change event: a picker's options and a color swatch. */
 const CHOICE = '[role="option"], [role="group"] button';
 
+/** Marks a control that saves by itself as it is changed, so changing it is not "unsaved work". */
+const SAVES_ITSELF = "[data-saves-itself]";
+
 /**
  * A dialog over the page, used for every add/edit form.
  *
@@ -136,8 +139,11 @@ export function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        onChangeCapture={() => {
-          changed.current = true;
+        onChangeCapture={(event) => {
+          // Something that saves the moment it is changed (a file being attached) leaves nothing unsaved behind.
+          if (!(event.target instanceof Element && event.target.closest(SAVES_ITSELF))) {
+            changed.current = true;
+          }
         }}
         onClickCapture={noteChoice}
         // Never the full height: a strip of the page stays in view above and below, so it reads as a dialog over the page.

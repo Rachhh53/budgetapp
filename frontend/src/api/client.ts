@@ -42,10 +42,31 @@ export function onDataChanged(listener: () => void): () => void {
   };
 }
 
-async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
-  let response: Response;
+/** Files to send as one upload, each under the form field the backend reads. */
+export class Upload {
+  readonly files: readonly File[];
+
+  constructor(files: readonly File[]) {
+    this.files = files;
+  }
+}
+
+/** A file the backend sent to be saved, with the name it gave it. */
+export interface Download {
+  blob: Blob;
+  fileName: string;
+}
+
+/** Sends the request itself; what the answer means is for the caller. */
+async function call(method: string, path: string, body?: unknown): Promise<Response> {
   try {
-    response = await fetch(path, {
+    if (body instanceof Upload) {
+      const form = new FormData();
+      body.files.forEach((file) => form.append("file", file, file.name));
+      // No Content-Type here: the browser writes it, with the boundary between the files.
+      return await fetch(path, { method, credentials: "same-origin", body: form });
+    }
+    return await fetch(path, {
       method,
       credentials: "same-origin",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -54,6 +75,31 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
   } catch {
     throw UNREACHABLE;
   }
+}
+
+/** The error an answer that is not a success carries: the backend's own words when it sent the envelope. */
+async function failure(response: Response): Promise<ApiError> {
+  try {
+    const envelope = (await response.json()) as Envelope<unknown>;
+    return new ApiError(response.status, envelope.error ?? UNEXPECTED);
+  } catch {
+    return new ApiError(response.status, UNEXPECTED);
+  }
+}
+
+/** Asks for a file. A success is the file itself; anything else is the usual envelope with its message. */
+async function fetchFile(method: string, path: string, body?: unknown): Promise<Download> {
+  const response = await call(method, path, body);
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  // RFC 5987, as the backend writes it: filename*=UTF-8''Medical%202026.pdf
+  const named = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get("Content-Disposition") ?? "");
+  return { blob: await response.blob(), fileName: named?.[1] ? decodeURIComponent(named[1]) : "download" };
+}
+
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await call(method, path, body);
 
   let envelope: Envelope<T>;
   try {
@@ -90,6 +136,9 @@ export function setPinRequired(required: boolean) {
   pinRequired = required;
 }
 
+/** How a request is made and its answer read: as the JSON envelope, or as a file. */
+type Sender<T> = (method: string, path: string, body?: unknown) => Promise<T>;
+
 /**
  * Sends a request, starting a session first if the app is locked.
  *
@@ -97,9 +146,9 @@ export function setPinRequired(required: boolean) {
  * trying once more. With a PIN there is nothing to do quietly: the lock screen is told to
  * show, and the request fails as locked.
  */
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, how: Sender<T> = send): Promise<T> {
   try {
-    return await send<T>(method, path, body);
+    return await how(method, path, body);
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401) {
       throw error;
@@ -107,7 +156,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     if (!pinRequired) {
       try {
         await send("POST", SESSION_PATH);
-        return await send<T>(method, path, body);
+        return await how(method, path, body);
       } catch (retryError) {
         // 401 here means a PIN was set since this window last asked; anything else is its own problem.
         if (!(retryError instanceof ApiError) || retryError.status !== 401) {
@@ -135,4 +184,24 @@ export const api = {
   post: <T>(path: string, body: unknown) => request<T>("POST", path, body),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
   delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, body),
+  /** Sends files, as the browser sends a form with files in it. */
+  upload: <T>(path: string, files: readonly File[]) => request<T>("POST", path, new Upload(files)),
+  /** Asks for a file to save: a GET, or a POST when `body` says what the file should hold. */
+  download: (path: string, body?: unknown) => request<Download>(body === undefined ? "GET" : "POST", path, body, fetchFile),
 };
+
+/**
+ * Hands a file to the browser to save, as if a download link had been clicked. The link is made,
+ * clicked and thrown away here because the file came from a request that needed a body.
+ */
+export function saveFile({ blob, fileName }: Download) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Not at once: the browser has to have started reading the file first.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
