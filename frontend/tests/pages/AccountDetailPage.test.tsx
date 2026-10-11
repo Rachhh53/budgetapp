@@ -286,9 +286,12 @@ describe("account detail screen", () => {
   });
 
   it("narrows the chart to a stretch ahead or to any two dates, and the words follow", async () => {
-    fakeBackend({
+    // What the account held before the first balance entered, as the app built it up.
+    const EARLIER: AccountPoint = { start: "2026-08-15", end: "2026-08-31", endingCents: 150000, lowestCents: 20000, availableCents: 150000 };
+    const fetchMock = fakeBackend({
       "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
       "GET /api/accounts/1/projection": () => ({ status: 200, data: PROJECTION }),
+      "GET /api/accounts/1/projection?from=2026-08-01&to=2026-10-20": () => ({ status: 200, data: [EARLIER, PROJECTION[0]] }),
     });
     renderApp("/accounts/1");
 
@@ -305,23 +308,46 @@ describe("account detail screen", () => {
     expect(range).toHaveValue("all");
     expect(within(heading).queryByLabelText("From")).not.toBeInTheDocument();
 
-    // Custom dates start out as everything there is, and can begin in the past.
+    // Custom dates start out as what the chart opened on, and are not held to it: they can begin
+    // before the first balance entered, and the figures for them are asked for afresh.
     await userEvent.selectOptions(range, "Custom dates");
     const from = within(heading).getByLabelText("From");
     const to = within(heading).getByLabelText("To");
     expect(to).toHaveValue("2026-11-01");
-    expect((from as HTMLInputElement).value <= "2026-10-01").toBe(true);
+    expect(from).not.toHaveAttribute("min");
+    expect(to).not.toHaveAttribute("max");
     fireEvent.change(to, { target: { value: "2026-10-20" } });
-    // Only the pay period that ends inside those dates is spoken for.
-    expect(within(heading).getByRole("figure")).toHaveTextContent("the projection, which reaches $3,096.10 by Oct 14, 2026");
-    expect(within(heading).getByRole("figure")).toHaveTextContent("Its lowest point on the way is $313.90");
+    fireEvent.change(from, { target: { value: "2026-08-01" } });
+    await waitFor(() => expect(calls(fetchMock)).toContain("GET /api/accounts/1/projection?from=2026-08-01&to=2026-10-20"));
+    // The pay periods that end inside those dates are spoken for, the earlier one included.
+    await waitFor(() => expect(within(heading).getByRole("figure")).toHaveTextContent("Its lowest point on the way is $200.00, in the pay period that starts Aug 15, 2026."));
+    expect(within(heading).getByRole("figure")).toHaveTextContent("which reaches $3,096.10 by Oct 14, 2026");
+    expect(within(heading).getByRole("figure")).toHaveTextContent("Before today, the dashed line is what the app works out the account held");
 
-    // Dates the wrong way round are said kindly, not drawn.
+    // Dates the wrong way round, half typed, or too far apart are said kindly, and nothing is asked for.
+    const asked = calls(fetchMock).length;
     fireEvent.change(from, { target: { value: "2026-10-25" } });
     expect(within(heading).getByRole("status")).toHaveTextContent("The From date is after the To date. Please swap them.");
+    fireEvent.change(from, { target: { value: "" } });
+    expect(within(heading).getByRole("status")).toHaveTextContent("Please fill in both dates.");
+    fireEvent.change(from, { target: { value: "0002-08-01" } });
+    expect(within(heading).getByRole("status")).toHaveTextContent("Please choose dates up to ten years apart, between 2000 and 2100.");
+    expect(calls(fetchMock)).toHaveLength(asked);
 
     await userEvent.selectOptions(range, "Everything");
     expect(within(heading).getByRole("figure")).toHaveTextContent("the projection, which reaches $4,125.00 by Oct 31, 2026");
+  });
+
+  it("draws an account nothing was entered for, once money moves through it", async () => {
+    fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: { ...DETAIL, account: { ...CHECKING, latestBalance: null }, balances: [] } }),
+      "GET /api/accounts/1/projection": () => ({ status: 200, data: PROJECTION }),
+    });
+    renderApp("/accounts/1");
+
+    const heading = await screen.findByRole("region", { name: "Where it's heading" });
+    expect(within(heading).getByRole("figure")).toHaveTextContent("which reaches $4,125.00 by Oct 31, 2026");
+    expect(within(heading).getByRole("combobox", { name: "Dates to show" })).toBeInTheDocument();
   });
 
   it("says where the account is heading, in a chart and in words", async () => {

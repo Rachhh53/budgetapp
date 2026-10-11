@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { Account, AccountPoint, BalanceEntry } from "../../api/accounts";
+import { type Account, type AccountPoint, type BalanceEntry, useAccountProjectionBetween } from "../../api/accounts";
 import { formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { INPUT, LABEL } from "../ui";
@@ -11,6 +11,24 @@ const MONTH_AND_DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "n
 
 /** Below this many days across, the axis names days rather than months. */
 const DAYS_SHOWN_BY_DAY = 120;
+
+/** What the backend takes for a range of dates: these years, and no more than ten of them at once. */
+const FIRST_YEAR = 2000;
+const LAST_YEAR = 2100;
+const MOST_YEARS = 10;
+const DATES_HELP = "Please choose dates up to ten years apart, between 2000 and 2100.";
+
+/** Why two typed dates cannot be shown, or `null` when they can. A date half typed is not a date yet. */
+function datesProblem(from: string, to: string): string | null {
+  const year = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? Number(iso.slice(0, 4)) : Number.NaN);
+  if (Number.isNaN(year(from)) || Number.isNaN(year(to))) {
+    return "Please fill in both dates.";
+  }
+  if (from > to) {
+    return "The From date is after the To date. Please swap them.";
+  }
+  return year(from) < FIRST_YEAR || year(to) > LAST_YEAR || year(to) - year(from) > MOST_YEARS ? DATES_HELP : null;
+}
 
 /**
  * Which dates the chart covers (decided 2026-10-11): everything, a stretch ahead from today
@@ -87,7 +105,7 @@ interface ProjectionChartProps {
   account: Account;
   /** Balances the user entered, newest first. */
   balances: readonly BalanceEntry[];
-  /** The account at the end of each pay period ahead. */
+  /** The account at the end of each pay period ahead: what the chart opens on. Other dates it asks for itself. */
   points: readonly AccountPoint[];
   /** True when the account has buckets, so "available" is worth drawing as its own line. */
   showAvailable: boolean;
@@ -98,18 +116,35 @@ interface ProjectionChartProps {
  * line, and the projection ahead as a dashed one, so it is always clear which is which. The
  * same story is told in words underneath, for anyone who cannot read the chart.
  *
- * It opens on everything there is. The list above it narrows that to a stretch ahead of
- * today, or to any two dates; the words underneath follow what is in view.
+ * It opens on the balances entered and the projection ahead. The list above it changes that
+ * to a stretch ahead of today, or to any two dates, and the figures for those dates are asked
+ * for afresh: dates before the first balance show what the app has built up for the account
+ * (an account nothing was entered for starts from nothing), and dates past the usual horizon
+ * run the projection on. The words underneath follow what is in view.
  */
-export function ProjectionChart({ account, balances, points, showAvailable }: ProjectionChartProps) {
+export function ProjectionChart({ account, balances, points: ahead, showAvailable }: ProjectionChartProps) {
   const id = useId();
   const [range, setRange] = useState<Range>("all");
-  // Custom dates: empty until chosen, when they start out as everything there is.
+  // Custom dates: empty until chosen, when they start out as what the chart opens on.
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const todayDate = todayIso();
+  const today = toTime(todayDate);
+  const customProblem = range === "custom" ? datesProblem(customFrom, customTo) : null;
+  // The dates to ask the backend about; none while the chart shows what it opened on, or the dates cannot be read.
+  const asked =
+    range === "all" || customProblem !== null
+      ? undefined
+      : range === "custom"
+        ? { from: customFrom, to: customTo }
+        : { from: todayDate, to: toIso(today + Number(range) * MS_PER_DAY) };
+  const ranged = useAccountProjectionBetween(account.id, asked);
+  const points = asked !== undefined && ranged.data !== undefined ? ranged.data : ahead;
+
   const entered = [...balances].reverse();
+  // None for an account nothing was entered for: the app builds that one up from nothing.
   const latest = entered.at(-1);
-  if (latest === undefined || points.length === 0) {
+  if (ahead.length === 0) {
     return null;
   }
 
@@ -124,7 +159,9 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
     at(balance.date).entered = balance.amountCents;
   }
   // The projection starts from the newest balance entered, so the two lines meet there.
-  at(latest.date).projected = latest.amountCents;
+  if (latest !== undefined) {
+    at(latest.date).projected = latest.amountCents;
+  }
   for (const point of points) {
     // A period's ending balance is what the account holds as the next one begins.
     const day = at(toIso(toTime(point.end) + MS_PER_DAY));
@@ -134,15 +171,16 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
     }
   }
   const all = [...days.values()].sort((a, b) => a.at - b.at);
-  const earliest = all[0]?.at ?? toTime(latest.date);
+  const earliest = all[0]?.at ?? today;
   const furthest = all.at(-1)?.at ?? earliest;
 
-  const today = toTime(todayIso());
-  const from = range === "all" ? earliest : range === "custom" ? toTime(customFrom || toIso(earliest)) : today;
-  const to = range === "all" ? furthest : range === "custom" ? toTime(customTo || toIso(furthest)) : today + Number(range) * MS_PER_DAY;
-  const backwards = range === "custom" && from > to;
-  const data = range === "all" ? all : backwards ? [] : between(all, from, to);
+  const from = asked === undefined ? earliest : toTime(asked.from);
+  const to = asked === undefined ? furthest : toTime(asked.to);
+  // While dates are being typed the chart waits, rather than drawing something they did not ask for.
+  const data = customProblem !== null ? [] : asked === undefined ? all : between(all, from, to);
   const byDay = (to - from) / MS_PER_DAY <= DAYS_SHOWN_BY_DAY;
+  // Before today the dashed line is not a projection: it is what the account held, as the app works it out.
+  const reachesBack = asked !== undefined && from < today;
 
   // What the words underneath are about: the pay periods that end inside the dates in view.
   const inView = points.filter((point) => {
@@ -176,7 +214,7 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
           </select>
         </div>
         {range === "custom" && (
-          // On a line of their own on a phone, so each date can be read. Any day from the first balance entered to the end of the projection.
+          // On a line of their own on a phone, so each date can be read. Any dates: before the first balance entered, or past the usual horizon.
           <div className="grid w-full min-w-0 grid-cols-2 gap-3 sm:w-auto sm:flex-1">
             <div>
               <label htmlFor={`${id}-from`} className={LABEL}>
@@ -186,8 +224,6 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
                 id={`${id}-from`}
                 type="date"
                 value={customFrom}
-                min={toIso(earliest)}
-                max={toIso(furthest)}
                 onChange={(event) => setCustomFrom(event.target.value)}
                 className={INPUT}
               />
@@ -200,8 +236,6 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
                 id={`${id}-to`}
                 type="date"
                 value={customTo}
-                min={toIso(earliest)}
-                max={toIso(furthest)}
                 onChange={(event) => setCustomTo(event.target.value)}
                 className={INPUT}
               />
@@ -211,9 +245,9 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
       </div>
       {data.length < 2 ? (
         <p role="status" className="flex h-56 items-center justify-center rounded-lg bg-bg px-4 text-center text-muted md:h-64">
-          {backwards
-            ? "The From date is after the To date. Please swap them."
-            : `There is nothing to draw between those dates. This account's chart runs from ${formatDate(toIso(earliest))} to ${formatDate(toIso(furthest))}.`}
+          {customProblem ??
+            ranged.error?.message ??
+            (ranged.isFetching ? "Loading…" : "There is nothing to draw between those dates: the account has no figures for them.")}
         </p>
       ) : (
         <div data-amount className="h-56 w-full md:h-64">
@@ -244,7 +278,7 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
               />
               <Line name="Entered by you" dataKey="entered" stroke={account.color} strokeWidth={2.5} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
               <Line
-                name="Projected"
+                name={reachesBack ? "Worked out" : "Projected"}
                 dataKey="projected"
                 stroke={account.color}
                 strokeWidth={2}
@@ -271,8 +305,8 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
       )}
       {last === undefined || lowest === undefined ? (
         <figcaption className="mt-2 text-sm text-muted">
-          Solid: balances you entered. Dashed: the projection. No pay period ends between these dates, so there are no projected figures to
-          give for them.
+          Solid: balances you entered. Dashed: the app's own figures. No pay period ends between these dates, so there are none to give
+          for them.
         </figcaption>
       ) : (
         <figcaption className="mt-2 text-sm text-muted">
@@ -296,6 +330,7 @@ export function ProjectionChart({ account, balances, points, showAvailable }: Pr
             {formatCents(lowest.lowestCents)}
           </span>
           , in the pay period that starts {formatDate(lowest.start)}.
+          {reachesBack && " Before today, the dashed line is what the app works out the account held: the balances you entered and everything that moved."}
         </figcaption>
       )}
     </figure>

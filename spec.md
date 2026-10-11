@@ -666,7 +666,7 @@ Not in this phase: the control for how early promo warnings start (Phase 6, Sett
 
 ### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
 
-**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 498 server and 374 frontend tests passing.
+**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 500 server and 375 frontend tests passing.
 
 Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 12); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
 
@@ -690,9 +690,9 @@ Not shown in Settings yet, because nothing would act on them: **budget year star
 - **A pay period row** opens a short form for that one time (amount, due date, paid and the day, confirmation code, check number, note), with a link to the item's page for anything about the item itself. A bucket's own amount still opens the bucket's form.
 - Dialogs may now be as tall as the window less a thin strip (`100dvh − 3rem` from `sm`, was `− 6rem`).
 
-**Dates for the account chart** (Rachel, 2026-10-11: "options for the graph. like custom dates to view, 30, 60 90, 1 year"). "Where it's heading" on an account's page has a **Dates to show** list: Everything (as before, and what it opens on), the next 30, 60 or 90 days, the next year, or Custom dates with a From and a To, which can start in the past, back to the first balance entered. The projected lines are cut at the edges of the dates chosen, and the sentence under the chart speaks for the pay periods that end inside them. A loan's chart is unchanged: it shows the loan's whole life.
+**Dates for the account chart** (Rachel, 2026-10-11: "options for the graph. like custom dates to view, 30, 60 90, 1 year"). "Where it's heading" on an account's page has a **Dates to show** list: Everything (as before, and what it opens on), the next 30, 60 or 90 days, the next year, or Custom dates with a From and a To. The dates chosen are asked of the backend (`GET /api/accounts/{id}/projection?from=&to=`, up to ten years, between 2000 and 2100), so Custom dates are not held to what the chart opened on: they can start before the first balance entered, where the dashed line (named "Worked out") is what the app works out the account held from the balances entered and everything that moved, and they can run past the look-ahead setting. An account no balance was ever entered for is built up from nothing, and has the chart too once money moves through it. Dates half typed, the wrong way round or too far apart are said kindly and nothing is drawn. The sentence under the chart speaks for the pay periods that end inside the dates. A loan's chart is unchanged: it shows the loan's whole life.
 
-**An asset can lose value each year** (Rachel, 2026-10-11; §4.2, §5.7). The asset form's last screen, now "Loan and yearly change", asks what the value does between the values entered — stays the same, goes up, or goes down — and by what percent a year. A car set to lose 15% drops a little each month until a real value is entered; its page says "losing your assumed 15.00% a year", and net worth follows it.
+**An asset can lose value each year** (Rachel, 2026-10-11; §4.2, §5.7). The asset form's last screen, now "Loan and annual change", asks what the value does between the values entered — stays the same, goes up, or goes down — and by what percent a year. A car set to lose 15% drops a little each month until a real value is entered; its page says "losing your assumed 15.00% a year", and net worth follows it.
 
 ### Carried forward into later phases
 

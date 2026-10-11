@@ -49,18 +49,18 @@ interface AssetFormProps {
   onDeleted?: () => void;
 }
 
-/** The parts of the form: which kind, its name and color, its first value, its loan and yearly change, and putting it away. */
+/** The parts of the form: which kind, its name and color, its first value, its loan and annual change, and putting it away. */
 type AssetPart = "kind" | "what" | "worth" | "loan" | "about";
 
 const ADD_GROUPS: readonly FormGroup<AssetPart>[] = [
   { label: "What it is", parts: ["kind", "what"] },
   { label: "What it is worth", parts: ["worth"] },
-  { label: "Loan and yearly change", parts: ["loan"] },
+  { label: "Loan and annual change", parts: ["loan"] },
 ];
 // The first value is entered while adding only; later ones have a history on the asset's page.
 const EDIT_GROUPS: readonly FormGroup<AssetPart>[] = [
   { label: "What it is", parts: ["kind", "what"] },
-  { label: "Loan and yearly change", parts: ["loan"] },
+  { label: "Loan and annual change", parts: ["loan"] },
   { label: "Archive or delete", parts: ["about"] },
 ];
 
@@ -189,7 +189,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
         )}
 
         {parts.shows("loan") && (
-          <FormSection title="Loan and yearly change">
+          <FormSection title="Loan and annual change">
             <div>
               <Picker
                 label="Loan against it (optional)"

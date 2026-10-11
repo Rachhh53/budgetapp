@@ -44,7 +44,7 @@ public final class SavingsInterest {
     }
 
     /**
-     * One month's share of a yearly change that may be a loss: {@code (1 + rate)^(1/12) − 1},
+     * One month's share of a annual change that may be a loss: {@code (1 + rate)^(1/12) − 1},
      * which is below zero for a negative rate. For something whose worth can fall, such as a
      * car; interest is never negative, so {@link #monthlyRate} refuses one.
      *

@@ -197,7 +197,9 @@ export function AccountDetailPage() {
             <LoanLifetimeChart account={account} balances={balances} loan={loan.data} />
           </Card>
         ) : (
-          latest &&
+          // Also for an account no balance was entered for, once money moves through it: the app builds
+          // that one up from nothing, and its past can be looked at with the chart's dates.
+          (latest || points.some((point) => point.endingCents !== 0)) &&
           points.length > 0 && (
             <Card title="Where it's heading">
               <ProjectionChart account={account} balances={balances} points={points} showAvailable={hasBuckets} />

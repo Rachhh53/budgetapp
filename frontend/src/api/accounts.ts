@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
 
@@ -138,6 +138,21 @@ export function useAccountProjection(id: number) {
   return useQuery({
     queryKey: [...detailKey(id), "projection"],
     queryFn: () => api.get<AccountPoint[]>(`/api/accounts/${id}/projection`),
+  });
+}
+
+/**
+ * The account at the end of each pay period between two dates, for a chart told which dates to
+ * show. Dates before today give what it held then, as the app works it out; dates past the
+ * horizon run the projection on. Asked for only once there are dates (`undefined` waits), and
+ * the last answer stays on screen while the next loads, so the chart does not blink.
+ */
+export function useAccountProjectionBetween(id: number, dates: { from: string; to: string } | undefined) {
+  return useQuery({
+    queryKey: [...detailKey(id), "projection", dates?.from, dates?.to],
+    queryFn: () => api.get<AccountPoint[]>(`/api/accounts/${id}/projection?from=${dates?.from}&to=${dates?.to}`),
+    enabled: dates !== undefined,
+    placeholderData: keepPreviousData,
   });
 }
 

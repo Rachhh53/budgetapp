@@ -1094,6 +1094,39 @@ class BucketsLedgerApiTest extends ApiTestBase {
         }
 
         @Test
+        void reachesBackAndFurtherAheadWhenAskedForThoseDates() throws Exception {
+            String path = "/api/accounts/" + checking + "/projection";
+            JsonNode usual = server.get(path, cookie).data();
+
+            // Earlier pay periods than the current one, and later ones than the usual twelve months.
+            JsonNode wider = server.get(path + "?from=2026-07-01&to=2028-06-30", cookie).data();
+            assertThat(wider.get(0).get("start").asText()).isLessThan("2026-10-01");
+            assertThat(wider.get(wider.size() - 1).get("end").asText())
+                    .isGreaterThan(usual.get(usual.size() - 1).get("end").asText());
+            // The periods both cover say the same thing.
+            for (JsonNode point : wider) {
+                if (point.get("start").asText().equals("2026-10-01")) {
+                    assertThat(point).isEqualTo(usual.get(0));
+                }
+            }
+
+            // Only the dates asked for.
+            JsonNode past = server.get(path + "?from=2026-07-01&to=2026-08-31", cookie).data();
+            assertThat(past.get(past.size() - 1).get("start").asText()).isLessThan("2026-09-01");
+        }
+
+        @Test
+        void refusesDatesThatMakeNoRange() throws Exception {
+            String path = "/api/accounts/" + checking + "/projection";
+            for (String dates : List.of("?from=2026-12-01&to=2026-01-01", "?from=1990-01-01&to=1990-06-01", "?from=2026-01-01&to=2040-01-01")) {
+                Reply reply = server.get(path + dates, cookie);
+                assertThat(reply.status()).isEqualTo(400);
+                assertThat(reply.error()).isEqualTo("Please choose a range of dates up to ten years long, between 2000 and 2100.");
+            }
+            assertThat(server.get(path + "?from=soon", cookie).status()).isEqualTo(400);
+        }
+
+        @Test
         void anUnknownAccountIsNotFound() throws Exception {
             assertThat(server.get("/api/accounts/999/projection", cookie).status()).isEqualTo(404);
         }

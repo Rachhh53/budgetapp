@@ -156,7 +156,7 @@ describe("accounts screen: home & assets", () => {
     expect(within(dialog).getByRole("group", { name: "What it is worth" })).toBeInTheDocument();
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Value" }), "400,000");
     await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
-    expect(within(dialog).getByRole("group", { name: "Loan and yearly change" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("group", { name: "Loan and annual change" })).toBeInTheDocument();
     // Only loan accounts are offered.
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Loan against it (optional)" }), "maple{Enter}");
     // Its value holds until told otherwise; a home is set to go up.
@@ -218,7 +218,7 @@ describe("accounts screen: home & assets", () => {
     // Its value has its own history, so it is not asked for again here.
     expect(within(dialog).queryByRole("textbox", { name: "Value" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: "What it is" })).toBeChecked();
-    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and yearly change" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and annual change" }));
     await userEvent.selectOptions(within(dialog).getByLabelText("Between values, it"), "Goes down");
     await userEvent.type(within(dialog).getByLabelText("By, % a year"), "lots");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -245,7 +245,7 @@ describe("accounts screen: home & assets", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit asset" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Outback" });
-    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and yearly change" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and annual change" }));
     await userEvent.selectOptions(within(dialog).getByLabelText("Between values, it"), "Goes down");
     expect(dialog).toHaveTextContent("Its value drops a little each month until you enter a real one.");
     await userEvent.type(within(dialog).getByLabelText("By, % a year"), "15");
@@ -264,7 +264,7 @@ describe("accounts screen: home & assets", () => {
     expect(await screen.findByText(/today, losing your assumed 15.00% a year · you entered \$18,500.00 on Jun 1, 2026/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Edit asset" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Outback" });
-    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and yearly change" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and annual change" }));
     expect(within(dialog).getByLabelText("Between values, it")).toHaveValue("down");
     expect(within(dialog).getByLabelText("By, % a year")).toHaveValue("15.00");
   });
