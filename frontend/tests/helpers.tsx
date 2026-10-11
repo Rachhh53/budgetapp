@@ -7,10 +7,19 @@ import { App } from "../src/App";
 /** `changed` marks the answer the way the backend marks a change that can be undone. */
 type Handler = (body: unknown) => { status: number; data?: unknown; error?: string; changed?: boolean };
 
-export const DEFAULT_SETTINGS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
+export const DEFAULT_SETTINGS = {
+  theme: "system",
+  accent_color: "#0f766e",
+  projection_horizon_months: "12",
+  auto_lock_minutes: "15",
+};
+
+/** Open, with no PIN, and the offer to set one already answered: how most tests want the app. */
+export const UNLOCKED = { unlocked: true, pinSet: false, retryAfterSeconds: 0, offerPin: false };
 
 /** What a brand-new install answers: default settings and nothing entered yet. */
 const FRESH_INSTALL: Record<string, Handler> = {
+  "GET /api/session": () => ({ status: 200, data: UNLOCKED }),
   "GET /api/settings": () => ({ status: 200, data: DEFAULT_SETTINGS }),
   "GET /api/accounts": () => ({ status: 200, data: [] }),
   "GET /api/income-sources": () => ({ status: 200, data: [] }),

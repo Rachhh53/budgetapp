@@ -2,6 +2,7 @@ import { Ellipsis, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router";
 import { NAV_ITEMS } from "../nav";
+import { LockNowButton } from "./security/LockNow";
 import { PRIVACY_NOTE } from "./Sidebar";
 
 const PRIMARY = NAV_ITEMS.filter((item) => item.primaryOnPhone);
@@ -48,6 +49,9 @@ export function PhoneNav() {
               </li>
             ))}
           </ul>
+          <div className="pt-4">
+            <LockNowButton className="flex min-h-11 w-full items-center gap-3 rounded-lg border border-line px-3 text-base disabled:opacity-60" />
+          </div>
           <p className="px-3 pt-6 text-sm text-muted">{PRIVACY_NOTE}</p>
         </div>
       )}

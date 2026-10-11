@@ -70,23 +70,65 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
   return envelope.data;
 }
 
+const lockListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` when a request finds the app locked and a PIN is needed to open it again
+ * (the session ran out while the window sat idle, say). Returns the function that stops listening.
+ */
+export function onLocked(listener: () => void): () => void {
+  lockListeners.add(listener);
+  return () => {
+    lockListeners.delete(listener);
+  };
+}
+
+/** Whether unlocking takes a PIN. Kept in step with the session status by the app frame. */
+let pinRequired = false;
+
+export function setPinRequired(required: boolean) {
+  pinRequired = required;
+}
+
 /**
  * Sends a request, starting a session first if the app is locked.
  *
- * Until the PIN exists (Phase 6) unlocking needs no input, so a 401 is answered by quietly
- * unlocking and trying once more. Phase 6 replaces this with the PIN screen.
+ * Without a PIN, unlocking needs no input, so a 401 is answered by quietly unlocking and
+ * trying once more. With a PIN there is nothing to do quietly: the lock screen is told to
+ * show, and the request fails as locked.
  */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   try {
     return await send<T>(method, path, body);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401) {
-      await send("POST", SESSION_PATH);
-      return send<T>(method, path, body);
+    if (!(error instanceof ApiError) || error.status !== 401) {
+      throw error;
     }
+    if (!pinRequired) {
+      try {
+        await send("POST", SESSION_PATH);
+        return await send<T>(method, path, body);
+      } catch (retryError) {
+        // 401 here means a PIN was set since this window last asked; anything else is its own problem.
+        if (!(retryError instanceof ApiError) || retryError.status !== 401) {
+          throw retryError;
+        }
+      }
+    }
+    lockListeners.forEach((listener) => listener());
     throw error;
   }
 }
+
+/**
+ * The same requests without the unlock-and-retry: for the session and PIN routes themselves,
+ * where a 401 is the answer ("that PIN didn't match"), not a sign that the app is locked.
+ */
+export const direct = {
+  get: <T>(path: string) => send<T>("GET", path),
+  post: <T>(path: string, body?: unknown) => send<T>("POST", path, body),
+  delete: <T>(path: string, body?: unknown) => send<T>("DELETE", path, body),
+};
 
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),

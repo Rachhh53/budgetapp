@@ -865,6 +865,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}i{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "1,500");
@@ -908,6 +910,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}e{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     // Setting aside is for money arriving; money leaving says where it comes from instead.
@@ -938,6 +942,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}e{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
@@ -955,6 +961,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}i{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     expect(within(dialog).getByRole("radio", { name: "Money in" })).toBeChecked();

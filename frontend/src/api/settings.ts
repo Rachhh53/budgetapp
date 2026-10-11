@@ -10,16 +10,22 @@ export type Theme = (typeof THEMES)[number];
 export const PROJECTION_HORIZONS = ["6", "12", "18", "24", "36"] as const;
 export type ProjectionHorizon = (typeof PROJECTION_HORIZONS)[number];
 
+/** Minutes without activity before the app locks itself. */
+export const AUTO_LOCK_MINUTES = ["1", "5", "15", "30", "60"] as const;
+export type AutoLockMinutes = (typeof AUTO_LOCK_MINUTES)[number];
+
 export interface Settings {
   theme: Theme;
   accent_color: string;
   projection_horizon_months: ProjectionHorizon;
+  auto_lock_minutes: AutoLockMinutes;
 }
 
-const SETTINGS_KEY = ["settings"] as const;
+export const SETTINGS_KEY = ["settings"] as const;
 
-export function useSettings() {
-  return useQuery({ queryKey: SETTINGS_KEY, queryFn: () => api.get<Settings>("/api/settings") });
+/** `enabled` is false while the app is locked: settings sit behind the lock like everything else. */
+export function useSettings(enabled = true) {
+  return useQuery({ queryKey: SETTINGS_KEY, queryFn: () => api.get<Settings>("/api/settings"), enabled });
 }
 
 export function useUpdateSetting() {
