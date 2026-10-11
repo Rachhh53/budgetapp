@@ -8,6 +8,7 @@ import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
+import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
 import { PauseControls } from "../components/items/PauseItem";
 import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
@@ -23,6 +24,9 @@ import { formatCents } from "../lib/money";
  * schedule and nothing else, and so on, so no form is longer than what it is about. Edit item
  * is the small one (type, name, archiving, deleting), as Edit account is. A bucket's own
  * recurring amount is the exception: it is changed in its bucket's form, so it has the one button.
+ *
+ * A credit card's payment is an item like any other and is changed here, including how much it
+ * pays (the statement balance, say): the card's page shows the payment, and this page sets it.
  */
 export function RecurringItemDetailPage() {
   const id = Number(useParams().id);
@@ -67,6 +71,8 @@ export function RecurringItemDetailPage() {
   // Set up on its bucket, and changed there: one form, so one button.
   const ownForm = item.kind !== "bucket_move";
   const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
+  // A payment that follows its card says how, in place of an amount.
+  const follows = item.followsCard && item.cardPaymentMode ? PAYMENT_MODE_LABELS[item.cardPaymentMode] : null;
 
   return (
     <>
@@ -101,19 +107,37 @@ export function RecurringItemDetailPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <p className="text-muted">Amount</p>
-              <Amount cents={item.perOccurrenceCents} estimate={item.estimate} className="-ml-2 text-3xl font-bold" />
-              <p className="text-muted">
-                each time
-                {item.amountMode === "annual" && " · entered as a yearly total"}
-                {item.estimate && " · an estimate"}
-              </p>
+              {follows ? (
+                <>
+                  <p className="text-2xl font-bold">{follows}</p>
+                  <p className="text-muted">worked out from the card each time</p>
+                </>
+              ) : (
+                <>
+                  <Amount cents={item.perOccurrenceCents} estimate={item.estimate} className="-ml-2 text-3xl font-bold" />
+                  <p className="text-muted">
+                    each time
+                    {item.amountMode === "annual" && " · entered as a yearly total"}
+                    {item.estimate && " · an estimate"}
+                  </p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-muted">A year</p>
-              <p data-amount className="text-2xl font-bold tabular-nums">
-                {formatCents(item.perYearCents)}
-              </p>
-              <p className="text-muted">{everyPaycheck ? "over a year of paychecks" : "what it adds up to over a year"}</p>
+              {follows ? (
+                <>
+                  <p className="text-2xl font-bold">—</p>
+                  <p className="text-muted">it changes with what is charged</p>
+                </>
+              ) : (
+                <>
+                  <p data-amount className="text-2xl font-bold tabular-nums">
+                    {formatCents(item.perYearCents)}
+                  </p>
+                  <p className="text-muted">{everyPaycheck ? "over a year of paychecks" : "what it adds up to over a year"}</p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-muted">Next date</p>

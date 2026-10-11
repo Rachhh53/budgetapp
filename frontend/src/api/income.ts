@@ -160,6 +160,19 @@ export interface PayPeriod {
   availableCents: number | null;
   /** True when that account dips below the low-balance amount the user set for it. */
   lowBalance: boolean;
+  /** Promotional rates that end in this period with a balance still on them. */
+  promosEnding?: PromoEnd[];
+}
+
+/** A card's promotional rate running out during a pay period with some of its balance still there. */
+export interface PromoEnd {
+  accountId: number;
+  promoId: number;
+  label: string;
+  endDate: string;
+  deferredInterest: boolean;
+  /** What is projected to be left of it at the end of that pay period. */
+  remainingCents: number;
 }
 
 export interface PayPeriods {

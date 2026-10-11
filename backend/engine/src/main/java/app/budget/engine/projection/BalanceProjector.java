@@ -5,9 +5,12 @@ import app.budget.engine.Money;
 import app.budget.engine.interest.InterestTerms;
 import app.budget.engine.interest.SavingsInterest;
 import app.budget.engine.schedule.PayPeriod;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -56,7 +59,9 @@ public final class BalanceProjector {
         TreeMap<LocalDate, List<Money>> applied = applied(movements, entered.lastKey());
         List<InterestCredit> credits = interest == null || periods.isEmpty()
                 ? List.of()
-                : creditInterest(interest, entered, applied, periods.getLast().end());
+                : interest.daily()
+                        ? growDaily(interest, entered, applied, periods.getLast().end())
+                        : creditInterest(interest, entered, applied, periods.getLast().end());
 
         List<PeriodBalance> result = new ArrayList<>();
         for (PayPeriod period : periods) {
@@ -138,6 +143,53 @@ public final class BalanceProjector {
     }
 
     /**
+     * Builds an account up a little every day, earliest first, adding each day's share to
+     * {@code applied} as it goes so the next day grows on it too. This is an investment's
+     * assumed growth: nothing posts it on a day of the month, so it is spread over every day,
+     * and every stretch of time gets its share.
+     *
+     * <p>A day's share is rarely a whole number of cents. Only whole cents are added; the rest
+     * is carried to the next day, so a small balance is not rounded up into growing faster than
+     * its rate (nor a large one, a little, slower).
+     *
+     * <p>A balance the user entered already holds whatever the account really did up to that
+     * day, so nothing is added on that day, and what was being carried is dropped.
+     */
+    private static List<InterestCredit> growDaily(
+            InterestTerms terms, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied, LocalDate through) {
+        List<InterestCredit> credits = new ArrayList<>();
+        Map<BasisPoints, BigDecimal> dailyRates = new HashMap<>();
+        Money running = Money.ZERO;
+        BigDecimal carriedCents = BigDecimal.ZERO;
+        for (LocalDate day = entered.firstKey(); !day.isAfter(through); day = day.plusDays(1)) {
+            Money anchored = entered.get(day);
+            if (anchored != null) {
+                running = anchored;
+                carriedCents = BigDecimal.ZERO;
+            } else {
+                // Here `running` is what the account holds as the day starts.
+                Optional<BasisPoints> rate = terms.rateOn(day);
+                if (rate.isPresent() && !running.isNegative() && !running.isZero()) {
+                    BigDecimal share = BigDecimal.valueOf(running.cents())
+                            .multiply(dailyRates.computeIfAbsent(rate.get(), SavingsInterest::dailyRate))
+                            .add(carriedCents);
+                    long whole = share.setScale(0, RoundingMode.DOWN).longValueExact();
+                    carriedCents = share.subtract(BigDecimal.valueOf(whole));
+                    if (whole > 0) {
+                        Money amount = Money.ofCents(whole);
+                        applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
+                        credits.add(new InterestCredit(day, amount, running, rate.get(), false));
+                    }
+                }
+            }
+            for (Money amount : applied.getOrDefault(day, List.of())) {
+                running = running.plus(amount);
+            }
+        }
+        return credits;
+    }
+
+    /**
      * Movements by the day they take effect. Something still outstanding when the newest
      * balance was entered has yet to leave the account, so it is carried forward to that day.
      */
@@ -145,12 +197,9 @@ public final class BalanceProjector {
         TreeMap<LocalDate, List<Money>> byDay = new TreeMap<>();
         movements.stream()
                 .sorted(Comparator.comparing(Movement::date))
-                .forEach(movement -> {
-                    LocalDate day = movement.outstanding() && movement.date().isBefore(newestEntered)
-                            ? newestEntered
-                            : movement.date();
-                    byDay.computeIfAbsent(day, key -> new ArrayList<>()).add(movement.amount());
-                });
+                .forEach(movement -> byDay
+                        .computeIfAbsent(movement.countsOn(newestEntered), key -> new ArrayList<>())
+                        .add(movement.amount()));
         return byDay;
     }
 

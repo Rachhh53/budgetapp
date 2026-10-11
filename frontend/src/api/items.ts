@@ -6,6 +6,10 @@ import { api } from "./client";
 import { PAY_KEY, type WeekendRule } from "./income";
 
 /** The kinds of recurring item. A bucket move sets money aside inside one account. */
+/** How much a card payment pays: an amount of its own, or one that follows the card. */
+export const CARD_PAYMENT_MODES = ["fixed", "statement_balance", "full_balance", "minimum"] as const;
+export type CardPaymentMode = (typeof CARD_PAYMENT_MODES)[number];
+
 export const ITEM_KINDS = ["bill", "transfer", "budget", "card_payment", "bucket_move"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
@@ -101,6 +105,12 @@ export interface Item extends ItemTerms {
   paused: boolean;
   /** The first day it runs again; `null` when not paused, or paused until turned back on. */
   pausedUntil: string | null;
+  /** The credit card whose own payment this is; `null` for any other item. */
+  paymentOfCardId?: number | null;
+  /** True when its amount is worked out from that card (its statement balance, say), so `amountCents` means nothing. */
+  followsCard?: boolean;
+  /** How much a card's own payment pays; `null` for any other item. */
+  cardPaymentMode?: CardPaymentMode | null;
 }
 
 export interface ItemInput extends ItemTerms {
@@ -111,6 +121,8 @@ export interface ItemInput extends ItemTerms {
   tagIds: number[];
   /** When changing an item: the change applies from this date on. */
   effectiveFrom?: string;
+  /** A card payment: how much it pays. Anything but `fixed` follows the card, and the amount sent means nothing. */
+  cardPaymentMode?: CardPaymentMode | null;
 }
 
 export const ITEMS_KEY = ["items"] as const;

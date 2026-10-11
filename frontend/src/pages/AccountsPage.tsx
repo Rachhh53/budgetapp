@@ -131,34 +131,60 @@ export function AccountsPage() {
   );
 }
 
-/** Net worth with what it is made of, in words as well as figures so the sum can be followed. */
+/**
+ * Net worth with what it is made of. Each total has its parts listed under it, a label and an
+ * amount to a line with the amounts in one column, so the sum can be followed by eye.
+ */
 function NetWorthSummary({ worth }: { worth: NetWorth }) {
   return (
     <section aria-label="Net worth" className={`${GROUP} mb-4`}>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:gap-8">
         <div>
           <p className="text-muted">Net worth</p>
           <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(worth.netWorthCents)}</p>
-          <p className="text-muted">today · what you own less what you owe</p>
+          <p className="text-muted">today</p>
         </div>
         <div>
           <p className="text-muted">You own</p>
           <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(worth.assetsCents)}</p>
-          <p className="text-muted">
-            <span data-amount>{formatCents(worth.cashCents)}</span> cash · <span data-amount>{formatCents(worth.investmentsCents)}</span>{" "}
-            invested · <span data-amount>{formatCents(worth.propertyCents)}</span> home & assets
-          </p>
+          <Parts
+            of="what you own"
+            parts={[
+              ["Cash", worth.cashCents],
+              ["Invested", worth.investmentsCents],
+              ["Home & assets", worth.propertyCents],
+            ]}
+          />
         </div>
         <div>
           <p className="text-muted">You owe</p>
           <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(worth.liabilitiesCents)}</p>
-          <p className="text-muted">
-            <span data-amount>{formatCents(worth.cardsCents)}</span> on cards · <span data-amount>{formatCents(worth.loansCents)}</span> in
-            loans
-          </p>
+          <Parts
+            of="what you owe"
+            parts={[
+              ["Cards", worth.cardsCents],
+              ["Loans", worth.loansCents],
+            ]}
+          />
         </div>
       </div>
     </section>
+  );
+}
+
+/** What a total is made of: one line per part, the label on the left and its amount lined up on the right. */
+function Parts({ of, parts }: { of: string; parts: readonly (readonly [label: string, cents: number])[] }) {
+  return (
+    <dl aria-label={`What makes up ${of}`} className="mt-1 text-muted">
+      {parts.map(([label, cents]) => (
+        <div key={label} className="flex items-baseline justify-between gap-3">
+          <dt>{label}</dt>
+          <dd data-amount className="tabular-nums">
+            {formatCents(cents)}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

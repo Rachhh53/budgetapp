@@ -369,10 +369,11 @@ function ItemRow({ item, accounts }: { item: Item; accounts: readonly Account[] 
       <Cell className="text-sm md:text-base">{describeItemSchedule(item.schedule)}</Cell>
       {/* On a phone the amount sits beside the name, where the eye looks for it. */}
       <Cell className="col-start-2 row-start-1 text-right font-semibold md:col-start-auto md:row-start-auto">
-        <Amount cents={item.perOccurrenceCents} estimate={item.estimate} />
+        {/* Sized by the card's payment setting, statement by statement: there is no one amount to show. */}
+        {item.followsCard ? <span className="text-sm">Follows the card</span> : <Amount cents={item.perOccurrenceCents} estimate={item.estimate} />}
       </Cell>
       <Cell label="Per year" className="text-sm tabular-nums md:text-right md:text-base">
-        <span data-amount>{formatCents(item.perYearCents)}</span>
+        {item.followsCard ? "—" : <span data-amount>{formatCents(item.perYearCents)}</span>}
       </Cell>
       <Cell label="Paid from" className="text-sm md:truncate md:text-base">
         {paidFrom}

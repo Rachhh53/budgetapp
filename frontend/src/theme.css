@@ -34,6 +34,11 @@
   --estimate-text: #1a56b0;
 
   --danger: #b42318;
+
+  /* A notice that something is coming up (a promotional rate ending): amber, with dark text that reads on it. */
+  --warn-bg: #fdf1dc;
+  --warn-border: #e9b866;
+  --warn-text: #6f4300;
 }
 
 :root[data-theme="dark"] {
@@ -56,6 +61,10 @@
   --estimate-text: #a9cdfa;
 
   --danger: #ff9b8f;
+
+  --warn-bg: #33250b;
+  --warn-border: #6b4e14;
+  --warn-text: #f6cf8a;
 }
 
 /* Expose the tokens to Tailwind: bg-surface, text-muted, border-line, bg-accent, … */
@@ -76,6 +85,9 @@
   --color-estimate-line: var(--estimate-border);
   --color-estimate-ink: var(--estimate-text);
   --color-danger: var(--danger);
+  --color-warn: var(--warn-bg);
+  --color-warn-line: var(--warn-border);
+  --color-warn-ink: var(--warn-text);
 
   --font-sans: "Inter Variable", system-ui, "Segoe UI", sans-serif;
   --radius-card: 0.875rem;

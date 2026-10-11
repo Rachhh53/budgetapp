@@ -13,7 +13,7 @@ describe("app shell", () => {
 
     const sidebar = screen.getAllByRole("navigation", { name: "Main" })[0]!;
     expect(within(sidebar).getByRole("link", { name: "Pay periods" })).toHaveAttribute("aria-current", "page");
-    expect(within(sidebar).getAllByRole("link")).toHaveLength(13);
+    expect(within(sidebar).getAllByRole("link")).toHaveLength(12);
     expect(screen.getByText("Data stored only on this PC")).toBeInTheDocument();
   });
 

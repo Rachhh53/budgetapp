@@ -19,6 +19,8 @@ interface EntryFieldsProps {
   kind: EntryKind;
   /** The entry being changed; leave out to add a new one. */
   entry?: Entry;
+  /** When adding: the account to start on, for a form opened for one account (a charge on a card). */
+  accountId?: number;
   /** The pay period on screen, if any: it gives the form its first date and account, and the preview. */
   period?: PeriodDetail;
   accounts: readonly Account[];
@@ -37,7 +39,7 @@ interface EntryFieldsProps {
  * out of — one of them, or what is not in any — so a bucket and its account go down together. "Pays back an expense" and uploads arrive with expenses and pay
  * stubs (Phases 8 and 9).
  */
-export function EntryFields({ kind, entry, period, accounts, categories, tags, onClose }: EntryFieldsProps) {
+export function EntryFields({ kind, entry, accountId: startOn, period, accounts, categories, tags, onClose }: EntryFieldsProps) {
   const id = useId();
   const save = useSaveEntry(entry?.id);
 
@@ -47,7 +49,7 @@ export function EntryFields({ kind, entry, period, accounts, categories, tags, o
   const [payee, setPayee] = useState(entry?.payee ?? "");
   const [date, setDate] = useState(entry?.date ?? firstDate(period));
   const [accountId, setAccountId] = useState<string | null>(
-    entry ? String(entry.accountId) : period?.primaryAccountId != null ? String(period.primaryAccountId) : null,
+    entry ? String(entry.accountId) : startOn !== undefined ? String(startOn) : period?.primaryAccountId != null ? String(period.primaryAccountId) : null,
   );
   const [toAccountId, setToAccountId] = useState<string | null>(entry?.toAccountId != null ? String(entry.toAccountId) : null);
   const [categoryId, setCategoryId] = useState<number | null>(entry?.categoryId ?? null);

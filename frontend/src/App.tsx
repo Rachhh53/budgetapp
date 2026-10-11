@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Route, Routes } from "react-router";
+import { Navigate, Route, Routes, useParams } from "react-router";
 import { useSettings } from "./api/settings";
 import { AppShell } from "./components/AppShell";
 import { NAV_ITEMS } from "./nav";
@@ -38,6 +38,9 @@ export function App() {
         ))}
         <Route path="/periods/:start" element={<PayPeriodPage />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
+        {/* Cards live under Accounts; an address that names a card still lands on its page. */}
+        <Route path="/cards" element={<Navigate to="/accounts" replace />} />
+        <Route path="/cards/:id" element={<CardRedirect />} />
         <Route path="/assets/:id" element={<AssetDetailPage />} />
         <Route path="/income/:id" element={<IncomeDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
@@ -45,4 +48,10 @@ export function App() {
       </Route>
     </Routes>
   );
+}
+
+/** A card's old address, sent on to its page under Accounts. */
+function CardRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/accounts/${id}`} replace />;
 }

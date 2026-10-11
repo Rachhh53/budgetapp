@@ -125,6 +125,17 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
 | POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |
 | DELETE | `/api/accounts/{id}/rates/{rateId}` | remove one rate |
+| GET | `/api/cards` | every credit card with what is owed today, its settings, regular APR, next payment and the promotion that ends soonest with a balance on it |
+| GET | `/api/cards/{id}` | one card: the above plus every promotion (remaining balance, days left, warning, payoff per paycheck), its statements (the next one projected, then those entered), APR history and the next close and due dates |
+| PUT | `/api/cards/{id}/minimum` | how its minimum payment is estimated until a statement with the real one is entered `{ shareBp, floorCents, plusInterest }`: a share of the statement balance (1% is 100), never less than the floor, with or without that month's interest. Needs the card's statement and due days first (409) |
+| PUT | `/api/cards/{id}/settings` | how it bills `{ statementCloseDay, dueDay, monthlyEstimateCents? }`. How it is paid is not set here: the card's payment is a recurring item (`/api/items`, kind `card_payment`, with `cardPaymentMode`) |
+| POST | `/api/cards/{id}/statements` | a statement as it arrived `{ closeDate, balanceCents, minimumDueCents?, dueDate? }`; the same closing date again replaces it |
+| DELETE | `/api/cards/{id}/statements/{statementId}` | remove one statement |
+| POST | `/api/cards/{id}/promos` | a promotional rate `{ label, kind, rateBp, startDate, endDate, originalBalanceCents?, rateAfterBp?, deferredInterest }`; `kind` is `balance_transfer`, `purchase` or `other`. `originalBalanceCents` is the amount the rate is on; left out, it is on everything the card owes, new charges included (deferred interest needs an amount) |
+| PUT, DELETE | `/api/cards/{id}/promos/{promoId}` | change or remove one promotion |
+| POST | `/api/cards/{id}/promos/{promoId}/payoff` | the payoff helper: adds a card payment every pay period until the promotion ends, sized to clear it |
+| GET, PUT | `/api/accounts/{id}/loan` | a loan's terms and what they work out to (next payment shared into interest, principal and escrow; payoff date; interest still to pay; year by year); set `{ paymentCents, paymentDay?, escrowInsuranceCents?, escrowTaxesCents?, originalPrincipalCents?, termMonths?, startDate? }`. The rate is one of the account's rates. `paymentItemId?` links the recurring item that pays it (a bill, or a transfer into the loan); `paidBy` lists what pays it |
+| POST | `/api/accounts/{id}/loan/payment` | add the loan's payment as a recurring transfer into it `{ payFromAccountId, autopay? }`, monthly on the payment day from today; refused once something pays the loan |
 | GET, POST | `/api/buckets` | buckets with today's balance; add `{ accountId, name, color, goalCents?, goalDate?, note?, startingCents?, openedOn? }` (checking and savings only); `openedOn` is the day it counts from, today or earlier. With a goal and a `goalDate`, each bucket carries `goalProgress`: `{ projectedCents, shortCents, paydaysLeft, morePerPaycheckCents, morePerMonthCents }` |
 | GET, PUT, DELETE | `/api/buckets/{id}` | one bucket with the money moved by hand; change or archive; delete (refused while a recurring item uses it) |
 | POST | `/api/buckets/{id}/changes` | put money in or take it out by hand `{ date, amountCents, note? }` (negative takes out) |
@@ -138,12 +149,12 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
 | GET | `/api/paychecks` | paychecks, today to the horizon; optional `from`, `to` |
 | GET | `/api/pay-periods` | pay periods from the primary source, each with its projected ending balance; optional `from`, `to` |
-| GET | `/api/pay-periods/{start}` | everything in the period that opens on `start`: paychecks, recurring items, one-offs, and each account's starting, in, out, ending and lowest balance, what is in its buckets, what is available after them, projected interest, and whether it dips below its low-balance threshold |
+| GET | `/api/pay-periods/{start}` | everything in the period that opens on `start`: paychecks, recurring items, one-offs, and each account's starting, in, out, ending and lowest balance, what is in its buckets, what is available after them, projected interest, and whether it dips below its low-balance threshold; `statementsPaid` says which statement each card payment that follows its card was sized from `{ itemId, scheduledDate, closeDate, entered }` |
 | GET, POST | `/api/categories` | list with item counts and yearly totals; add `{ name, color, parentId? }` |
 | PUT, DELETE | `/api/categories/{id}` | change; delete (refused while in use or while it has sub-categories) |
 | GET, POST | `/api/tags` | list; add `{ name, color }` |
 | PUT, DELETE | `/api/tags/{id}` | change; delete (refused while on an item) |
-| GET, POST | `/api/items` | recurring items; add `{ name, kind, amountCents, payFromAccountId, schedule, payToAccountId?, amountMode?, estimate?, categoryId?, autopay?, placement?, daysAfterPayday?, tagIds?, note?, bucketId?, saveUpBucketId?, fromBucketId? }`. `kind` is `bill`, `transfer`, `budget`, `card_payment` or `bucket_move`; `bucketId` is where a bucket move or transfer lands, `saveUpBucketId` the bucket a bill or budget is saved up for in |
+| GET, POST | `/api/items` | recurring items; add `{ name, kind, amountCents, payFromAccountId, schedule, payToAccountId?, amountMode?, estimate?, categoryId?, autopay?, placement?, daysAfterPayday?, tagIds?, note?, bucketId?, saveUpBucketId?, fromBucketId?, cardPaymentMode? }`. `kind` is `bill`, `transfer`, `budget`, `card_payment` or `bucket_move`; a card payment's `cardPaymentMode` is `fixed` (the amount sent) or `statement_balance`, `full_balance` or `minimum` (it follows the card, and the card needs its statement and due days first); `bucketId` is where a bucket move or transfer lands, `saveUpBucketId` the bucket a bill or budget is saved up for in |
 | GET, PUT, DELETE | `/api/items/{id}` | one item; change from `effectiveFrom` on (default today; earlier dates keep what they had, except that a change of `kind` also moves earlier versions to the new accounts and buckets, keeping their dates and amounts); delete |
 | | | buckets also take `stopAtGoal` (stop recurring bucket moves once the goal is held; a move is cut down to what still fits, and left out of the pay period once nothing does) |
 | GET | `/api/goal-pace?goalCents=&goalDate=&bucketId=&heldCents=` | what a goal would take before it is saved: projected amount, shortfall, paydays left, and what to add every paycheck or month. `bucketId` counts what is already scheduled into that bucket; `heldCents` is what it holds (or will start with) |
@@ -164,7 +175,8 @@ Every request that changes something is recorded so it can be undone, and its an
 Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Item kinds are `bill`, `transfer`,
 `budget` and `card_payment`; item schedules are `every_pay_period`, `weekly`, `biweekly`, `semi_monthly`, `monthly`,
 `every_n_months`, `yearly` and `one_time`. A balance you enter stands for the start of that day (see `spec.md` §5.3). Settings keys: `theme`,
-`accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36).
+`accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36), `promo_warning_days` (30, 45, 60, 90 or 120: how long
+before a card's promotional rate ends the warnings start).
 
 ## CI and dependency checks
 

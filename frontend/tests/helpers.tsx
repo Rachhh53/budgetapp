@@ -23,6 +23,7 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/holidays": () => ({ status: 200, data: [] }),
   "GET /api/assets": () => ({ status: 200, data: [] }),
   "GET /api/net-worth": () => ({ status: 200, data: NOTHING_OWNED }),
+  "GET /api/cards": () => ({ status: 200, data: [] }),
 };
 
 /** Net worth before anything is entered. */
@@ -53,6 +54,24 @@ const nothingThisYear: Handler = () => ({
   data: { year: 2026, soFarCents: 0, paychecksSoFar: 0, wholeYearCents: 0, paychecksInYear: 0, estimate: false },
 });
 
+/** Any loan before its terms are entered. */
+const NO_LOAN = /^GET \/api\/accounts\/\d+\/loan$/;
+const noLoanTerms: Handler = () => ({
+  status: 200,
+  data: {
+    settings: null,
+    rateBp: null,
+    balanceCents: null,
+    standardPaymentCents: null,
+    nextPayment: null,
+    payoffDate: null,
+    interestRemainingCents: null,
+    paysOff: true,
+    paidBy: [],
+    years: [],
+  },
+});
+
 /**
  * Replaces `fetch` with a tiny fake backend. Routes are keyed `"METHOD /path"` and are laid
  * over a fresh install; anything else answers 404, in the same envelope the real backend uses.
@@ -63,7 +82,7 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
     const handler =
-      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : undefined);
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;

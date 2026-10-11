@@ -269,9 +269,10 @@ describe("pay period screen: investments", () => {
     expect(income).not.toHaveTextContent("$228.71");
 
     const accounts = await panel("Accounts & buckets");
-    await userEvent.click(within(accounts).getByRole("tab", { name: "Brightwater 401(k)" }));
-    expect(within(accounts).getByRole("tabpanel")).toHaveTextContent("+$453.71");
-    expect(accounts).toHaveTextContent("Coming in includes $228.71 of assumed growth: your own assumption, not a real gain.");
+    await userEvent.selectOptions(within(accounts).getByLabelText("Account"), "Brightwater 401(k)");
+    // What really came in and what is only assumed are two lines, so "Coming in" is real money.
+    expect(within(accounts).getByText("Coming in").parentElement).toHaveTextContent("+$225.00");
+    expect(within(accounts).getByText("Assumed growth · not a real gain").parentElement).toHaveTextContent("+$228.71");
   });
 });
 
@@ -371,6 +372,53 @@ describe("pay period screen", () => {
     expect(within(manual).getByText("1 of 3 paid")).toBeInTheDocument();
   });
 
+  it("keeps the account chosen in Accounts & buckets when moving to another pay period", async () => {
+    withPeriod();
+    renderApp();
+
+    const accounts = await panel("Accounts & buckets");
+    await userEvent.selectOptions(within(accounts).getByLabelText("Account"), "Rainy Day Savings");
+    // Every way to another period carries the choice along.
+    expect(screen.getByRole("link", { name: "Next pay period, Oct 15 to Oct 31" })).toHaveAttribute("href", "/periods/2026-10-15?account=2");
+
+    await userEvent.click(screen.getByRole("link", { name: "Next pay period, Oct 15 to Oct 31" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Oct 15 – Oct 31, 2026" })).toBeInTheDocument();
+    expect(within(await panel("Accounts & buckets")).getByLabelText("Account")).toHaveDisplayValue("Rainy Day Savings");
+  });
+
+  it("warns at the top of the screen about a bill paid by hand that is past due", async () => {
+    const rent: Occurrence = { ...ELECTRIC, itemId: 7, name: "Rent", scheduledDate: "2020-10-01", dueDate: "2020-10-01", periodStart: "2020-09-15", payBy: "2020-09-30", estimate: false };
+    withPeriod({ ...OCTOBER, carriedOver: [rent] });
+    renderApp();
+
+    const warning = await screen.findByRole("alert", { name: "Past due" });
+    expect(warning).toHaveTextContent("1 bill is past due");
+    expect(warning).toHaveTextContent("Rent · $140.00 · was due Oct 1, 2020");
+    // Its own row says so too, in words.
+    const manual = await panel("Pay manually & one-offs");
+    expect(within(manual).getByText("Past due")).toBeInTheDocument();
+  });
+
+  it("has no past-due warning for a bill that is paid, on autopay, or not due yet", async () => {
+    const late: Occurrence = { ...ELECTRIC, itemId: 7, name: "Rent", scheduledDate: "2020-10-01", dueDate: "2020-10-01", estimate: false };
+    withPeriod({
+      ...OCTOBER,
+      occurrences: [
+        // Paid, though late: it says so on its row, and is no longer a warning.
+        { ...late, paid: true, paidDate: "2020-10-09" },
+        { ...late, itemId: 8, name: "Water", autopay: true },
+        { ...late, itemId: 9, name: "Phone", scheduledDate: "2099-10-01", dueDate: "2099-10-01" },
+      ],
+      carriedOver: [],
+    });
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(within(manual).getByText(/✓ Paid Oct 9/)).toHaveTextContent("✓ Paid Oct 9 · late");
+    expect(screen.queryByRole("alert", { name: "Past due" })).not.toBeInTheDocument();
+    expect(within(manual).queryByText("Past due")).not.toBeInTheDocument();
+  });
+
   it("moves to the next period from the arrows, the strip and the arrow keys", async () => {
     withPeriod();
     renderApp();
@@ -392,16 +440,16 @@ describe("pay period screen", () => {
     renderApp();
 
     const accounts = await panel("Accounts & buckets");
-    expect(within(accounts).getByRole("tab", { name: "Everyday Checking" })).toHaveAttribute("aria-selected", "true");
+    expect(within(accounts).getByLabelText("Account")).toHaveDisplayValue("Everyday Checking");
     expect(within(accounts).getByText("Ending balance").closest("div")).toHaveTextContent("$3,096.10");
     // Savings has no balance entered yet: it still has a tab, which says so instead of going missing.
-    await userEvent.click(within(accounts).getByRole("tab", { name: "Rainy Day Savings" }));
-    expect(within(accounts).getByRole("tabpanel")).toHaveTextContent(
+    await userEvent.selectOptions(within(accounts).getByLabelText("Account"), "Rainy Day Savings");
+    expect(accounts).toHaveTextContent(
       "No balance was entered for Rainy Day Savings on or before Oct 14, so there is nothing to show for it in this pay period.",
     );
     expect(within(accounts).getByRole("link", { name: "Enter a balance" })).toHaveAttribute("href", "/accounts/2");
 
-    await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
+    await userEvent.selectOptions(within(accounts).getByLabelText("Account"), "Visa");
 
     expect(within(accounts).getByText("Owed at period end").closest("div")).toHaveTextContent("$0.00");
     expect(within(accounts).getByText("Paid off").closest("div")).toHaveTextContent("−$612.48");
@@ -471,7 +519,7 @@ describe("pay period screen", () => {
     renderApp();
 
     const accounts = await panel("Accounts & buckets");
-    await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
+    await userEvent.selectOptions(within(accounts).getByLabelText("Account"), "Visa");
     expect(within(accounts).getByText("First balance, entered Oct 20").closest("div")).toHaveTextContent("$612.48");
     expect(accounts).toHaveTextContent("Nothing is counted for Visa before the first balance you entered");
     // Nothing has been added up yet, so there are no in and out lines to mislead.
@@ -499,7 +547,7 @@ describe("pay period screen", () => {
     renderApp();
 
     const accounts = await panel("Accounts & buckets");
-    await userEvent.click(within(accounts).getByRole("tab", { name: "Visa" }));
+    await userEvent.selectOptions(within(accounts).getByLabelText("Account"), "Visa");
     expect(within(accounts).getByText("Owed Oct 1").closest("div")).toHaveTextContent("$612.48");
     expect(accounts).not.toHaveTextContent(/built from/i);
   });

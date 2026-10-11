@@ -7,6 +7,8 @@ import type { Category, Tag } from "../../api/categories";
 import { usePayPeriods } from "../../api/income";
 import {
   type AmountMode,
+  CARD_PAYMENT_MODES,
+  type CardPaymentMode,
   type Item,
   ITEM_FREQUENCIES,
   ITEM_KINDS,
@@ -31,6 +33,7 @@ import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { Segmented } from "../Segmented";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { PAYMENT_MODE_HELP, PAYMENT_MODE_LABELS } from "../cards/labels";
 import { ITEM_FREQUENCY_LABELS, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
 
 const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind], icon: KIND_ICONS[kind] }));
@@ -98,6 +101,11 @@ interface ItemFormProps {
    * saving one part changes nothing in the others. Left out, the whole form shows.
    */
   part?: ItemPart;
+  /**
+   * A new item that is already known to be something: a card's payment added from the card's page
+   * starts as a payment into that card, due on its due day. Everything can still be changed.
+   */
+  starting?: { kind: ItemKind; name: string; payToAccountId: number; day1?: number; cardPaymentMode?: CardPaymentMode };
   /** Told which screen of a new item is showing (0 is the first), so whatever frames the form can make room for it. */
   onStep?: (step: number) => void;
 }
@@ -139,22 +147,26 @@ export function ItemForm(props: ItemFormProps) {
 const NOT_IN_A_BUCKET = "none";
 
 /** The form itself, without a dialog around it, so the + Add item form can show it too. */
-export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink, part, onStep }: ItemFormProps) {
+export function ItemFormBody({ item, accounts, categories, tags, onClose, onDeleted, pageLink, part, starting, onStep }: ItemFormProps) {
   const id = useId();
   const save = useSaveItem(item?.id);
   const replace = useReplaceItem(item?.id);
   const schedule = item?.schedule;
 
-  const [kind, setKind] = useState<ItemKind>(item?.kind ?? "bill");
-  const [name, setName] = useState(item?.name ?? "");
+  const [kind, setKind] = useState<ItemKind>(item?.kind ?? starting?.kind ?? "bill");
+  const [name, setName] = useState(item?.name ?? starting?.name ?? "");
   const [categoryId, setCategoryId] = useState<number | null>(item?.categoryId ?? null);
   const [payFrom, setPayFrom] = useState<string | null>(item ? String(item.payFromAccountId) : null);
-  const [payTo, setPayTo] = useState<string | null>(item?.payToAccountId != null ? String(item.payToAccountId) : null);
+  const [payTo, setPayTo] = useState<string | null>(
+    item?.payToAccountId != null ? String(item.payToAccountId) : starting ? String(starting.payToAccountId) : null,
+  );
+  // How much a card payment pays: an amount of its own, or whatever the card works out (its statement balance, say).
+  const [cardMode, setCardMode] = useState<CardPaymentMode>(item?.cardPaymentMode ?? starting?.cardPaymentMode ?? "fixed");
   const [amountMode, setAmountMode] = useState<AmountMode>(item?.amountMode ?? "per_occurrence");
   const [amount, setAmount] = useState(item ? centsToInput(item.amountCents) : "");
   const [estimate, setEstimate] = useState(item?.estimate ?? false);
   const [frequency, setFrequency] = useState<ItemFrequency>(schedule?.frequency ?? "monthly");
-  const [day1, setDay1] = useState(schedule?.day1 ?? 1);
+  const [day1, setDay1] = useState(schedule?.day1 ?? starting?.day1 ?? 1);
   const [day2, setDay2] = useState(schedule?.day2 ?? 15);
   const [month, setMonth] = useState(schedule?.month ?? 1);
   const [monthsApart, setMonthsApart] = useState(schedule?.interval && schedule.interval > 1 ? schedule.interval : 3);
@@ -231,6 +243,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   };
 
   const movesMoney = kind === "transfer" || kind === "card_payment";
+  // A payment that follows its card has no amount to type: the card works it out each time.
+  const followsCard = kind === "card_payment" && cardMode !== "fixed";
   const everyPaycheck = frequency === "every_pay_period";
   // These repeat from a date the user gives; the rest name their own day of the month or year.
   const countsFromADate = frequency === "weekly" || frequency === "biweekly" || frequency === "one_time";
@@ -249,7 +263,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
 
   /** Turns the form into a request, or explains what still needs attention. */
   const toInput = (): ItemInput | Problem => {
-    const amountCents = parseDollars(amount);
+    const amountCents = followsCard ? 0 : parseDollars(amount);
     if (amountCents === null || amountCents < 0) {
       return { part: "amount", problem: AMOUNT_HELP };
     }
@@ -285,8 +299,10 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
       archived,
       tagIds,
       amountCents,
-      amountMode,
-      estimate,
+      amountMode: followsCard ? "per_occurrence" : amountMode,
+      estimate: followsCard || estimate,
+      // Only a card payment says how much it pays; nothing else has the choice.
+      ...(kind === "card_payment" ? { cardPaymentMode: cardMode } : {}),
       categoryId,
       payFromAccountId: Number(paidFrom),
       payToAccountId: movesMoney && payTo !== null ? Number(payTo) : null,
@@ -399,29 +415,53 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
 
         {shows("amount") && (
           <FormSection title="Amount">
-            <div>
-              <MoneyField
-                label={amountMode === "annual" ? "Per year" : "Amount each time"}
-                value={amount}
-                onChange={setAmount}
-                hint={amountMode === "annual" ? "Shared out evenly over its schedule." : undefined}
-                required
-                hero
-              />
-            </div>
-            {/* Side by side where there is room, so the amount is one glance, not three rows. */}
-            <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 sm:items-end">
-              <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={estimate}
-                  onChange={(event) => setEstimate(event.target.checked)}
-                  className="size-5 accent-(--accent)"
-                />
-                <span>It's an estimate</span>
-              </label>
-            </div>
+            {kind === "card_payment" && (
+              <div>
+                <label htmlFor={`${id}-card-mode`} className={LABEL}>
+                  How much it pays
+                </label>
+                <select
+                  id={`${id}-card-mode`}
+                  value={cardMode}
+                  onChange={(event) => setCardMode(event.target.value as CardPaymentMode)}
+                  className={INPUT}
+                >
+                  {CARD_PAYMENT_MODES.map((choice) => (
+                    <option key={choice} value={choice}>
+                      {PAYMENT_MODE_LABELS[choice]}
+                    </option>
+                  ))}
+                </select>
+                <p className={HINT}>{PAYMENT_MODE_HELP[cardMode]}</p>
+              </div>
+            )}
+            {!followsCard && (
+              <>
+                <div>
+                  <MoneyField
+                    label={amountMode === "annual" ? "Per year" : "Amount each time"}
+                    value={amount}
+                    onChange={setAmount}
+                    hint={amountMode === "annual" ? "Shared out evenly over its schedule." : undefined}
+                    required
+                    hero
+                  />
+                </div>
+                {/* Side by side where there is room, so the amount is one glance, not three rows. */}
+                <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 sm:items-end">
+                  <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+                  <label className="flex min-h-11 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={estimate}
+                      onChange={(event) => setEstimate(event.target.checked)}
+                      className="size-5 accent-(--accent)"
+                    />
+                    <span>It's an estimate</span>
+                  </label>
+                </div>
+              </>
+            )}
           </FormSection>
         )}
 
@@ -479,7 +519,14 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                 />
               )}
               {kind === "transfer" && (
-                <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
+                <div>
+                  <Picker label="To" noun="account" placeholder="Choose or type an account" options={accountOptions} value={payTo} onChange={setPayTo} />
+                  {accounts.some((account) => String(account.id) === payTo && account.type === "loan") && (
+                    <p className={HINT}>
+                      This is the loan's payment. Each one lowers what you owe, less the insurance and taxes entered on the loan's page.
+                    </p>
+                  )}
+                </div>
               )}
               {transferBuckets.length > 0 && (
                 <Picker

@@ -23,6 +23,55 @@ class InterestProjectionTest {
     private static final InterestTerms LAST_DAY_AT_410 =
             new InterestTerms(31, List.of(new RateChange(date("2026-01-01"), BasisPoints.of(410))));
 
+    private static final InterestTerms GROWING_AT_7 =
+            InterestTerms.growingDaily(List.of(new RateChange(date("2026-01-01"), BasisPoints.of(700))));
+
+    @Test
+    void assumedGrowthBuildsUpEveryDaySoEveryPeriodHasItsShare() {
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-01", 4_000_000)), List.of(), PERIODS, GROWING_AT_7);
+
+        // Nothing on the day of the balance, which already holds what came before; then every day after it.
+        assertThat(projection.interest().getFirst().date()).isEqualTo(date("2026-10-02"));
+        assertThat(projection.interest()).hasSize(60);
+        // 40,000.00 × ((1.07)^(1/365) − 1) = 7.415… a day: whole cents are added, the rest carried.
+        assertThat(projection.interest().getFirst().amount()).isEqualTo(cents(741));
+        assertThat(projection.balances()).allSatisfy(period -> assertThat(period.in().isZero()).isFalse());
+        // Thirteen days of it in the first period (the balance's own day has none): 13 × 7.42… = 96.50.
+        assertThat(projection.balances().get(0).in()).isEqualTo(cents(9650));
+        // Seventeen in the second, each on a balance that holds the days before.
+        assertThat(projection.balances().get(1).in().cents()).isBetween(12_630L, 12_660L);
+    }
+
+    @Test
+    void aYearOfDailyGrowthComesToTheYearlyRate() {
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-01", 4_000_000)), List.of(), List.of(period("2026-10-01", "2027-10-01")), GROWING_AT_7);
+
+        // 365 days at 7% a year on 40,000.00 is 2,800.00, less the fraction of a cent still being carried.
+        assertThat(projection.balances().getFirst().ending()).isEqualTo(cents(4_279_999));
+    }
+
+    @Test
+    void aSmallBalanceIsNotRoundedUpIntoGrowingFaster() {
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-01", 10_000)), List.of(), List.of(period("2026-10-01", "2027-10-01")), GROWING_AT_7);
+
+        // 100.00 earns under two cents a day. A year still comes to 7.00 (less the fraction being carried), not two cents for every day.
+        assertThat(projection.balances().getFirst().ending()).isEqualTo(cents(10_699));
+    }
+
+    @Test
+    void aBalanceEnteredLaterAlreadyHoldsTheGrowthBeforeIt() {
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-01", 4_000_000), anchor("2026-10-20", 4_100_000)), List.of(), PERIODS, GROWING_AT_7);
+
+        // Nothing is added on the day of the second balance, and the days after it grow on that balance.
+        assertThat(projection.interest()).extracting(InterestCredit::date).doesNotContain(date("2026-10-20"));
+        assertThat(projection.interest().stream().filter(credit -> credit.date().equals(date("2026-10-21"))).findFirst().orElseThrow().balance())
+                .isEqualTo(cents(4_100_000));
+    }
+
     @Test
     void interestIsCreditedOnTheCreditDayAndCountsAsMoneyIn() {
         Projection projection = BalanceProjector.project(

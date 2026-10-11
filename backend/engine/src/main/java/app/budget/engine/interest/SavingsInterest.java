@@ -25,8 +25,9 @@ public final class SavingsInterest {
     /** 34 significant digits: far more than cents on any household balance can need. */
     private static final MathContext PRECISION = MathContext.DECIMAL128;
 
-    private static final BigDecimal MONTHS = BigDecimal.valueOf(12);
     private static final int MONTHS_IN_YEAR = 12;
+
+    private static final int DAYS_IN_YEAR = 365;
 
     /** Newton's method settles in a handful of steps; this only stops a rate that never would. */
     private static final int MAX_STEPS = 60;
@@ -35,16 +36,31 @@ public final class SavingsInterest {
 
     /** One month's rate for a yearly APY: {@code (1 + APY)^(1/12) − 1}. */
     public static BigDecimal monthlyRate(BasisPoints apy) {
+        return partOfAYearRate(apy, MONTHS_IN_YEAR);
+    }
+
+    /**
+     * One day's rate for a yearly rate: {@code (1 + rate)^(1/365) − 1}. A year of these, each on
+     * a balance that holds the days before, comes to the yearly rate; a leap year's extra day
+     * adds one more, which an assumption can bear.
+     */
+    public static BigDecimal dailyRate(BasisPoints apy) {
+        return partOfAYearRate(apy, DAYS_IN_YEAR);
+    }
+
+    /** The rate for one of {@code parts} equal parts of a year: {@code (1 + APY)^(1/parts) − 1}. */
+    private static BigDecimal partOfAYearRate(BasisPoints apy, int parts) {
         if (apy.value() < 0) {
             throw new IllegalArgumentException("An APY cannot be negative");
         }
+        BigDecimal count = BigDecimal.valueOf(parts);
         BigDecimal target = BigDecimal.ONE.add(apy.toFraction());
-        // Newton's method on x^12 = target, starting from the simple-interest guess.
-        BigDecimal root = BigDecimal.ONE.add(apy.toFraction().divide(MONTHS, PRECISION));
+        // Newton's method on x^parts = target, starting from the simple-interest guess.
+        BigDecimal root = BigDecimal.ONE.add(apy.toFraction().divide(count, PRECISION));
         for (int step = 0; step < MAX_STEPS; step++) {
-            BigDecimal eleventh = root.pow(MONTHS_IN_YEAR - 1, PRECISION);
+            BigDecimal oneFewer = root.pow(parts - 1, PRECISION);
             BigDecimal next = root.subtract(
-                    eleventh.multiply(root, PRECISION).subtract(target).divide(MONTHS.multiply(eleventh, PRECISION), PRECISION),
+                    oneFewer.multiply(root, PRECISION).subtract(target).divide(count.multiply(oneFewer, PRECISION), PRECISION),
                     PRECISION);
             if (next.compareTo(root) == 0) {
                 break;

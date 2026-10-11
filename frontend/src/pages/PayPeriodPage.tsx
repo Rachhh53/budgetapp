@@ -1,8 +1,8 @@
-import { ChevronLeft, ChevronRight, Info, PartyPopper } from "lucide-react";
-import { EditButton } from "../components/EditButton";
+import { ChevronLeft, ChevronRight, Info, PartyPopper, TriangleAlert } from "lucide-react";
+import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Bucket, useBuckets } from "../api/buckets";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
@@ -22,10 +22,12 @@ import {
 import { AddItemButton, useAddItem } from "../components/add/AddItem";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
+import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { ItemForm } from "../components/items/ItemForm";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
+import { INPUT } from "../components/ui";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -46,8 +48,6 @@ const EDITABLE = "input, textarea, select, [contenteditable='true'], [role='dial
  * On a wide screen everything fits without scrolling the page — the three columns scroll
  * inside themselves only if a period holds more than fits. On a phone it is one column,
  * with what needs doing by hand first.
- *
- * The credit cards panel arrives in Phase 5.
  */
 export function PayPeriodPage() {
   const { start: startParam } = useParams();
@@ -66,6 +66,7 @@ export function PayPeriodPage() {
   const tags = useTags();
   const items = useItems();
   const buckets = useBuckets();
+  // Only for the cards panel: the period itself is shown whether or not this has arrived.
 
   const nearby = around.data?.periods ?? [];
   const at = nearby.findIndex((candidate) => candidate.start === start);
@@ -128,6 +129,23 @@ export function PayPeriodPage() {
     tags: tags.data,
     items: items.data,
     editItem: setEditingItem,
+    statementFor: (occurrence) => {
+      const paid = (detail.statementsPaid ?? []).find(
+        (candidate) => candidate.itemId === occurrence.itemId && candidate.scheduledDate === occurrence.scheduledDate,
+      );
+      const mode = items.data.find((item) => item.id === occurrence.itemId)?.cardPaymentMode;
+      // An amount typed over this one payment is no longer the statement's figure.
+      if (paid === undefined || !mode || occurrence.projectedCents !== null) {
+        return undefined;
+      }
+      const what = PAYMENT_MODE_LABELS[mode];
+      if (paid.entered) {
+        return `${what} on the statement that closed ${formatDay(paid.closeDate)}`;
+      }
+      return paid.closeDate > todayIso()
+        ? `${what}, estimated for the statement closing ${formatDay(paid.closeDate)}`
+        : `${what}, estimated for the statement that closed ${formatDay(paid.closeDate)} (not entered yet)`;
+    },
   };
 
   return (
@@ -154,6 +172,8 @@ export function PayPeriodPage() {
       </header>
 
       <PeriodStrip periods={stripAround(nearby, at)} selected={detail.start} />
+
+      <PastDue bills={pastDue([...detail.carriedOver, ...lists.manual])} />
 
       {primary && primaryAccount ? (
         <Figures balance={primary} account={primaryAccount} detail={detail} />
@@ -203,6 +223,7 @@ export function PayPeriodPage() {
             periodEnd={detail.end}
             primaryAccountId={detail.primaryAccountId}
             interest={detail.interest}
+            promosEnding={detail.promosEnding ?? []}
           />
         </div>
       </div>
@@ -234,11 +255,27 @@ interface RowContext {
   tags: readonly Tag[];
   items: readonly Item[];
   editItem: (item: Item) => void;
+  /** For a card payment that follows its card: what the amount is, and which statement it is for. */
+  statementFor: (occurrence: Occurrence) => string | undefined;
+}
+
+/** The account chosen in Accounts & buckets, kept in the address so it goes along from one pay period to the next. */
+const ACCOUNT_PARAM = "account";
+
+/**
+ * The way to another pay period that keeps what is chosen on this one (the account showing in
+ * Accounts & buckets), so stepping through periods follows one account. Coming back to the
+ * screen from elsewhere in the app starts afresh.
+ */
+function usePeriodPath(): (start: string) => string {
+  const { search } = useLocation();
+  return (start) => `/periods/${start}${search}`;
 }
 
 /** ← and → move between periods, unless the keys are being used to type or to work a dialog. */
 function useArrowKeys(previous: string | undefined, next: string | undefined) {
   const navigate = useNavigate();
+  const pathTo = usePeriodPath();
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
@@ -250,12 +287,13 @@ function useArrowKeys(previous: string | undefined, next: string | undefined) {
       const to = event.key === "ArrowLeft" ? previous : event.key === "ArrowRight" ? next : undefined;
       if (to !== undefined) {
         event.preventDefault();
-        void navigate(`/periods/${to}`);
+        void navigate(pathTo(to));
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate, previous, next]);
+    // The path only changes with the address, which is read again each time the keys are bound.
+  }, [navigate, previous, next, pathTo]);
 }
 
 /** The period before the one on screen, then it and the ones after: eight in all. */
@@ -320,6 +358,7 @@ function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
 
 function PeriodLink({ to, label, icon: Icon }: { to: PayPeriod | undefined; label: string; icon: typeof ChevronLeft }) {
   const box = "flex size-11 shrink-0 items-center justify-center rounded-lg border border-line bg-surface";
+  const pathTo = usePeriodPath();
   if (to === undefined) {
     // Kept in place, dimmed, so the title does not jump when there is nowhere further to go.
     return (
@@ -329,7 +368,7 @@ function PeriodLink({ to, label, icon: Icon }: { to: PayPeriod | undefined; labe
     );
   }
   return (
-    <Link to={`/periods/${to.start}`} aria-label={`${label}, ${formatDay(to.start)} to ${formatDay(to.end)}`} className={box}>
+    <Link to={pathTo(to.start)} aria-label={`${label}, ${formatDay(to.start)} to ${formatDay(to.end)}`} className={box}>
       <Icon aria-hidden className="size-5" />
     </Link>
   );
@@ -337,6 +376,7 @@ function PeriodLink({ to, label, icon: Icon }: { to: PayPeriod | undefined; labe
 
 /** Ending balances, period by period, so a tight one ahead is seen coming (the strip in the mockup). */
 function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; selected: string }) {
+  const pathTo = usePeriodPath();
   if (periods.length === 0 || periods.every((period) => period.projectedEndingCents === null)) {
     return null;
   }
@@ -351,7 +391,7 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
         {periods.map((period) => (
           <li key={period.start} className="min-w-28 flex-1">
             <Link
-              to={`/periods/${period.start}`}
+              to={pathTo(period.start)}
               aria-current={period.start === selected ? "page" : undefined}
               className={`block rounded-lg bg-surface px-3 py-1.5 ${
                 period.start === selected ? "border-2 border-accent" : "border border-line"
@@ -364,6 +404,13 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
                   <span className="font-semibold text-danger">
                     {" "}
                     · Low<span className="sr-only"> balance</span>
+                  </span>
+                )}
+                {(period.promosEnding?.length ?? 0) > 0 && (
+                  // Kept to one word on screen so the strip stays one line high; the cards panel below says the rest.
+                  <span title="A promotional rate ends in this pay period with a balance left" className="font-semibold text-warn-ink">
+                    {" "}
+                    · Promo<span className="sr-only"> rate ends</span>
                   </span>
                 )}
               </span>
@@ -569,7 +616,11 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="py-1 text-sm text-muted">{children}</p>;
 }
 
-/** A row: what it is on the left, the amount on the right, in a column that lines up. */
+/**
+ * A row: what it is on the left, the amount on the right, in a column that lines up. A row that
+ * can be opened has no pencil: like every list row in the app it shows the highlight and the hand
+ * cursor, and opens when clicked or tapped anywhere (its name is the button that does it).
+ */
 function Row({
   lead,
   title,
@@ -609,18 +660,16 @@ function Row({
   );
 }
 
-/** A recurring item's name, with the button that opens it for a "this and all future" change. */
+/** Under a card payment that follows its card: what the amount is and which statement it pays, so an estimate explains itself. */
+function StatementNote({ occurrence, context }: { occurrence: Occurrence; context: RowContext }) {
+  const note = context.statementFor(occurrence);
+  return note === undefined ? null : <span className="block">{note}</span>;
+}
+
+/** A recurring item's name, which opens it for a "this and all future" change. */
 function ItemName({ occurrence, context }: { occurrence: Occurrence; context: RowContext }) {
   const item = context.items.find((candidate) => candidate.id === occurrence.itemId);
-  if (item === undefined) {
-    return <>{occurrence.name}</>;
-  }
-  return (
-    <span className="flex items-center gap-1">
-      <span className="min-w-0">{occurrence.name}</span>
-      <EditButton name={occurrence.name} onClick={() => context.editItem(item)} />
-    </span>
-  );
+  return item === undefined ? <>{occurrence.name}</> : <EditName name={occurrence.name} onClick={() => context.editItem(item)} />;
 }
 
 /** The amount of one occurrence, typed over in place: just this one, or this and all future. */
@@ -629,7 +678,8 @@ function OccurrenceAmount({ occurrence, context }: { occurrence: Occurrence; con
   const changeFuture = useChangeItemAmount();
   const item = context.items.find((candidate) => candidate.id === occurrence.itemId);
   // A yearly total is shared out by the app, so one occurrence's amount cannot stand for the item's.
-  const canChangeFuture = item !== undefined && item.amountMode === "per_occurrence";
+  // Nor can a payment that follows its card: it has no amount of its own to change from here on.
+  const canChangeFuture = item !== undefined && item.amountMode === "per_occurrence" && !item.followsCard;
 
   const save = (amountCents: number, scope: EditScope) => {
     if (scope === "future" && item !== undefined) {
@@ -680,15 +730,10 @@ function PaycheckAmount({ paycheck }: { paycheck: Paycheck }) {
   );
 }
 
-/** A one-off's description, with the button that opens it in the + Add item form. */
+/** A one-off's description, which opens it in the + Add item form. */
 function EntryName({ entry }: { entry: Entry }) {
   const { editEntry } = useAddItem();
-  return (
-    <span className="flex items-center gap-1">
-      <span className="min-w-0">{entry.description}</span>
-      <EditButton name={entry.description} onClick={() => editEntry(entry)} />
-    </span>
-  );
+  return <EditName name={entry.description} onClick={() => editEntry(entry)} />;
 }
 
 function Dot({ color }: { color: string | undefined }) {
@@ -798,8 +843,15 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
               lead={<span className="shrink-0 rounded-md bg-bg px-1.5 py-0.5 text-xs font-semibold text-muted">AUTO</span>}
               title={<ItemName occurrence={occurrence} context={context} />}
-              detail={`${formatDay(occurrence.payBy)} · ${whereItGoes(occurrence, context)}`}
+              detail={
+                <>
+                  {formatDay(occurrence.payBy)} · {whereItGoes(occurrence, context)}
+                  <StatementNote occurrence={occurrence} context={context} />
+                </>
+              }
               amount={<OccurrenceAmount occurrence={occurrence} context={context} />}
+              // Which statement a card payment is for is the point of that line, so it is never cut short.
+              wrap={context.statementFor(occurrence) !== undefined}
             />
           ))}
         </ul>
@@ -847,6 +899,49 @@ function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurren
         </>
       )}
     </Panel>
+  );
+}
+
+/**
+ * The bills paid by hand whose due date has gone by without a tick: listed once each, earliest
+ * first. A bill on autopay is taken as paid on its day, so it is never one of these.
+ */
+function pastDue(bills: readonly Occurrence[]): Occurrence[] {
+  const today = todayIso();
+  const seen = new Set<string>();
+  return bills
+    .filter((bill) => !bill.paid && !bill.skipped && !bill.autopay && bill.kind !== "budget" && bill.dueDate < today)
+    .filter((bill) => {
+      const key = `${bill.itemId}-${bill.scheduledDate}`;
+      return !seen.has(key) && seen.add(key);
+    })
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.name.localeCompare(b.name));
+}
+
+/**
+ * The warning at the top of the screen while anything is past due. Said in words and set apart,
+ * with an icon, never by color alone: a missed bill is the first thing to see. Paying late is
+ * allowed: ticking the bill records the day it was paid, and the warning goes.
+ */
+function PastDue({ bills }: { bills: readonly Occurrence[] }) {
+  if (bills.length === 0) {
+    return null;
+  }
+  return (
+    <section role="alert" aria-label="Past due" className="rounded-card border-2 border-danger bg-surface px-4 py-3">
+      <p className="flex items-center gap-2 text-lg font-bold text-danger">
+        <TriangleAlert aria-hidden className="size-6 shrink-0" />
+        {bills.length === 1 ? "1 bill is past due" : `${bills.length} bills are past due`}
+      </p>
+      <ul className="mt-1 space-y-0.5">
+        {bills.map((bill) => (
+          <li key={`${bill.itemId}-${bill.scheduledDate}`} className="font-semibold">
+            {bill.name} · <span data-amount>{formatCents(bill.amountCents)}</span> · was due {formatDate(bill.dueDate)}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-sm text-muted">Tick each one under Pay manually when it is paid. The day you tick it is kept as the day it was paid.</p>
+    </section>
   );
 }
 
@@ -912,6 +1007,9 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
   const checkboxId = useId();
 
   const due = `Due ${formatDay(occurrence.dueDate)}`;
+  const isPastDue = pastDue([occurrence]).length > 0;
+  // Paying late is allowed, and is kept on record: the day it was paid, against the day it was due.
+  const paidLate = occurrence.paid && occurrence.paidDate !== null && occurrence.paidDate > occurrence.dueDate;
   const payBy = occurrence.payBy === occurrence.dueDate ? "" : ` · pay by ${formatDay(occurrence.payBy)}`;
   const detail = `${due}${payBy} · ${whereItGoes(occurrence, context)}`;
 
@@ -937,6 +1035,14 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
       detail={
         <>
           {detail}
+          <StatementNote occurrence={occurrence} context={context} />
+          {/* In words with an icon, never color alone. */}
+          {isPastDue && (
+            <span className="flex items-center gap-1 font-bold text-danger">
+              <TriangleAlert aria-hidden className="size-4 shrink-0" />
+              Past due
+            </span>
+          )}
           {carriedOver && <span className="block font-medium text-ink">Still unpaid from an earlier period</span>}
         </>
       }
@@ -949,6 +1055,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
           {occurrence.paid && (
             <span className="text-sm font-semibold">
               ✓ Paid{occurrence.paidDate ? ` ${formatDay(occurrence.paidDate)}` : ""}
+              {paidLate && " · late"}
             </span>
           )}
           <ConfirmationCode
@@ -976,8 +1083,9 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
 }
 
 /**
- * Where every account stands at the end of the period, and what its buckets hold: one tab
- * per account with a balance.
+ * Where every account stands at the end of the period, and what its buckets hold: one account
+ * at a time, chosen from a list. A list rather than a row of tabs, so the panel is the same
+ * height however many accounts there are and nothing has to be scrolled sideways to reach one.
  */
 function AccountsPanel({
   balances,
@@ -989,6 +1097,7 @@ function AccountsPanel({
   periodEnd,
   primaryAccountId,
   interest,
+  promosEnding,
 }: {
   balances: readonly AccountPeriod[];
   accounts: readonly Account[];
@@ -999,14 +1108,29 @@ function AccountsPanel({
   periodEnd: string;
   primaryAccountId: number | null;
   interest: readonly InterestLine[];
+  /** Promotional rates that run out during this period with a balance still on them, on any card. */
+  promosEnding: NonNullable<PeriodDetail["promosEnding"]>;
 }) {
   const id = useId();
-  // Every account gets a tab, so one never seems to have gone missing: an account with no balance
-  // entered by the end of this period has nothing to show yet, and its tab says so.
+  // Every account is in the list, so one never seems to have gone missing: an account with no balance
+  // entered by the end of this period has nothing to show yet, and says so when chosen.
   const known = accounts
     .map((account) => ({ account, balance: balances.find((candidate) => candidate.accountId === account.id) }))
     .filter((tab) => tab.balance !== undefined || !tab.account.archived);
-  const [chosen, setChosen] = useState<number | null>(null);
+  // Kept in the address rather than in the panel, so the same account is still showing in the next pay period.
+  const [search, setSearch] = useSearchParams();
+  const asked = Number(search.get(ACCOUNT_PARAM));
+  const chosen = Number.isInteger(asked) && asked > 0 ? asked : null;
+  const setChosen = (accountId: number) =>
+    setSearch(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.set(ACCOUNT_PARAM, String(accountId));
+        return next;
+      },
+      // Choosing an account is not a step to go Back through.
+      { replace: true },
+    );
   const shown =
     known.find((tab) => tab.account.id === (chosen ?? primaryAccountId)) ?? known.find((tab) => tab.balance !== undefined) ?? known[0];
 
@@ -1024,24 +1148,23 @@ function AccountsPanel({
     );
   }
 
-  const tabs = (
-    <div role="tablist" aria-label="Accounts" className="mb-2 flex gap-1 overflow-x-auto rounded-lg bg-bg p-1">
-      {known.map(({ account }) => (
-        <button
-          key={account.id}
-          type="button"
-          role="tab"
-          id={`${id}-tab-${account.id}`}
-          aria-selected={account.id === shown.account.id}
-          aria-controls={`${id}-panel`}
-          onClick={() => setChosen(account.id)}
-          className={`min-h-11 shrink-0 rounded-md px-3 text-sm lg:min-h-9 ${
-            account.id === shown.account.id ? "bg-surface font-semibold shadow-sm" : "text-muted"
-          }`}
-        >
-          {account.name}
-        </button>
-      ))}
+  const picker = (
+    <div className="mb-2">
+      <label htmlFor={`${id}-account`} className="sr-only">
+        Account
+      </label>
+      <select
+        id={`${id}-account`}
+        value={shown.account.id}
+        onChange={(event) => setChosen(Number(event.target.value))}
+        className={`${INPUT} font-semibold`}
+      >
+        {known.map(({ account }) => (
+          <option key={account.id} value={account.id}>
+            {account.name}
+          </option>
+        ))}
+      </select>
     </div>
   );
 
@@ -1050,8 +1173,8 @@ function AccountsPanel({
   if (balance === undefined) {
     return (
       <Panel title="Accounts & buckets" aside="at period end">
-        {tabs}
-        <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`}>
+        {picker}
+        <div>
           <Empty>
             No balance was entered for {shown.account.name} on or before {formatDay(periodEnd)}, so there is nothing to show for it in
             this pay period.{" "}
@@ -1075,8 +1198,8 @@ function AccountsPanel({
   });
   return (
     <Panel title="Accounts & buckets" aside="at period end">
-      {tabs}
-      <dl id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${shown.account.id}`} className="divide-y divide-line">
+      {picker}
+      <dl aria-label={shown.account.name} className="divide-y divide-line">
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />
         {beforeFirst ? (
           <AccountLine
@@ -1093,7 +1216,11 @@ function AccountsPanel({
         {!beforeFirst && (
           <>
             {/* A balance entered part-way through already holds what moved before it, so only later days are counted: say so. */}
-            <AccountLine label={`${owed ? "Charged" : "Coming in"}${since}`} cents={balance.inCents} sign="+" />
+            {/* An investment's growth is the user's own assumption, not money arriving, so it has a line of its own. */}
+            <AccountLine label={`${owed ? "Charged" : "Coming in"}${since}`} cents={balance.inCents - assumed} sign="+" />
+            {shown.account.type === "investment" && assumed > 0 && (
+              <AccountLine label={`Assumed growth${since} · not a real gain`} cents={assumed} sign="+" />
+            )}
             <AccountLine label={`${owed ? "Paid off" : "Going out"}${since}`} cents={balance.outCents} sign="−" />
             <AccountLine
               label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
@@ -1109,16 +1236,18 @@ function AccountsPanel({
           </>
         )}
       </dl>
-      {/* An investment's "coming in" can include growth nobody has seen yet: say how much of it is only assumed. */}
-      {shown.account.type === "investment" && assumed > 0 && (
-        <p className="mt-1 text-sm text-muted">
-          Coming in includes{" "}
-          <span data-amount className="font-semibold tabular-nums">
-            {formatCents(assumed)}
-          </span>{" "}
-          of assumed growth: your own assumption, not a real gain.
-        </p>
-      )}
+      {/* A card's promotional rate running out this period, shown with the card. In words with an icon, never color alone. */}
+      {promosEnding
+        .filter((promo) => promo.accountId === shown.account.id)
+        .map((promo) => (
+          <p key={promo.promoId} className="mt-1 flex items-start gap-1.5 rounded-md border border-warn-line bg-warn px-2 py-1 text-sm font-semibold text-warn-ink">
+            <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+            <span data-amount className="min-w-0">
+              {promo.label} ends {formatDay(promo.endDate)} with {formatCents(promo.remainingCents)} left
+              {promo.deferredInterest && " · deferred interest"}
+            </span>
+          </p>
+        ))}
       {/* Said in words and set apart, not just coloured: an overdrawn account is the thing to see first. */}
       {!owed && balance.lowestCents < 0 && (
         <p role="alert" className="mt-2 rounded-lg border-2 border-danger p-3 font-semibold text-danger">

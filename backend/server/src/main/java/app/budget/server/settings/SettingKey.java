@@ -17,7 +17,10 @@ public enum SettingKey {
             "Colors need to be a six-digit hex code, like #0f766e."),
     /** How far ahead pay periods and balances are projected. */
     PROJECTION_HORIZON_MONTHS("projection_horizon_months", "12", Set.of("6", "12", "18", "24", "36")::contains,
-            "Please choose 6, 12, 18, 24 or 36 months.");
+            "Please choose 6, 12, 18, 24 or 36 months."),
+    /** How many days before a card's promotional rate ends the warnings start. */
+    PROMO_WARNING_DAYS("promo_warning_days", "60", Set.of("30", "45", "60", "90", "120")::contains,
+            "Please choose 30, 45, 60, 90 or 120 days.");
 
     private final String key;
     private final String defaultValue;
