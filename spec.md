@@ -138,7 +138,8 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
 
 ### 4.1 App and security
 - **settings** — key/value: theme (`light` | `dark` | `system`), density, accent color, projection horizon (default 12 months), budget year start (month + day, default Jan 1), plan-next-year reminder date (default Oct 1), auto-lock minutes, promo warning days (default 60), unpaid-bill highlight days (default 3), start with amounts hidden, backup folder and count, phone access settings, primary income source.
-- **auth** — `pin_hash`, `recovery_code_hash`, failed attempts, lockout-until.
+- **auth** — `pin_hash`, `recovery_code_hash`, failed attempts, lockout-until. As built (Phase 6, migration `V19`): one row, plus `offer_dismissed` (the first-launch offer of a PIN was answered). It is left out of the change log, so Undo never brings a PIN back and no hash is copied there.
+- As built (Phase 6), the settings with a control are `theme`, `accent_color`, `projection_horizon_months`, `promo_warning_days`, `unpaid_highlight_days` (0, 1, 2, 3, 5, 7, 10 or 14; default 3), `auto_lock_minutes` (1, 5, 15, 30 or 60; default 15), `start_amounts_hidden`, `backup_keep_count` (7, 14, 30, 60 or 90; default 30) and `backup_folder` (set only through the folder browser). Which income source is primary is kept on the source, not as a setting. Budget year start, the plan reminder, phone access and density have no setting yet (§12).
 - **change_log** — before/after of every edit, powering Undo. As built: `change_groups` holds one row per request that changed something and `change_log` one row per table row it added, altered or removed (`table_name, op, before, after`, the rows as JSON). The rows are written by database triggers that the server rebuilds from the live schema every time it opens the database, so every table and column is covered without each feature having to remember; `change_recording` says which change, if any, is being recorded. The newest 100 changes are kept. Undo puts back the newest change and forgets it (there is no redo). Erasing all data is not recorded.
 
 ### 4.2 Accounts, buckets, assets
@@ -326,9 +327,10 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 - **Anything that can be opened and edited shows a visible Edit button** (decided 2026-10-08): the word "Edit" where there is room, a pencil with a tooltip in tight rows. A clickable name or row is never the only way in. A row with an Edit button can also be clicked anywhere to open it (decided 2026-10-09; `components/rowEdit`), except on something in it with its own job, such as an amount or a checkbox.
 - **Dialogs and slide-outs close on a click outside them** (decided 2026-10-08), as well as on Escape and the X. If anything in them was changed and not saved, all three ask first ("Keep editing" / "Close without saving"); the form's own Cancel button discards without asking.
 - **Forms are easy to tell apart and to read** (decided 2026-10-09): every dialog has a tinted header strip with an icon for what it adds or changes, in the color of the account, bucket or label being edited (the title stays in the normal text color on a light tint, so contrast holds for any color). A long form is split into titled groups on faint panels (`FormSection`), puts its amount first and large, shows icons on its type switch. (An "In short" sentence above Save was tried and removed the same day: Rachel did not want it.) A bucket that has reached its goal says "Goal reached", in words and an icon.
+- **A pop-up form fits on one screen and never scrolls** (decided 2026-10-10; finished in Phase 6): adding is a few short steps, editing shows one group of fields at a time. Measured at 1366×768 and 375×812. See §12, Phase 6.
 - **Undo** toast after every change plus Ctrl+Z. No "are you sure?" except deleting whole items, accounts, or a draft plan year, and erasing all data (§7).
 - Light, dark, or follow Windows. All colors via CSS variables; user colors from data.
-- **Hide amounts** blurs every number. **Auto-lock** after idle; **Lock now** in the sidebar. Sidebar footer: "Data stored only on this PC."
+- **Hide amounts** blurs every number, and can be on from the start (a setting). **Auto-lock** after idle; **Lock now** in the sidebar and the phone menu, shown once a PIN is set. Sidebar footer: "Data stored only on this PC."
 - Confirmation codes display as plain monospace text once entered; a pencil button edits them; empty ones show "+ Add confirmation".
 - **"+ Add item"** (header, Ctrl+N) opens a menu: **Money out**, **Money in**, **Transfer**, **Recurring item**, then "Upload a pay stub or receipt…". Every choice opens the **same form** with that kind preselected.
 
@@ -343,7 +345,8 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 - Increasing delays after wrong PINs.
 - If both are lost: running the backend launcher with `--reset-pin` on the PC clears the PIN without touching data, then exits. Not available over HTTP.
 - Remote sessions always require the PIN and expire with auto-lock.
-- **Backups:** daily copy (SQLite backup API) plus the `files/` folder to a user-chosen folder; keep the last N. "Back up now" and "Restore…".
+- **As built (Phase 6):** the PIN is optional (decided 2026-10-11). Without one, `POST /api/session` still opens a session for this PC only, and nothing locks. `GET /api/session` is open and says whether the app is unlocked, whether a PIN is set, how long to wait after wrong tries, and whether to offer a PIN. Setting or changing it is `PUT /api/pin`, removing it `DELETE /api/pin`, both asking for the current PIN; `POST /api/pin/recovery` (open) takes the recovery code and a new PIN, and answers with a new code; `POST /api/pin/recovery-code` makes a new code. Wrong PINs and wrong codes share one count: two free tries, then waits of 30 s, 1 min, 5 min, 15 min and 1 hour, kept in the database so a restart does not clear them. The idle limit is the `auto_lock_minutes` setting, read on every request, and the screen locks itself at the same limit.
+- **Backups:** daily copy (SQLite backup API) plus the `files/` folder to a user-chosen folder; keep the last N. "Back up now" and "Restore…". As built (Phase 6): one zip per backup, taken once a day while the app is open (checked half a minute after start and then hourly); the folder is chosen in an in-app browser of this PC's drives and folders (`GET`, `POST /api/folders`); restoring, choosing the folder and browsing folders work from this PC only. A restore keeps the current PIN and backup folder and first saves what is there now. The zips are not encrypted.
 - **Erase all data** (Settings; built in Phase 0): permanently removes everything and leaves a fresh app, as if newly installed. The database files are deleted outright and rebuilt from the migrations (so nothing lingers in free pages or the write-ahead log), and the `files/` and in-app `backups/` folders are deleted. Logs stay; backups the user saved to another folder are not touched. It asks for confirmation with "Keep my data" as the focused default, cannot be undone (Undo does not cover it), ends every session, and from Phase 6 also removes the PIN. `DELETE /api/data` requires a session, an explicit confirmation phrase in the body, and a request from this PC — it is never available from the phone.
 - Docs recommend Windows BitLocker for at-rest protection.
 
@@ -375,7 +378,7 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
 | Annual costs | `annual.png` | Calendar years / rolling 12 months switch; totals and change; per-item table; selected item's monthly history and whether its budget is too low; "Plan next year →". |
 | Plan next year | `plan-year.png` | Plans list (active, draft), **Delete draft & start over**; six steps (Income & benefits, Bills, Annual & save-ups, Spending budgets, Saving & investing, Review); suggestion basis switch; table of last 12 months, trend, suggestion, your amount ("YOURS" when typed), per-month/per-paycheck. First-time setup reuses this wizard. |
 | Debt & decisions | `planner.png` | Extra per month and period; flags first; option cards (debts with rates from accounts, investments with **editable growth**); payoff timeline with method switch; "estimates, not advice". |
-| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget year start month/day, plan reminder; the mockup's budget timing option was dropped, §11), warnings, security, backups, phone access; **Erase all data** (§7; not in the mockup). |
+| Settings | `settings.png` | All values are dropdowns or number inputs: appearance (theme, density, **accent color**), pay periods & projections (source, horizon, budget year start month/day, plan reminder; the mockup's budget timing option was dropped, §11), warnings, security, backups, phone access; **Erase all data** (§7; not in the mockup). **As built (Phase 6):** cards for Appearance, Pay periods & projections, Warnings, Security, Backups, Bank holidays and Erase all data. Density, budget year start, the plan reminder and phone access are not shown yet (§12). |
 | Phone: pay period | `phone-pay-period.png` | Current period's ending and available; mark bills paid (44px targets); auto-pay list; bottom tabs. |
 | Phone: add expense | `phone-add-expense.png` | Amount, payee, date, account, category, tags, receipt photo straight to the PC, reimbursement. |
 
@@ -624,7 +627,7 @@ Not in this phase: loan amortization and loan payments (Phase 5) — a loan here
 
 ### Phase 5 — Credit cards and loans (`milestone/5-cards-loans`)
 
-**Status: built, waiting for Rachel to try it and confirm.** Branched from `main` after Phase 4 was merged (PR #9). Verified with 193 engine, 438 server and 316 frontend tests passing. Not yet merged.
+**Status: complete. Rachel moved on to Phase 6 on 2026-10-11**, with the pull request being merged. Branched from `main` after Phase 4 was merged (PR #9). Verified with 193 engine, 438 server and 316 frontend tests passing.
 
 Decided with Rachel before building (2026-10-10): Phase 5 only, in one branch and one pull request (the pop-up forms that are still too long stay carried forward); Credit cards is an overview with a page per card, like Accounts and Income, not the mockup's side-by-side (later the same day folded into Accounts, below); a card whose charges are not itemized takes one estimate per statement month (§11).
 
@@ -660,9 +663,35 @@ Also in this branch: a card's own payment shows "Follows the card" in place of a
 
 Not in this phase: the control for how early promo warnings start (Phase 6, Settings); comparing ways to pay debt down (Phase 12).
 
+### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
+
+**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged; to be rebased onto `main` once it lands. Verified with 193 engine, 497 server and 371 frontend tests passing.
+
+Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 7); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
+
+Migration on this branch: `V19` the one-row `auth` table. New dependency: Password4j 1.8.4 (Argon2id), older than 14 days and clean in OSV.
+
+| Feature | Status | Notes |
+|---|---|---|
+| Gate the app behind a PIN with recovery code, lockout, --reset-pin, auto-lock and hide amounts | Done | Optional PIN of 4–8 digits, Argon2id. A recovery code is shown once when the PIN is first set, and a new one can be made in Settings. Two free wrong tries, then waits of 30 s, 1 min, 5 min, 15 min and 1 hour, shared by the PIN and the code and kept across restarts. `--reset-pin` on the backend launcher removes the PIN with the app closed. Lock screen, first-launch offer, **Lock now** in the sidebar and phone menu, auto-lock after 1, 5, 15, 30 or 60 idle minutes (a setting; the environment variable is gone), start with amounts hidden. Changing, removing or resetting the PIN ends every other session. |
+| Expose the Settings screen with dropdown values and the accent color | Done | Cards: Appearance (theme, accent color), Pay periods & projections (which income sets the pay periods, look ahead), Warnings (promo warning days, unpaid-bill highlight days), Security, Backups, Bank holidays, Erase all data. Two columns from `xl`, stacked below. A hand-paid bill due within the chosen days says "Due today", "Due tomorrow" or "Due in N days" on its pay period row, in words with an icon. The low-balance warning is set per account, so Settings points to the account page for it. |
+| Schedule daily backups with restore of the database and files | Done | One dated zip a day while the app is open (`budget-backup-yyyyMMdd-HHmmss.zip`: the database through SQLite's backup API, plus `files/`), into the chosen folder or `backups\` in the data folder until one is chosen; the oldest beyond 7, 14, 30, 60 or 90 are removed. **Back up now** and **Restore…** in Settings. Restore checks the zip, refuses one made by a newer version, first saves the current data as `budget-before-restore-*.zip` in the app's own folder (the last 3 are kept), then swaps in the backup, keeps the current PIN and backup folder, and ends every session. Backups are plain zips, not encrypted; the card says so. |
+
+Not shown in Settings yet, because nothing would act on them: **budget year starts** and **remind me to plan next year** (Phase 11, with Plan next year) and **phone access** (Phase 7). **Density** is not a setting: the compact layout switches on by itself in a short window.
+
+**Pop-up forms never scroll** (the rule of 2026-10-10, finished here; `components/FormParts`). Measured at 1366×768 and 375×812 with room left for an error message:
+
+- **Adding** goes through short steps with Back and Next ("Step 2 of 3"); each step is checked before the next opens and nothing is saved until the end. Where most people are done early, the last step everyone needs can save, and the rest wait behind a button (**More options** for a bucket, **Deductions and match** for income).
+- **Editing** shows one group of fields at a time, chosen at the top under "What to change": a row of segments for up to three groups, a list for more. Save is on every one and sends them all.
+- **Account**: details, then color and warnings; archive or delete as a third group when editing. **Home or asset**: what it is, what it is worth, loan and growth. **Bucket**: name, goal, how much each time (the three questions), then what it holds and its dates; when editing also the changes made by hand (four at a time), pause, and archive or delete. A bucket opened from its recurring amount starts on "How much each time". What else feeds a bucket is listed on its row of the Buckets card, no longer in the form.
+- **Income**: who pays, when, how much, then deductions (one at a time) and the employer match. **Record a pay change** is a form of its own: the date and the new pay, then deductions and match. It replaces the choice between "correcting" and "from a date" that the edit form used to ask; editing now always corrects, and says so. One entry of the pay history opens on its amounts only. Hand-picked paydays show three at a time.
+- **Update balances** shows three accounts at a time, in the order of the Accounts screen, with what was last entered beside each name; Save is on every page and saves them all.
+- **A pay period row** opens a short form for that one time (amount, due date, paid and the day, confirmation code, check number, note), with a link to the item's page for anything about the item itself. A bucket's own amount still opens the bucket's form.
+- Dialogs may now be as tall as the window less a thin strip (`100dvh − 3rem` from `sm`, was `− 6rem`).
+
 ### Carried forward into later phases
 
-| Feature | Notes |
+| What | Notes |
 |---|---|
-| Gate the app behind a PIN with recovery code, lockout, --reset-pin, auto-lock and hide amounts | The session cookie and 401 gate already exist (Phase 0), and Hide amounts was built in Phase 2b. This feature adds the PIN, Argon2, lockout, recovery and the lock screen on top. |
-| Expose the Settings screen with dropdown values and the accent color | Theme and accent color endpoints exist; the screen has only a theme dropdown so far. |
+| Budget year start and the plan-next-year reminder, in Settings | With Plan next year (Phase 11): until then nothing would act on them. |
+| Phone access, in Settings | Phase 7, which also makes the PIN required for anything that is not this PC. |
