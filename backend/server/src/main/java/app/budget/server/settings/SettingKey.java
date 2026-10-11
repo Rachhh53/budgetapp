@@ -20,7 +20,10 @@ public enum SettingKey {
             "Please choose 6, 12, 18, 24 or 36 months."),
     /** How many days before a card's promotional rate ends the warnings start. */
     PROMO_WARNING_DAYS("promo_warning_days", "60", Set.of("30", "45", "60", "90", "120")::contains,
-            "Please choose 30, 45, 60, 90 or 120 days.");
+            "Please choose 30, 45, 60, 90 or 120 days."),
+    /** Minutes without activity before the app locks itself. */
+    AUTO_LOCK_MINUTES("auto_lock_minutes", "15", Set.of("1", "5", "15", "30", "60")::contains,
+            "Please choose 1, 5, 15, 30 or 60 minutes.");
 
     private final String key;
     private final String defaultValue;

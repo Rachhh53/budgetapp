@@ -1,7 +1,6 @@
 package app.budget.server;
 
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
@@ -17,7 +16,6 @@ import java.util.stream.Collectors;
  * @param dataDir        folder holding the database, logs, backups and attachments
  * @param parentPid      the desktop shell's process id, so the server can exit when it dies
  * @param shutdownToken  per-launch secret the desktop shell presents to stop the server
- * @param sessionIdle    how long a session survives without activity (auto-lock)
  * @param allowedHosts   extra Host header names to accept beyond IP literals and localhost
  */
 public record Config(
@@ -26,12 +24,10 @@ public record Config(
         Path dataDir,
         Optional<Long> parentPid,
         Optional<String> shutdownToken,
-        Duration sessionIdle,
         Set<String> allowedHosts) {
 
     static final String DEFAULT_BIND_HOST = "127.0.0.1";
     static final int DEFAULT_PORT = 4873;
-    static final int DEFAULT_SESSION_IDLE_MINUTES = 15;
     static final String APP_FOLDER = "Budget";
 
     /** Thrown with a message that is safe and useful to show the person starting the app. */
@@ -48,8 +44,6 @@ public record Config(
                 text(env, "BUDGET_DATA_DIR").map(Path::of).orElseGet(() -> defaultDataDir(env)),
                 number(env, "BUDGET_PARENT_PID", 1, Long.MAX_VALUE),
                 text(env, "BUDGET_SHUTDOWN_TOKEN"),
-                Duration.ofMinutes(number(env, "BUDGET_SESSION_IDLE_MINUTES", 1, 24 * 60)
-                        .orElse((long) DEFAULT_SESSION_IDLE_MINUTES)),
                 text(env, "BUDGET_ALLOWED_HOSTS")
                         .map(list -> Arrays.stream(list.split(","))
                                 .map(host -> host.trim().toLowerCase())

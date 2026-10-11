@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +18,6 @@ class ConfigTest {
         assertThat(config.dataDir()).isEqualTo(Path.of("C:\\Users\\Amara\\AppData\\Roaming", "Budget"));
         assertThat(config.parentPid()).isEmpty();
         assertThat(config.shutdownToken()).isEmpty();
-        assertThat(config.sessionIdle()).isEqualTo(Duration.ofMinutes(15));
         assertThat(config.allowedHosts()).isEmpty();
     }
 
@@ -31,7 +29,6 @@ class ConfigTest {
                 "BUDGET_DATA_DIR", "data",
                 "BUDGET_PARENT_PID", "4242",
                 "BUDGET_SHUTDOWN_TOKEN", "secret",
-                "BUDGET_SESSION_IDLE_MINUTES", "5",
                 "BUDGET_ALLOWED_HOSTS", "Desk.tailnet.ts.net, , other.example"));
 
         assertThat(config.bindHost()).isEqualTo("100.64.0.7");
@@ -39,7 +36,6 @@ class ConfigTest {
         assertThat(config.dataDir()).isEqualTo(Path.of("data"));
         assertThat(config.parentPid()).hasValue(4242L);
         assertThat(config.shutdownToken()).hasValue("secret");
-        assertThat(config.sessionIdle()).isEqualTo(Duration.ofMinutes(5));
         assertThat(config.allowedHosts()).containsExactlyInAnyOrder("desk.tailnet.ts.net", "other.example");
     }
 

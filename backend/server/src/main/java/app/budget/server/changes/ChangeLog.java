@@ -29,9 +29,12 @@ public final class ChangeLog {
     /** How many changes can be undone, newest first. Older ones are forgotten. */
     static final int CHANGES_KEPT = 100;
 
-    /** Tables that are not the user's data: the log itself and the migration history. */
+    /**
+     * Tables Undo leaves alone: the log itself, the migration history, and the app lock.
+     * Undo must never bring back an old PIN, and its hashes are kept out of the log.
+     */
     private static final Set<String> NOT_TRACKED =
-            Set.of("change_groups", "change_log", "change_recording", "flyway_schema_history");
+            Set.of("change_groups", "change_log", "change_recording", "flyway_schema_history", "auth");
 
     private static final String TRIGGER_PREFIX = "track_";
     private static final ObjectMapper JSON = new ObjectMapper();

@@ -51,7 +51,7 @@ public final class DataRoutes {
             throw ApiException.badRequest("Nothing was erased — the request wasn't confirmed.");
         }
         database.eraseEverything();
-        // A fresh app has no one signed in; from Phase 6 this also means no PIN is set.
+        // A fresh app has no one signed in and no PIN: the rebuilt database has no auth row.
         sessions.revokeAll();
         ApiResponse.ok(ctx, new EraseResult(true));
     }

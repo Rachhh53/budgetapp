@@ -10,6 +10,8 @@ import app.budget.server.api.LowerCaseEnumSerializer;
 import app.budget.server.assets.AssetsRepository;
 import app.budget.server.assets.AssetsRoutes;
 import app.budget.server.assets.NetWorthCalculator;
+import app.budget.server.auth.AuthRepository;
+import app.budget.server.auth.PinService;
 import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
 import app.budget.server.buckets.BucketsRepository;
@@ -39,6 +41,7 @@ import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
 import app.budget.server.schedule.HolidaysRepository;
 import app.budget.server.schedule.HolidaysRoutes;
+import app.budget.server.settings.SettingKey;
 import app.budget.server.settings.SettingsRepository;
 import app.budget.server.settings.SettingsRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -55,6 +58,7 @@ import io.javalin.router.JavalinDefaultRoutingApi;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,11 +95,15 @@ public final class BudgetServer {
     private final Config config;
     private final Javalin app;
 
-    public BudgetServer(Config config, Database database, SessionStore sessions, Clock clock, Runnable onShutdown) {
+    public BudgetServer(Config config, Database database, Clock clock, Runnable onShutdown) {
         this.config = config;
         byte[] indexHtml = readIndexHtml();
 
         SettingsRepository settings = new SettingsRepository(database.jdbi(), clock);
+        // Auto-lock follows the setting as it is now, not as it was when the app started.
+        SessionStore sessions = new SessionStore(clock,
+                () -> Duration.ofMinutes(Long.parseLong(settings.get(SettingKey.AUTO_LOCK_MINUTES))));
+        PinService pins = new PinService(new AuthRepository(database.jdbi()), clock);
         AccountsRepository accounts = new AccountsRepository(database.jdbi(), clock);
         HolidaysRepository holidays = new HolidaysRepository(database.jdbi());
         IncomeRepository income = new IncomeRepository(database.jdbi(), clock);
@@ -129,7 +137,7 @@ public final class BudgetServer {
             routes.before(BudgetServer::addSecurityHeaders);
 
             // Registers the session gate first, so it runs ahead of every route added below.
-            new SessionRoutes(sessions).register(routes);
+            new SessionRoutes(sessions, pins).register(routes);
             // Straight after the gate: everything a signed-in request changes from here on can be undone.
             new ChangeRoutes(new ChangeLog(database.jdbi(), clock)).register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));

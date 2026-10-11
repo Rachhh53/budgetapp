@@ -1,11 +1,12 @@
 package app.budget.server;
 
-import app.budget.server.auth.SessionStore;
+import app.budget.server.auth.PinReset;
 import app.budget.server.db.Database;
 import app.budget.server.lifecycle.InstanceLock;
 import app.budget.server.lifecycle.ParentWatch;
 import java.nio.file.Files;
 import java.time.Clock;
+import java.util.Arrays;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -13,6 +14,9 @@ import org.slf4j.LoggerFactory;
  * lock the data folder → migrate the database → listen → announce {@code READY port=NNNN}.
  *
  * <p>The desktop shell reads stdout waiting for that one line, so nothing else may print there.
+ *
+ * <p>Started by hand with {@code --reset-pin}, it removes a forgotten PIN and exits instead
+ * (spec §7). That is only possible at this PC's own command line, never over HTTP.
  */
 public final class Main {
 
@@ -22,11 +26,18 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) {
+        boolean resetPin = Arrays.asList(args).contains(PinReset.FLAG);
         try {
             Config config = Config.fromEnvironment(System.getenv());
             Files.createDirectories(config.dataDir());
             // Must be set before the first logger is created: logback.xml reads it to place the log file.
             System.setProperty("budget.logDir", config.dataDir().resolve("logs").toString());
+
+            if (resetPin) {
+                // Someone is running this in a terminal, so here stdout is theirs to read.
+                System.out.println(PinReset.run(config.dataDir()));
+                return;
+            }
 
             InstanceLock lock = InstanceLock.acquire(config.dataDir());
             Database database = Database.open(config.dataDir());
@@ -34,8 +45,7 @@ public final class Main {
             // Both "the shell asked us to stop" and "the shell died" end the same way; the
             // shutdown hook below then closes things down in order.
             Runnable exit = () -> System.exit(0);
-            BudgetServer server = new BudgetServer(
-                    config, database, new SessionStore(clock, config.sessionIdle()), clock, exit);
+            BudgetServer server = new BudgetServer(config, database, clock, exit);
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 server.stop();
@@ -51,7 +61,7 @@ public final class Main {
             System.out.println("READY port=" + port);
             System.out.flush();
         } catch (InstanceLock.AlreadyRunningException e) {
-            System.err.println("ALREADY_RUNNING");
+            System.err.println(resetPin ? PinReset.CLOSE_FIRST : "ALREADY_RUNNING");
             System.exit(EXIT_ALREADY_RUNNING);
         } catch (Config.InvalidConfigException e) {
             System.err.println("STARTUP_FAILED " + e.getMessage());

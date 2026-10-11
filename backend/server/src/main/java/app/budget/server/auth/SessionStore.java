@@ -7,10 +7,14 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Unlocked sessions, held in memory only: closing the app locks it, and nothing about a
  * session is ever written to disk. A session that sits idle past the auto-lock time expires.
+ *
+ * <p>The auto-lock time is a setting, so it is asked for each time rather than fixed at
+ * startup: a change in Settings applies to the sessions already open.
  */
 public final class SessionStore {
 
@@ -19,9 +23,9 @@ public final class SessionStore {
     private final Map<String, Instant> lastSeenByToken = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
-    private final Duration idleLimit;
+    private final Supplier<Duration> idleLimit;
 
-    public SessionStore(Clock clock, Duration idleLimit) {
+    public SessionStore(Clock clock, Supplier<Duration> idleLimit) {
         this.clock = clock;
         this.idleLimit = idleLimit;
     }
@@ -41,14 +45,20 @@ public final class SessionStore {
             return false;
         }
         Instant now = clock.instant();
+        Duration limit = idleLimit.get();
         // compute() makes "check idle time, then refresh or drop" one atomic step per token.
         return lastSeenByToken.compute(token, (key, lastSeen) ->
-                lastSeen == null || lastSeen.plus(idleLimit).isBefore(now) ? null : now) != null;
+                lastSeen == null || lastSeen.plus(limit).isBefore(now) ? null : now) != null;
     }
 
-    /** Ends every session at once (used when all data is erased). */
+    /** Ends every session at once (used when all data is erased, or a forgotten PIN is reset). */
     public void revokeAll() {
         lastSeenByToken.clear();
+    }
+
+    /** Ends every session but the one that asked (used when the PIN is set or changed). */
+    public void revokeAllExcept(String token) {
+        lastSeenByToken.keySet().removeIf(other -> !other.equals(token));
     }
 
     public void revoke(String token) {

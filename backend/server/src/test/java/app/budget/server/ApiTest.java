@@ -55,8 +55,18 @@ class ApiTest {
     @Nested
     class Session {
         @Test
-        void statusRequiresASession() throws Exception {
+        void statusSaysLockedWithoutASession() throws Exception {
+            // Open on purpose: the lock screen has to ask whether a PIN is needed.
             Reply reply = server.get("/api/session", null);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.data().get("unlocked").asBoolean()).isFalse();
+            assertThat(reply.data().get("pinSet").asBoolean()).isFalse();
+        }
+
+        @Test
+        void aLockedRequestIsRefusedKindly() throws Exception {
+            Reply reply = server.get("/api/settings", null);
 
             assertThat(reply.status()).isEqualTo(401);
             assertThat(reply.error()).contains("locked");
@@ -84,12 +94,12 @@ class ApiTest {
         void aSessionCookieUnlocksProtectedRoutes() throws Exception {
             String cookie = server.unlock();
 
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(200);
         }
 
         @Test
         void aMadeUpCookieIsRejected() throws Exception {
-            assertThat(server.get("/api/session", "budget_session=not-a-real-token").status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", "budget_session=not-a-real-token").status()).isEqualTo(401);
         }
 
         @Test
@@ -97,7 +107,7 @@ class ApiTest {
             String cookie = server.unlock();
 
             assertThat(server.delete("/api/session", cookie).status()).isEqualTo(200);
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(401);
         }
 
         @Test
@@ -106,7 +116,7 @@ class ApiTest {
 
             server.clock.advance(TestServer.SESSION_IDLE.plusSeconds(1));
 
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(401);
         }
 
         @Test
@@ -114,10 +124,10 @@ class ApiTest {
             String cookie = server.unlock();
 
             server.clock.advance(Duration.ofMinutes(10));
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(200);
             server.clock.advance(Duration.ofMinutes(10));
 
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(200);
         }
     }
 

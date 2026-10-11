@@ -1,6 +1,5 @@
 package app.budget.server;
 
-import app.budget.server.auth.SessionStore;
 import app.budget.server.db.Database;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class TestServer implements AutoCloseable {
 
     public static final String SHUTDOWN_TOKEN = "test-shutdown-token";
+    /** The auto-lock time a fresh app starts with (the {@code auto_lock_minutes} setting's default). */
     public static final Duration SESSION_IDLE = Duration.ofMinutes(15);
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -85,7 +85,6 @@ public final class TestServer implements AutoCloseable {
         server = new BudgetServer(
                 config,
                 Database.open(dataDir),
-                new SessionStore(clock, SESSION_IDLE),
                 clock,
                 () -> shutdownRequested.set(true));
         baseUrl = "http://" + config.bindHost() + ":" + server.start();

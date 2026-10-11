@@ -29,6 +29,7 @@
         <flyway.version>11.10.5</flyway.version>
         <slf4j.version>2.0.17</slf4j.version>
         <logback.version>1.5.38</logback.version>
+        <password4j.version>1.8.4</password4j.version>
         <junit.version>5.13.4</junit.version>
         <assertj.version>3.27.7</assertj.version>
 
@@ -84,6 +85,12 @@
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
                 <version>${logback.version}</version>
+            </dependency>
+            <!-- Argon2 for the PIN. Pure Java, no native code, nothing but slf4j underneath. -->
+            <dependency>
+                <groupId>com.password4j</groupId>
+                <artifactId>password4j</artifactId>
+                <version>${password4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit</groupId>
