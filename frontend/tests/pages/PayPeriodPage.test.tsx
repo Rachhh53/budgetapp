@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account } from "../../src/api/accounts";
@@ -763,13 +763,55 @@ describe("pay period screen", () => {
     );
   });
 
-  it("opens a recurring item from its name for a this-and-all-future change", async () => {
-    withPeriod();
+  it("opens a short form for that one time from a row's name, with the item itself a link away", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, paid: true }, changed: true }),
+    });
     renderApp();
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
 
-    expect(screen.getByRole("dialog", { name: "Edit Electric" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    expect(dialog).toHaveTextContent("Just this one, due Oct 16. The others stay as they are.");
+    // Nothing about the item as a whole is asked here, so the form stays short.
+    expect(within(dialog).queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Change Electric itself" })).toHaveAttribute("href", "/recurring/2");
+    // The day it was paid can be chosen, which the row's tick cannot do.
+    expect(within(dialog).getByLabelText("Paid on")).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Paid" }));
+    fireEvent.change(within(dialog).getByLabelText("Paid on"), { target: { value: "2026-10-09" } });
+    await userEvent.type(within(dialog).getByLabelText("Confirmation code"), "EL-4471");
+    // This one can be moved to another day, and have a note of its own.
+    expect(within(dialog).getByLabelText("Due on")).toHaveValue("2026-10-16");
+    fireEvent.change(within(dialog).getByLabelText("Due on"), { target: { value: "2026-10-19" } });
+    await userEvent.type(within(dialog).getByLabelText("Note (optional)"), "Budget billing starts");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // Only what was changed is sent: the amount was left alone.
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([
+      { dueDate: "2026-10-19", note: "Budget billing starts", paid: true, paidDate: "2026-10-09", confirmationCode: "EL-4471" },
+    ]);
+  });
+
+  it("asks for an amount that reads as one in that form, and sends nothing when nothing changed", async () => {
+    const fetchMock = withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    const amount = within(dialog).getByRole("textbox", { name: "Amount this time" });
+    const before = (amount as HTMLInputElement).value;
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "about ninety");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter an amount like 1,250.00.");
+
+    await userEvent.clear(amount);
+    await userEvent.type(amount, before);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls(fetchMock).some((call) => call.startsWith("PUT /api/items"))).toBe(false);
   });
 
   it("blurs every amount while Hide amounts is on", async () => {

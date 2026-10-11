@@ -149,11 +149,14 @@ describe("accounts screen: home & assets", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add home or asset" }));
     const dialog = screen.getByRole("dialog", { name: "Add a home or asset" });
     expect(within(dialog).getByRole("radio", { name: "Home" })).toBeChecked();
-    for (const section of ["What it is worth", "What it is", "Loan and growth"]) {
-      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
-    }
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Value" }), "400,000");
+    // A screen at a time, so the form never needs scrolling: what it is, what it is worth, its loan.
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 3");
     await userEvent.type(within(dialog).getByLabelText("Name"), "Maple Street house");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole("group", { name: "What it is worth" })).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Value" }), "400,000");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole("group", { name: "Loan and growth" })).toBeInTheDocument();
     // Only loan accounts are offered.
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Loan against it (optional)" }), "maple{Enter}");
     await userEvent.type(within(dialog).getByLabelText("Assumed growth a year, % (optional)"), "3");
@@ -183,6 +186,8 @@ describe("accounts screen: home & assets", () => {
     const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("radio", { name: "Something else" }));
     await userEvent.type(within(dialog).getByLabelText("Name"), "Grandmother's ring");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/assets")).toHaveLength(1));
@@ -208,6 +213,8 @@ describe("accounts screen: home & assets", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit Outback" });
     // Its value has its own history, so it is not asked for again here.
     expect(within(dialog).queryByRole("textbox", { name: "Value" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: "What it is" })).toBeChecked();
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Loan and growth" }));
     await userEvent.type(within(dialog).getByLabelText("Assumed growth a year, % (optional)"), "lots");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter a yearly rate like 3.00, or leave it empty.");
@@ -227,10 +234,11 @@ describe("accounts screen: update balances", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Update balances" }));
     const dialog = screen.getByRole("dialog", { name: "Update balances" });
-    // Grouped as the screen is, each saying what was entered last.
+    // Grouped as the screen is, each saying what was entered last, beside its name.
     const cash = within(dialog).getByRole("group", { name: "Checking & savings" });
-    expect(cash).toHaveTextContent("last entered $2,845.12 on Oct 2, 2026");
-    expect(within(dialog).getByRole("group", { name: "Credit cards" })).toHaveTextContent("no balance entered yet · enter what you owe");
+    expect(cash).toHaveTextContent("$2,845.12 · Oct 2, 2026");
+    expect(within(cash).getByRole("textbox", { name: "Everyday Checking" })).toHaveAccessibleDescription("$2,845.12 · Oct 2, 2026");
+    expect(within(dialog).getByRole("group", { name: /^Credit cardss*· enter what you owe$/ })).toHaveTextContent("nothing entered yet");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Everyday Checking" }), "3,012.40");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Maple Street mortgage" }), "284,100");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save balances" }));
@@ -261,6 +269,50 @@ describe("accounts screen: update balances", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save balances" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter an amount like 1,250.00 for Everyday Checking, or leave it empty.");
     expect(calls(fetchMock)).not.toContain("PUT /api/account-balances");
+  });
+
+  it("shows a few accounts at a time when there are many, and saves every page's in one go", async () => {
+    const SAVINGS: Account = { ...CHECKING, id: 4, name: "Rainy Day Savings", type: "savings", latestBalance: null };
+    const fetchMock = withAssets({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING, VISA, MORTGAGE, SAVINGS] }),
+      "PUT /api/account-balances": () => ({ status: 200, data: { saved: 2 }, changed: true }),
+    });
+    renderApp("/accounts");
+    await screen.findByRole("region", { name: "Checking & savings" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Update balances" }));
+    const dialog = screen.getByRole("dialog", { name: "Update balances" });
+    // In the order of the Accounts screen: the loan waits on the next page.
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Accounts 1–3 of 4");
+    expect(within(dialog).getByRole("button", { name: "Previous accounts" })).toBeDisabled();
+    expect(within(dialog).queryByRole("textbox", { name: "Maple Street mortgage" })).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Rainy Day Savings" }), "9,000");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next accounts" }));
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Accounts 4–4 of 4 · 1 filled in");
+    expect(within(dialog).getByRole("button", { name: "Next accounts" })).toBeDisabled();
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Maple Street mortgage" }), "nearly there");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Previous accounts" }));
+    expect(within(dialog).getByRole("textbox", { name: "Rainy Day Savings" })).toHaveValue("9,000");
+
+    // Something wrong on another page is brought into view.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save balances" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("for Maple Street mortgage");
+    const mortgage = within(dialog).getByRole("textbox", { name: "Maple Street mortgage" });
+    await userEvent.clear(mortgage);
+    await userEvent.type(mortgage, "284,100");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save balances" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/account-balances")).toEqual([
+      {
+        date: todayIso(),
+        balances: [
+          { accountId: 4, amountCents: 900000 },
+          { accountId: 3, amountCents: 28410000 },
+        ],
+      },
+    ]);
   });
 });
 

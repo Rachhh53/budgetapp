@@ -6,12 +6,13 @@ import { parseDollars } from "../../lib/money";
 import { parseRate, rateToInput } from "../../lib/rates";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
+import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { Segmented } from "../Segmented";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { HINT, INPUT, LABEL } from "../ui";
 import { ASSET_KIND_ICONS, ASSET_KIND_LABELS } from "./labels";
 
 const KIND_OPTIONS = ASSET_KINDS.map((kind) => ({ value: kind, label: ASSET_KIND_LABELS[kind], icon: ASSET_KIND_ICONS[kind] }));
@@ -37,12 +38,29 @@ interface AssetFormProps {
   onDeleted?: () => void;
 }
 
+/** The parts of the form: which kind, its name and color, its first value, its loan and growth, and putting it away. */
+type AssetPart = "kind" | "what" | "worth" | "loan" | "about";
+
+const ADD_GROUPS: readonly FormGroup<AssetPart>[] = [
+  { label: "What it is", parts: ["kind", "what"] },
+  { label: "What it is worth", parts: ["worth"] },
+  { label: "Loan and growth", parts: ["loan"] },
+];
+// The first value is entered while adding only; later ones have a history on the asset's page.
+const EDIT_GROUPS: readonly FormGroup<AssetPart>[] = [
+  { label: "What it is", parts: ["kind", "what"] },
+  { label: "Loan and growth", parts: ["loan"] },
+  { label: "Archive or delete", parts: ["about"] },
+];
+
 /**
  * Add or change a home, a vehicle or anything else of value. Its first value is entered with
- * it; later values are entered on its own page, where their history is kept.
+ * it; later values are entered on its own page, where their history is kept. The form is
+ * shown a screen at a time (see `useFormParts`), so it never needs scrolling.
  */
 export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: AssetFormProps) {
   const id = useId();
+  const parts = useFormParts<AssetPart>({ groups: asset ? EDIT_GROUPS : ADD_GROUPS, adding: !asset });
   const save = useSaveAsset(asset?.id);
   const today = todayIso();
 
@@ -56,26 +74,26 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
   const [rate, setRate] = useState(asset?.appreciationBp != null ? rateToInput(asset.appreciationBp) : "");
   const [loanId, setLoanId] = useState<string | null>(asset?.linkedLoanAccountId != null ? String(asset.linkedLoanAccountId) : null);
   const [archived, setArchived] = useState(asset?.archived ?? false);
-  const [problem, setProblem] = useState<string>();
 
   // Archived loans are left out, unless this asset already points at one.
   const loanOptions = accounts
     .filter((account) => account.type === "loan" && (!account.archived || String(account.id) === loanId))
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const valueCents = !asset && value.trim() !== "" ? parseDollars(value) : null;
+  const valueCents = !asset && value.trim() !== "" ? parseDollars(value) : null;
+  const appreciationBp = rate.trim() === "" ? null : parseRate(rate);
+
+  const check = (): PartProblem<AssetPart> | null => {
     if (!asset && value.trim() !== "" && (valueCents === null || valueCents < 0)) {
-      setProblem(AMOUNT_HELP);
-      return;
+      return { part: "worth", problem: AMOUNT_HELP };
     }
-    const appreciationBp = rate.trim() === "" ? null : parseRate(rate);
     if (rate.trim() !== "" && (appreciationBp === null || appreciationBp > MAX_RATE_BP)) {
-      setProblem("Please enter a yearly rate like 3.00, or leave it empty.");
-      return;
+      return { part: "loan", problem: "Please enter a yearly rate like 3.00, or leave it empty." };
     }
-    setProblem(undefined);
+    return null;
+  };
+
+  const send = () => {
     save.mutate(
       {
         name,
@@ -90,7 +108,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
     );
   };
 
-  const failure = problem ?? save.error?.message;
+  const failure = parts.problem ?? save.error?.message;
 
   return (
     <Modal
@@ -99,10 +117,32 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
       tone={asset?.color}
       onClose={onClose}
     >
-      <form onSubmit={submit} className="space-y-4">
-        <Segmented legend="What is it?" options={KIND_OPTIONS} value={kind} onChange={setKind} />
+      <form ref={parts.ref} onSubmit={(event: FormEvent) => parts.submit(event, check, send)} className="space-y-4">
+        {parts.header()}
+        {parts.shows("kind") && <Segmented legend="What is it?" options={KIND_OPTIONS} value={kind} onChange={setKind} />}
 
-        {!asset && (
+        {parts.shows("what") && (
+          <FormSection title="Name and color">
+            <div>
+              <label htmlFor={`${id}-name`} className={LABEL}>
+                Name
+              </label>
+              <input
+                id={`${id}-name`}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                maxLength={80}
+                required
+                autoComplete="off"
+                placeholder={PLACEHOLDERS[kind]}
+                className={INPUT}
+              />
+            </div>
+            <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
+          </FormSection>
+        )}
+
+        {!asset && parts.shows("worth") && (
           <FormSection title="What it is worth">
             <MoneyField
               label="Value"
@@ -128,63 +168,46 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
           </FormSection>
         )}
 
-        <FormSection title="What it is">
-          <div>
-            <label htmlFor={`${id}-name`} className={LABEL}>
-              Name
-            </label>
-            <input
-              id={`${id}-name`}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={80}
-              required
-              autoComplete="off"
-              placeholder={PLACEHOLDERS[kind]}
-              className={INPUT}
-            />
-          </div>
-          <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
-        </FormSection>
+        {parts.shows("loan") && (
+          <FormSection title="Loan and growth">
+            <div>
+              <Picker
+                label="Loan against it (optional)"
+                noun="loan"
+                placeholder={loanOptions.length === 0 ? "No loan accounts yet" : "Owned outright"}
+                options={loanOptions}
+                value={loanId}
+                onChange={setLoanId}
+                clearable
+              />
+              <p className={HINT}>
+                {loanOptions.length === 0
+                  ? "To see equity, add the mortgage or car loan as a Loan account on the Accounts screen, then choose it here."
+                  : "Equity is the value less what is still owed on this loan."}
+              </p>
+            </div>
+            <div>
+              <label htmlFor={`${id}-rate`} className={LABEL}>
+                Assumed growth a year, % (optional)
+              </label>
+              <input
+                id={`${id}-rate`}
+                value={rate}
+                onChange={(event) => setRate(event.target.value)}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="e.g. 3.00"
+                className={`${INPUT} tabular-nums`}
+              />
+              <p className={HINT}>
+                Your own guess, used between the values you enter. Leave it empty and the value simply stays as entered, which suits
+                anything that loses value: for that, enter a new, lower value when you have one.
+              </p>
+            </div>
+          </FormSection>
+        )}
 
-        <FormSection title="Loan and growth">
-          <div>
-            <Picker
-              label="Loan against it (optional)"
-              noun="loan"
-              placeholder={loanOptions.length === 0 ? "No loan accounts yet" : "Owned outright"}
-              options={loanOptions}
-              value={loanId}
-              onChange={setLoanId}
-              clearable
-            />
-            <p className={HINT}>
-              {loanOptions.length === 0
-                ? "To see equity, add the mortgage or car loan as a Loan account on the Accounts screen, then choose it here."
-                : "Equity is the value less what is still owed on this loan."}
-            </p>
-          </div>
-          <div>
-            <label htmlFor={`${id}-rate`} className={LABEL}>
-              Assumed growth a year, % (optional)
-            </label>
-            <input
-              id={`${id}-rate`}
-              value={rate}
-              onChange={(event) => setRate(event.target.value)}
-              inputMode="decimal"
-              autoComplete="off"
-              placeholder="e.g. 3.00"
-              className={`${INPUT} tabular-nums`}
-            />
-            <p className={HINT}>
-              Your own guess, used between the values you enter. Leave it empty and the value simply stays as entered, which suits
-              anything that loses value: for that, enter a new, lower value when you have one.
-            </p>
-          </div>
-        </FormSection>
-
-        {asset && (
+        {asset && parts.shows("about") && (
           <FormSection title="About this">
             <div>
               <label className="flex min-h-11 items-center gap-3">
@@ -207,17 +230,10 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
           </p>
         )}
 
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
-            Cancel
-          </button>
-          <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
-            {save.isPending ? "Saving…" : asset ? "Save changes" : "Add"}
-          </button>
-        </div>
+        {parts.buttons({ onClose, pending: save.isPending, saveLabel: asset ? "Save changes" : "Add" })}
       </form>
 
-      {asset && (
+      {asset && parts.shows("about") && (
         <div className="mt-6 border-t border-line pt-4">
           <DeleteAsset
             asset={asset}

@@ -26,6 +26,7 @@ import { Card } from "../components/Card";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { ItemForm } from "../components/items/ItemForm";
+import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { INPUT } from "../components/ui";
@@ -84,7 +85,9 @@ export function PayPeriodPage() {
     return () => setPeriod(undefined);
   }, [detail, setPeriod]);
 
+  // A bucket's own recurring amount opens its bucket's form; every other row opens that one time it comes round.
   const [editingItem, setEditingItem] = useState<Item>();
+  const [editingOccurrence, setEditingOccurrence] = useState<Occurrence>();
 
   const failure =
     upcoming.error ?? period.error ?? accounts.error ?? categories.error ?? tags.error ?? items.error ?? buckets.error;
@@ -130,6 +133,7 @@ export function PayPeriodPage() {
     tags: tags.data,
     items: items.data,
     editItem: setEditingItem,
+    editOccurrence: setEditingOccurrence,
     statementFor: (occurrence) => {
       const paid = (detail.statementsPaid ?? []).find(
         (candidate) => candidate.itemId === occurrence.itemId && candidate.scheduledDate === occurrence.scheduledDate,
@@ -239,6 +243,15 @@ export function PayPeriodPage() {
           pageLink
         />
       )}
+      {editingOccurrence && (
+        <OccurrenceForm
+          occurrence={editingOccurrence}
+          // The same test that puts a row in the "to pay by hand" list.
+          byHand={editingOccurrence.kind !== "budget" && !editingOccurrence.autopay}
+          fromChecking={context.isChecking(editingOccurrence.payFromAccountId)}
+          onClose={() => setEditingOccurrence(undefined)}
+        />
+      )}
     </div>
   );
 }
@@ -256,6 +269,8 @@ interface RowContext {
   tags: readonly Tag[];
   items: readonly Item[];
   editItem: (item: Item) => void;
+  /** Opens the short form for one time an item comes round: its amount, and whether and how it was paid. */
+  editOccurrence: (occurrence: Occurrence) => void;
   /** For a card payment that follows its card: what the amount is, and which statement it is for. */
   statementFor: (occurrence: Occurrence) => string | undefined;
 }
@@ -670,7 +685,13 @@ function StatementNote({ occurrence, context }: { occurrence: Occurrence; contex
 /** A recurring item's name, which opens it for a "this and all future" change. */
 function ItemName({ occurrence, context }: { occurrence: Occurrence; context: RowContext }) {
   const item = context.items.find((candidate) => candidate.id === occurrence.itemId);
-  return item === undefined ? <>{occurrence.name}</> : <EditName name={occurrence.name} onClick={() => context.editItem(item)} />;
+  if (item === undefined) {
+    return <>{occurrence.name}</>;
+  }
+  // Setting money aside belongs to its bucket, whose form is where it is changed. Anything else opens this one time;
+  // the item itself is a link away, on its own page.
+  const open = () => (item.kind === "bucket_move" ? context.editItem(item) : context.editOccurrence(occurrence));
+  return <EditName name={occurrence.name} onClick={open} />;
 }
 
 /** The amount of one occurrence, typed over in place: just this one, or this and all future. */

@@ -60,6 +60,10 @@ function asCard(detail: AccountDetail) {
   };
 }
 
+/** Brings up one screen of a long edit form, which shows a group of fields at a time so it never scrolls. */
+const show = (dialog: HTMLElement, group: string) =>
+  userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), group);
+
 describe("account detail screen", () => {
   it("shows the balance and every balance entered, with the change between them", async () => {
     fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }) });
@@ -228,12 +232,19 @@ describe("account detail screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit account" }));
     const dialog = screen.getByRole("dialog", { name: "Edit account" });
-    for (const section of ["What it is", "How it looks", "Warnings and interest", "About this account"]) {
-      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
-    }
+    // One group of fields at a time, chosen with a switch, so the form never needs scrolling.
+    const change = within(dialog).getByRole("group", { name: "What to change" });
+    expect(within(change).getByRole("radio", { name: "Details" })).toBeChecked();
+    expect(within(dialog).getByRole("group", { name: "What it is" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("group", { name: "How it looks" })).not.toBeInTheDocument();
     const name = within(dialog).getByLabelText("Name");
     await userEvent.clear(name);
     await userEvent.type(name, "Household Checking");
+    await userEvent.click(within(change).getByRole("radio", { name: "Color and warnings" }));
+    expect(within(dialog).getByRole("group", { name: "How it looks" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("group", { name: "Warnings and interest" })).toBeInTheDocument();
+    await userEvent.click(within(change).getByRole("radio", { name: "Archive or delete" }));
+    // Save is there on every one, and sends the lot: what was changed on the others too.
     await userEvent.click(within(dialog).getByLabelText("Archived"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
@@ -260,6 +271,7 @@ describe("account detail screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit account" }));
     const dialog = screen.getByRole("dialog", { name: "Edit account" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Color and warnings" }));
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Warn me when the balance dips below (optional)" }), "500");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
@@ -268,6 +280,8 @@ describe("account detail screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit account" }));
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Kind of account" }), "credit_card");
+    await userEvent.click(screen.getByRole("radio", { name: "Color" }));
+    expect(screen.getByRole("group", { name: "How it looks" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /Warn me when/ })).not.toBeInTheDocument();
   });
 
@@ -365,14 +379,27 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
-      // Three questions, in order.
-      for (const question of ["What are you saving for?", "How much, by when?", "How much each time?"]) {
-        expect(within(dialog).getByRole("group", { name: question })).toBeInTheDocument();
-      }
+      // A screen for each thing to change, the three questions first.
+      const change = within(dialog).getByRole("combobox", { name: "What to change" });
+      expect(within(change).getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Name, color and note",
+        "Goal",
+        "How much each time",
+        "What it holds",
+        "Dates",
+        "Changed by hand",
+        "Archive or delete",
+      ]);
+      expect(within(dialog).getByRole("group", { name: "What are you saving for?" })).toBeInTheDocument();
+      expect(within(dialog).queryByRole("group", { name: "How much, by when?" })).not.toBeInTheDocument();
+      await show(dialog, "Goal");
+      expect(within(dialog).getByRole("group", { name: "How much, by when?" })).toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole("checkbox", { name: "Stop when the goal is reached" }));
+      await show(dialog, "How much each time");
       const amount = await within(dialog).findByRole("textbox", { name: "Set aside (optional)" });
       // The form says what the goal takes, and one press fills it in; it can still be typed over.
       const advice = await within(dialog).findByRole("status");
-      expect(advice).toHaveTextContent("To have $600.00 by Dec 1, 2099, set aside $50.00 every paycheck (4 paychecks left), or $100.00 a month.");
+      expect(advice).toHaveTextContent("$600.00 by Dec 1, 2099 takes $50.00 every paycheck (4 left), or $100.00 a month.");
       await userEvent.click(within(advice).getByRole("button", { name: "Use $100.00 a month" }));
       expect(amount).toHaveValue("100.00");
       expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("monthly");
@@ -381,7 +408,6 @@ describe("account detail screen", () => {
       expect(within(dialog).getByRole("combobox", { name: "How often" })).toHaveValue("every_pay_period");
       await userEvent.clear(amount);
       await userEvent.type(amount, "75");
-      await userEvent.click(within(dialog).getByRole("checkbox", { name: "Stop when the goal is reached" }));
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -418,6 +444,7 @@ describe("account detail screen", () => {
       await screen.findByRole("list", { name: "Recurring into Holiday gifts" });
       await userEvent.click(screen.getByRole("button", { name: "Edit Holiday gifts" }));
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(dialog, "How much each time");
       const amount = within(dialog).getByRole("textbox", { name: "Set aside (optional)" });
       expect(amount).toHaveValue("50.00");
       await userEvent.clear(amount);
@@ -434,6 +461,7 @@ describe("account detail screen", () => {
       // Emptied, it stops: the move ends today and no second one is added.
       await userEvent.click(screen.getByRole("button", { name: "Edit Holiday gifts" }));
       const again = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(again, "How much each time");
       await userEvent.clear(within(again).getByRole("textbox", { name: "Set aside (optional)" }));
       await userEvent.click(within(again).getByRole("button", { name: "Save changes" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -520,6 +548,7 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       let dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(dialog, "Goal");
       await userEvent.type(within(dialog).getByLabelText("Goal date (optional)"), "2026-12-01");
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
       await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")).toHaveLength(1));
@@ -527,6 +556,7 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(dialog, "Goal");
       await userEvent.type(within(dialog).getByLabelText("Goal date (optional)"), "2026-12-01");
       await userEvent.clear(within(dialog).getByRole("textbox", { name: "Goal (optional)" }));
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -560,12 +590,22 @@ describe("account detail screen", () => {
       const buckets = await screen.findByRole("region", { name: "Buckets" });
       expect(await within(buckets).findByText(/A bucket sets part of this account aside/)).toBeInTheDocument();      await userEvent.click(within(buckets).getByRole("button", { name: "Add a bucket" }));
       const dialog = screen.getByRole("dialog", { name: "Add a bucket to Everyday Checking" });
+      // Three questions, a screen each; the bucket can be added from the third.
+      expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 3");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Holiday gifts");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Goal (optional)" }), "600");
-      await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+      expect(within(dialog).getByRole("status")).toHaveTextContent("Step 3 of 3");
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Set aside (optional)" }), "50");
+      expect(within(dialog).getByRole("button", { name: "Add bucket" })).toBeInTheDocument();
+      // Everything else waits behind More options.
+      await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
+      expect(within(dialog).getByRole("status")).toHaveTextContent("More options · 1 of 2");
+      await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
       // It starts today unless backdated; an earlier day builds up what it would already hold.
-      const starting = within(dialog).getByLabelText("Starting");
+      const starting = within(dialog).getByLabelText("Setting aside starts");
       expect(starting).toHaveValue(new Date().toLocaleDateString("en-CA"));
       await userEvent.clear(starting);
       await userEvent.type(starting, "2026-01-01");
@@ -612,11 +652,15 @@ describe("account detail screen", () => {
       await userEvent.click(await within(buckets).findByRole("button", { name: "Add a bucket" }));
       const dialog = screen.getByRole("dialog", { name: "Add a bucket to Everyday Checking" });
       await userEvent.type(await within(dialog).findByRole("textbox", { name: "Name" }), "Holiday gifts");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
       await userEvent.type(within(dialog).getByRole("textbox", { name: "Already set aside (optional)" }), "150");
       const asOf = within(dialog).getByLabelText("As of");
       expect(asOf).toHaveValue(new Date().toLocaleDateString("en-CA"));
       await userEvent.clear(asOf);
       await userEvent.type(asOf, "2026-01-15");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
       await userEvent.click(within(dialog).getByRole("button", { name: "Add bucket" }));
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -639,6 +683,7 @@ describe("account detail screen", () => {
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
       // Archive is an action next to Delete, not a tick among the fields.
       expect(within(dialog).queryByRole("checkbox", { name: "Archived" })).not.toBeInTheDocument();
+      await show(dialog, "Archive or delete");
       const archive = await within(dialog).findByRole("button", { name: "Archive this bucket" });
       expect(archive.parentElement).toContainElement(within(dialog).getByRole("button", { name: "Delete this bucket" }));
       await userEvent.click(archive);
@@ -660,6 +705,7 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(dialog, "Changed by hand");
       const history = within(dialog).getByRole("region", { name: "Changed by hand" });
       expect(await within(history).findByText("Starting amount")).toBeInTheDocument();
       await userEvent.click(within(history).getByRole("button", { name: "Remove the $150.00 put in on Oct 1, 2026" }));
@@ -677,6 +723,7 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       const dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(dialog, "What it holds");
       const held = within(dialog).getByRole("textbox", { name: "In this bucket" });
       await userEvent.clear(held);
       await userEvent.type(held, "125");
@@ -700,9 +747,11 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       let dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
-      expect(within(dialog).queryByRole("textbox", { name: "Already set aside (optional)" })).not.toBeInTheDocument();
       // What it holds is shown, and left alone it moves no money.
+      await show(dialog, "What it holds");
+      expect(within(dialog).queryByRole("textbox", { name: "Already set aside (optional)" })).not.toBeInTheDocument();
       expect(within(dialog).getByRole("textbox", { name: "In this bucket" })).toHaveValue("200.00");
+      await show(dialog, "Goal");
       const goal = within(dialog).getByRole("textbox", { name: "Goal (optional)" });
       await userEvent.clear(goal);
       await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -712,6 +761,7 @@ describe("account detail screen", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: "Edit Holiday gifts" }));
       dialog = screen.getByRole("dialog", { name: "Edit Holiday gifts" });
+      await show(dialog, "Archive or delete");
       await userEvent.click(within(dialog).getByRole("button", { name: "Delete this bucket" }));
       await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/buckets/7"));
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -880,6 +930,7 @@ describe("account detail screen", () => {
     renderApp("/accounts/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit account" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Archive or delete" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete account…" }));
 
     const confirm = screen.getByRole("alertdialog");
@@ -902,6 +953,7 @@ describe("account detail screen", () => {
     renderApp("/accounts/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit account" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Archive or delete" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete account…" }));
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));
 

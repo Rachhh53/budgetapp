@@ -141,6 +141,10 @@ export interface StatementPaid {
 /** What a "just this one" edit can change. Only what is sent changes. */
 export interface OccurrenceEdit {
   amountCents?: number;
+  /** Moves this one to another day; the item's schedule is untouched. */
+  dueDate?: string;
+  /** An empty note clears it. */
+  note?: string;
   paid?: boolean;
   paidDate?: string;
   /** An empty code clears it. */

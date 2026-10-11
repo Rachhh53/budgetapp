@@ -9,6 +9,8 @@ interface SegmentedProps<T extends string> {
   options: readonly { value: T; label: string; icon?: LucideIcon }[];
   value: T;
   onChange: (value: T) => void;
+  /** Three to a row on a phone, in smaller type: for a switch at the top of a form, where height is short. */
+  dense?: boolean;
 }
 
 /**
@@ -19,7 +21,7 @@ interface SegmentedProps<T extends string> {
  * icons stay in one row at every width instead: an odd one left on a row of its own looks
  * like a mistake, and an icon over a short label still makes a comfortable target.
  */
-export function Segmented<T extends string>({ legend, options, value, onChange }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ legend, options, value, onChange, dense }: SegmentedProps<T>) {
   const name = useId();
   const withIcons = options.some((option) => option.icon !== undefined);
   return (
@@ -27,14 +29,16 @@ export function Segmented<T extends string>({ legend, options, value, onChange }
       <legend className={LABEL}>{legend}</legend>
       <div
         className={`grid gap-1 rounded-lg bg-bg p-1 ${
-          withIcons ? "auto-cols-fr grid-flow-col" : "grid-cols-2 sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none"
+          withIcons
+            ? "auto-cols-fr grid-flow-col"
+            : `${dense ? "grid-cols-3" : "grid-cols-2"} sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none`
         }`}
       >
         {options.map((option) => (
           <label
             key={option.value}
             className={`group flex min-h-11 cursor-pointer flex-col items-center justify-center gap-1 rounded-md py-1.5 text-center font-medium ${
-              withIcons ? "px-0.5 text-xs sm:px-2 sm:text-sm" : "px-2 text-sm"
+              withIcons ? "px-0.5 text-xs sm:px-2 sm:text-sm" : dense ? "px-1 text-xs leading-tight sm:px-2 sm:text-sm" : "px-2 text-sm"
             } text-muted has-checked:bg-surface has-checked:font-semibold has-checked:text-ink has-checked:shadow-sm has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent-ink`}
           >
             <input

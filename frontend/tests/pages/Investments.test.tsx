@@ -83,6 +83,10 @@ function withInvestments(overrides: Parameters<typeof fakeBackend>[0] = {}) {
   });
 }
 
+/** Brings up one screen of the income form, which shows a group of fields at a time so it never scrolls. */
+const show = (dialog: HTMLElement, group: string) =>
+  userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), group);
+
 describe("investment account screen", () => {
   it("shows the change this year, split into what was put in and growth", async () => {
     withInvestments();
@@ -238,6 +242,7 @@ describe("income screen: employer match", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
+    await show(dialog, "Employer match");
     const match = within(dialog).getByRole("group", { name: "Employer match" });
     expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("none");
     await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A percentage of what I put in");
@@ -248,8 +253,8 @@ describe("income screen: employer match", () => {
 
     await userEvent.clear(within(match).getByRole("combobox", { name: "Paid into" }));
     await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "bright{Enter}");
-    await userEvent.type(within(match).getByLabelText("They match (% of what I put in)"), "50");
-    await userEvent.type(within(match).getByLabelText("Up to (% of gross pay)"), "6");
+    await userEvent.type(within(match).getByLabelText("They match, %"), "50");
+    await userEvent.type(within(match).getByLabelText("Up to, % of pay"), "6");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -267,10 +272,11 @@ describe("income screen: employer match", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     let dialog = screen.getByRole("dialog", { name: "Edit income source" });
+    await show(dialog, "Employer match");
     let match = within(dialog).getByRole("group", { name: "Employer match" });
     // The form opens on the match as it is.
     expect(within(match).getByLabelText("Does your employer add anything?")).toHaveValue("formula");
-    expect(within(match).getByLabelText("They match (% of what I put in)")).toHaveValue("50.00");
+    expect(within(match).getByLabelText("They match, %")).toHaveValue("50.00");
     await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "The same dollar amount every paycheck");
     await userEvent.type(within(match).getByRole("textbox", { name: "Match per paycheck" }), "75");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -281,6 +287,7 @@ describe("income screen: employer match", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Edit income source" }));
     dialog = screen.getByRole("dialog", { name: "Edit income source" });
+    await show(dialog, "Employer match");
     match = within(dialog).getByRole("group", { name: "Employer match" });
     await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "No match");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -298,11 +305,12 @@ describe("income screen: employer match", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
+    await show(dialog, "Employer match");
     const match = within(dialog).getByRole("group", { name: "Employer match" });
     await userEvent.selectOptions(within(match).getByLabelText("Does your employer add anything?"), "A percentage of what I put in");
     await userEvent.type(within(match).getByRole("combobox", { name: "Paid into" }), "bright{Enter}");
-    await userEvent.type(within(match).getByLabelText("They match (% of what I put in)"), "50");
-    await userEvent.type(within(match).getByLabelText("Up to (% of gross pay)"), "6");
+    await userEvent.type(within(match).getByLabelText("They match, %"), "50");
+    await userEvent.type(within(match).getByLabelText("Up to, % of pay"), "6");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     expect(within(dialog).getByRole("alert")).toHaveTextContent(
@@ -326,10 +334,11 @@ describe("income screen: employer match", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    const deductions = within(dialog).getByRole("group", { name: "Goes to your accounts" });
+    await show(dialog, "Deductions");
+    const deductions = within(dialog).getByRole("group", { name: "Deductions" });
     // It opens as the dollar amount it was saved as.
     expect(within(deductions).getByLabelText("Given as")).toHaveValue("dollars");
-    await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent of gross pay");
+    await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent");
     await userEvent.type(within(deductions).getByLabelText("Percent of gross pay"), "6");
     expect(within(deductions).getByText("About $216.00 a paycheck.")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -347,10 +356,11 @@ describe("income screen: employer match", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    const deductions = within(dialog).getByRole("group", { name: "Goes to your accounts" });
-    await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent of gross pay");
+    await show(dialog, "Deductions");
+    const deductions = within(dialog).getByRole("group", { name: "Deductions" });
+    await userEvent.selectOptions(within(deductions).getByLabelText("Given as"), "Percent");
     await userEvent.type(within(deductions).getByLabelText("Percent of gross pay"), "6");
-    expect(within(deductions).getByText("Fill in the gross amount per paycheck above, so this can be worked out.")).toBeInTheDocument();
+    expect(within(deductions).getByText("Fill in the gross amount per paycheck too, so this can be worked out.")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     expect(within(dialog).getByRole("alert")).toHaveTextContent(

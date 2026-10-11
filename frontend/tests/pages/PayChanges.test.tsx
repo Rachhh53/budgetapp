@@ -64,27 +64,47 @@ function withSalary(source: IncomeSource, overrides: Parameters<typeof fakeBacke
   });
 }
 
+/** Brings up one screen of the income form, which shows a group of fields at a time so it never scrolls. */
+const show = (dialog: HTMLElement, group: string) =>
+  userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), group);
+
 describe("a raise: pay that changes from a date", () => {
   it("records a pay change from a chosen date, leaving earlier paychecks alone", async () => {
     const fetchMock = withSalary(SALARY);
     renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Record a pay change for Brightwater Health" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    const timing = within(dialog).getByRole("group", { name: "When the amounts below apply" });
-    expect(within(timing).getByRole("radio", { name: /My pay changes from a date/ })).toBeChecked();
+    // A form of its own: the date and the new pay, and nothing about the name or the paydays.
+    const dialog = screen.getByRole("dialog", { name: "Record a pay change" });
+    expect(within(dialog).queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("combobox", { name: "What to change" })).not.toBeInTheDocument();
     // Today to begin with; any day, past or future, can be chosen.
-    expect(within(timing).getByLabelText("Changes from")).toHaveValue(todayIso());
-    fireEvent.change(within(timing).getByLabelText("Changes from"), { target: { value: "2027-06-01" } });
+    expect(within(dialog).getByLabelText("Changes from")).toHaveValue(todayIso());
+    fireEvent.change(within(dialog).getByLabelText("Changes from"), { target: { value: "2027-06-01" } });
     // The form opens on today's amounts, ready to be typed over.
     const takeHome = within(dialog).getByRole("textbox", { name: "Take-home per paycheck" });
     expect(takeHome).toHaveValue("2418.00");
     await userEvent.clear(takeHome);
     await userEvent.type(takeHome, "2700");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    // New deductions or a new match from that date are a step further, for those who need them.
+    expect(within(dialog).getByRole("button", { name: "Deductions and match" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save pay change" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[0]).toMatchObject({ netCents: 270000, effectiveFrom: "2027-06-01" });
+  });
+
+  it("asks for the date a pay change starts from", async () => {
+    const fetchMock = withSalary(SALARY);
+    renderApp("/income/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Record a pay change for Brightwater Health" }));
+    const dialog = screen.getByRole("dialog", { name: "Record a pay change" });
+    fireEvent.change(within(dialog).getByLabelText("Changes from"), { target: { value: "" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save pay change" }));
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the date your pay changes from.");
+    expect(calls(fetchMock)).not.toContain("PUT /api/income-sources/1");
   });
 
   it("a plain edit is a correction, and says which paychecks it reaches", async () => {
@@ -93,10 +113,9 @@ describe("a raise: pay that changes from a date", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    const timing = within(dialog).getByRole("group", { name: "When the amounts below apply" });
-    expect(within(timing).getByRole("radio", { name: /I'm correcting the amounts/ })).toBeChecked();
-    expect(within(timing).getByText("Changes every paycheck, past and future.")).toBeInTheDocument();
-    expect(within(timing).queryByLabelText("Changes from")).not.toBeInTheDocument();
+    await show(dialog, "Pay");
+    expect(within(dialog).getByText(/Saving corrects every paycheck, past and future\. For a raise/)).toHaveTextContent("Record a pay change");
+    expect(within(dialog).queryByLabelText("Changes from")).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -112,7 +131,13 @@ describe("a raise: pay that changes from a date", () => {
     await userEvent.click(await screen.findByRole("button", { name: "+ Add income source" }));
 
     const dialog = screen.getByRole("dialog", { name: "Add an income source" });
-    expect(within(dialog).queryByRole("group", { name: "When the amounts below apply" })).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Brightwater Health");
+    await userEvent.type(within(dialog).getByRole("combobox", { name: "Deposited to" }), "every{Enter}");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByLabelText("Take-home per paycheck")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Changes from")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Saving corrects/)).not.toBeInTheDocument();
   });
 
   it("keeps pay history off the Income overview", async () => {
@@ -154,18 +179,19 @@ describe("a raise: pay that changes from a date", () => {
     renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit the pay from Jun 1, 2027" }));
-    let dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    expect(within(dialog).getByText(/These are the amounts from Jun 1, 2027 on/)).toBeInTheDocument();
-    // Which entry it is has been decided already, so the choice is not offered again.
-    expect(within(dialog).queryByRole("group", { name: "When the amounts below apply" })).not.toBeInTheDocument();
+    let dialog = screen.getByRole("dialog", { name: "Edit the pay from Jun 1, 2027" });
+    expect(within(dialog).getByText(/The amounts from Jun 1, 2027 on/)).toBeInTheDocument();
+    // Which entry it is has been decided already, and only its amounts are asked: pay, deductions, match.
+    expect(within(dialog).queryByLabelText("Changes from")).not.toBeInTheDocument();
+    expect(within(dialog).getAllByRole("radio").map((radio) => radio.parentElement?.textContent)).toEqual(["Pay", "Deductions", "Employer match"]);
     expect(within(dialog).getByRole("textbox", { name: "Take-home per paycheck" })).toHaveValue("2700.00");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[0]).toMatchObject({ netCents: 270000, effectiveFrom: "2027-06-01" });
 
     await userEvent.click(screen.getByRole("button", { name: "Edit the pay from the start" }));
-    dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    expect(within(dialog).getByText(/These are the amounts this income started with/)).toBeInTheDocument();
+    dialog = screen.getByRole("dialog", { name: "Edit the pay from the start" });
+    expect(within(dialog).getByText(/The amounts this income started with/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")).toHaveLength(2));
     expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1")[1]).toMatchObject({ netCents: 241800, originalAmounts: true });
