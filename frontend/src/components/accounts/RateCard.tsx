@@ -22,6 +22,8 @@ interface RateCardProps {
   about: string;
   /** What to say, and why to add one, while there is none. */
   missing: string;
+  /** A rate found elsewhere that is probably this one, offered while none is entered: what a promotion says it goes to afterwards. */
+  suggestion?: { rateBp: number; why: string };
 }
 
 /** The rate in force today: the newest one that has already started. Rates arrive newest first. */
@@ -33,8 +35,9 @@ function currentRate(rates: readonly Rate[]): Rate | undefined {
  * The rate a credit card or loan charges, with its history. A rate applies from its date until
  * the next one, so a change of rate never rewrites the months before it.
  */
-export function RateCard({ account, rates, title, unit, about, missing }: RateCardProps) {
+export function RateCard({ account, rates, title, unit, about, missing, suggestion }: RateCardProps) {
   const [editing, setEditing] = useState(false);
+  const useSuggestion = useSaveRate(account.id);
   const remove = useDeleteRate(account.id);
   const current = currentRate(rates);
 
@@ -56,9 +59,27 @@ export function RateCard({ account, rates, title, unit, about, missing }: RateCa
       ) : (
         <>
           <p className="text-muted">{missing}</p>
-          <button type="button" onClick={() => setEditing(true)} className={`${BUTTON_SECONDARY} mt-3`}>
-            Add the rate
-          </button>
+          {suggestion && <p className="mt-2">{suggestion.why}</p>}
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            {suggestion && (
+              <button
+                type="button"
+                disabled={useSuggestion.isPending}
+                onClick={() => useSuggestion.mutate({ rateBp: suggestion.rateBp, effectiveDate: todayIso() })}
+                className={BUTTON_PRIMARY}
+              >
+                {useSuggestion.isPending ? "Saving…" : `Use ${formatRate(suggestion.rateBp)} as the ${title}`}
+              </button>
+            )}
+            <button type="button" onClick={() => setEditing(true)} className={BUTTON_SECONDARY}>
+              {suggestion ? "Enter a different rate" : "Add the rate"}
+            </button>
+          </div>
+          {useSuggestion.error && (
+            <p role="alert" className="mt-2 text-danger">
+              {useSuggestion.error.message}
+            </p>
+          )}
         </>
       )}
 

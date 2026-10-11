@@ -1,15 +1,15 @@
-import { CalendarDays, FileText, HandCoins, Percent } from "lucide-react";
+import { CalendarDays, Calculator, FileText, Percent } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import { type Account, holdsCash } from "../../api/accounts";
+import type { Account } from "../../api/accounts";
 import {
   type CardSettings,
   type CardSettingsInput,
-  PAYMENT_MODES,
-  type PaymentMode,
+  type MinimumRule,
   type Promo,
   PROMO_KINDS,
   type PromoKind,
   useSaveCardSettings,
+  useSaveMinimumRule,
   useSavePromo,
   useSaveStatement,
 } from "../../api/cards";
@@ -19,9 +19,9 @@ import { parseRate, rateToInput } from "../../lib/rates";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
-import { Picker } from "../Picker";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
-import { PAYMENT_MODE_HELP, PAYMENT_MODE_LABELS, PROMO_KIND_LABELS } from "./labels";
+import { Segmented } from "../Segmented";
+import { PROMO_KIND_LABELS } from "./labels";
 
 /** The highest rate the backend takes: 1,000% a year, in basis points. */
 const MAX_RATE_BP = 100_000;
@@ -35,10 +35,6 @@ function asInput(settings: CardSettings | null): CardSettingsInput {
   return {
     statementCloseDay: settings?.statementCloseDay ?? DEFAULT_CLOSE_DAY,
     dueDay: settings?.dueDay ?? DEFAULT_DUE_DAY,
-    paymentMode: settings?.paymentMode ?? "statement_balance",
-    fixedPaymentCents: settings?.fixedPaymentCents ?? null,
-    autopay: settings?.autopay ?? false,
-    payFromAccountId: settings?.payFromAccountId ?? null,
     monthlyEstimateCents: settings?.monthlyEstimateCents ?? null,
   };
 }
@@ -58,8 +54,8 @@ function Buttons({ onClose, pending, save = "Save" }: { onClose: () => void; pen
 
 /**
  * When a card's statement closes and its payment is due, and — for a card whose charges are not
- * entered one by one — what a month's spending is expected to come to. How it is paid is its
- * own form, so neither is longer than the screen.
+ * entered one by one — what a month's spending is expected to come to. How it is paid is not
+ * here: the payment is a recurring item, and is set on that item's page like any other.
  */
 export function BillingForm({ account, settings, onClose }: { account: Account; settings: CardSettings | null; onClose: () => void }) {
   const id = useId();
@@ -107,86 +103,71 @@ export function BillingForm({ account, settings, onClose }: { account: Account; 
   );
 }
 
-/** How a card is paid: how much, from which account, and whether the bank takes it by itself. */
-export function PaymentForm({
-  account,
-  settings,
-  accounts,
-  onClose,
-}: {
-  account: Account;
-  settings: CardSettings;
-  /** Every account, for the one the payment comes out of. */
-  accounts: readonly Account[];
-  onClose: () => void;
-}) {
-  const id = useId();
-  const save = useSaveCardSettings(account.id);
-  const [mode, setMode] = useState<PaymentMode>(settings.paymentMode);
-  const [fixed, setFixed] = useState(settings.fixedPaymentCents === null ? "" : centsToInput(settings.fixedPaymentCents));
-  const [payFrom, setPayFrom] = useState<string | null>(settings.payFromAccountId === null ? null : String(settings.payFromAccountId));
-  const [autopay, setAutopay] = useState(settings.autopay);
-  const [problem, setProblem] = useState<string>();
+/** The whole balance: 100%, in basis points. */
+const WHOLE_BALANCE_BP = 10_000;
 
-  // Archived accounts are left out, unless the card is already paid from one.
-  const payFromOptions = accounts
-    .filter((candidate) => holdsCash(candidate.type) && (!candidate.archived || String(candidate.id) === payFrom))
-    .map((candidate) => ({ id: String(candidate.id), label: candidate.name, color: candidate.color }));
+/**
+ * How the card's minimum payment is estimated until a statement with the real one is entered.
+ * Card companies work it out differently, so the rule is the card's own: a share of the statement
+ * balance, with or without the month's interest on top, and never less than a floor.
+ */
+export function MinimumForm({ account, rule, onClose }: { account: Account; rule: MinimumRule; onClose: () => void }) {
+  const id = useId();
+  const save = useSaveMinimumRule(account.id);
+  const [share, setShare] = useState(rateToInput(rule.shareBp));
+  const [floor, setFloor] = useState(centsToInput(rule.floorCents));
+  const [plusInterest, setPlusInterest] = useState(rule.plusInterest);
+  const [problem, setProblem] = useState<string>();
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const fixedPaymentCents = mode === "fixed" ? parseDollars(fixed) : null;
-    if (mode === "fixed" && (fixedPaymentCents === null || fixedPaymentCents <= 0)) {
-      setProblem("Please enter the amount you pay each month, like 240.00.");
+    const shareBp = parseRate(share);
+    if (shareBp === null || shareBp > WHOLE_BALANCE_BP) {
+      setProblem("Please enter the share of the balance as a percentage from 0 to 100, like 1.00.");
+      return;
+    }
+    const floorCents = floor.trim() === "" ? 0 : parseDollars(floor);
+    if (floorCents === null || floorCents < 0) {
+      setProblem(AMOUNT_HELP);
       return;
     }
     setProblem(undefined);
-    save.mutate(
-      { ...asInput(settings), paymentMode: mode, fixedPaymentCents, payFromAccountId: payFrom === null ? null : Number(payFrom), autopay },
-      { onSuccess: onClose },
-    );
+    save.mutate({ shareBp, floorCents, plusInterest }, { onSuccess: onClose });
   };
 
   const failure = problem ?? save.error?.message;
   return (
-    <Modal title={`Payment setting — ${account.name}`} icon={HandCoins} tone={account.color} onClose={onClose}>
+    <Modal title={`Minimum payment estimate — ${account.name}`} icon={Calculator} tone={account.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <div>
-          <label htmlFor={`${id}-mode`} className={LABEL}>
-            What you pay each month
-          </label>
-          <select id={`${id}-mode`} value={mode} onChange={(event) => setMode(event.target.value as PaymentMode)} className={INPUT}>
-            {PAYMENT_MODES.map((choice) => (
-              <option key={choice} value={choice}>
-                {PAYMENT_MODE_LABELS[choice]}
-              </option>
-            ))}
-          </select>
-          <p className={HINT}>{PAYMENT_MODE_HELP[mode]}</p>
-        </div>
-        {mode === "fixed" && <MoneyField label="Amount each month" value={fixed} onChange={setFixed} required />}
-        <div>
-          <Picker
-            label="Paid from"
-            noun="account"
-            placeholder={payFromOptions.length === 0 ? "No checking or savings account yet" : "No scheduled payment"}
-            options={payFromOptions}
-            value={payFrom}
-            onChange={setPayFrom}
-            clearable
-          />
-          <p className={HINT}>
-            Choosing an account adds this payment to your recurring items, due on the card's due day, so it shows in each pay period.
-          </p>
+        <p className={HINT}>
+          Your card agreement or a statement says how the minimum is worked out. This is only used until you enter a statement with its
+          real minimum.
+        </p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor={`${id}-share`} className={LABEL}>
+              Share of the statement balance (%)
+            </label>
+            <input
+              id={`${id}-share`}
+              value={share}
+              onChange={(event) => setShare(event.target.value)}
+              inputMode="decimal"
+              autoComplete="off"
+              required
+              className={INPUT}
+            />
+          </div>
+          <MoneyField label="At least" value={floor} onChange={setFloor} />
         </div>
         <label className="flex min-h-11 items-center gap-3">
           <input
             type="checkbox"
-            checked={autopay}
-            onChange={(event) => setAutopay(event.target.checked)}
+            checked={plusInterest}
+            onChange={(event) => setPlusInterest(event.target.checked)}
             className="size-5 accent-(--accent)"
           />
-          <span className="font-medium">Autopay: the card takes it without me doing anything</span>
+          <span className="font-medium">Plus that month's interest</span>
         </label>
         {failure && (
           <p role="alert" className="text-danger">
@@ -198,6 +179,14 @@ export function PaymentForm({
     </Modal>
   );
 }
+
+/** What a promotional rate is on. */
+type PromoScope = "everything" | "amount";
+
+const PROMO_SCOPE_OPTIONS: readonly { value: PromoScope; label: string }[] = [
+  { value: "everything", label: "Everything on the card" },
+  { value: "amount", label: "A set amount" },
+];
 
 /** The latest day of the month `day` (31 = last) on or before today: the statement most likely being entered. */
 function lastClose(day: number): string {
@@ -309,7 +298,9 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
   const [step, setStep] = useState(0);
   const [label, setLabel] = useState(promo?.label ?? "");
   const [kind, setKind] = useState<PromoKind>(promo?.kind ?? "balance_transfer");
-  const [original, setOriginal] = useState(promo ? centsToInput(promo.originalBalanceCents) : "");
+  // Most offers are on the whole card ("0% for 12 months"); a balance transfer or one financed purchase is on a set amount.
+  const [scope, setScope] = useState<PromoScope>(promo && promo.originalBalanceCents !== null ? "amount" : "everything");
+  const [original, setOriginal] = useState(promo && promo.originalBalanceCents !== null ? centsToInput(promo.originalBalanceCents) : "");
   const [startDate, setStartDate] = useState(promo?.startDate ?? today);
   const [endDate, setEndDate] = useState(promo?.endDate ?? "");
   const [rate, setRate] = useState(promo ? rateToInput(promo.rateBp) : "0.00");
@@ -323,8 +314,8 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
     event.preventDefault();
     if (step === 0) {
       // Each step is checked before the next opens; nothing is sent until the last one.
-      if (originalCents === null || originalCents <= 0) {
-        setProblem("Please enter the balance this promotion started with, like 3,000.00.");
+      if (scope === "amount" && (originalCents === null || originalCents <= 0)) {
+        setProblem("Please enter the amount this rate is on, like 3,000.00.");
         return;
       }
       if (endDate <= startDate) {
@@ -347,7 +338,17 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
     }
     setProblem(undefined);
     save.mutate(
-      { label, kind, rateBp, startDate, endDate, originalBalanceCents: originalCents ?? 0, rateAfterBp, deferredInterest: deferred },
+      {
+        label,
+        kind,
+        rateBp,
+        startDate,
+        endDate,
+        originalBalanceCents: scope === "amount" ? originalCents : null,
+        rateAfterBp,
+        // Deferred interest is charged on the amount a promotion started with, so it needs one.
+        deferredInterest: scope === "amount" && deferred,
+      },
       { onSuccess: onClose },
     );
   };
@@ -390,7 +391,15 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
                 </select>
               </div>
             </div>
-            <MoneyField label="Balance it started with" value={original} onChange={setOriginal} required />
+            <div>
+              <Segmented legend="What the rate applies to" options={PROMO_SCOPE_OPTIONS} value={scope} onChange={setScope} />
+              <p className={HINT}>
+                {scope === "everything"
+                  ? "The whole balance, and anything charged while the rate runs."
+                  : "Only this much of the balance, like a balance transfer or one purchase. The rest is at the regular APR."}
+              </p>
+            </div>
+            {scope === "amount" && <MoneyField label="Amount on this rate" value={original} onChange={setOriginal} required />}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor={`${id}-start`} className={LABEL}>
@@ -451,8 +460,10 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
                   placeholder="The card's regular APR"
                   className={`${INPUT} tabular-nums`}
                 />
+                <p className={HINT}>Empty means the card's regular APR. On a card with none yet, this becomes it.</p>
               </div>
             </div>
+            {scope === "amount" && (
             <div>
               <label className="flex min-h-11 items-center gap-3">
                 <input
@@ -468,6 +479,7 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
                 It gets a stronger warning.
               </p>
             </div>
+            )}
           </>
         )}
         {failure && (

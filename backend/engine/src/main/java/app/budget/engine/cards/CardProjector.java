@@ -7,6 +7,7 @@ import app.budget.engine.projection.BalanceAnchor;
 import app.budget.engine.projection.Movement;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,7 @@ public final class CardProjector {
      *                        whose charges are not entered one by one; {@code null} otherwise
      * @param apr             the regular APR over time; {@code null} when none was entered
      * @param entered         the statements the user entered, by closing date
+     * @param minimum         how a statement's minimum is estimated while the real one is not entered
      */
     public record Terms(
             int closeDay,
@@ -43,7 +45,15 @@ public final class CardProjector {
             Money monthlyEstimate,
             InterestTerms apr,
             List<Promo> promos,
-            Map<LocalDate, Statement> entered) {
+            Map<LocalDate, Statement> entered,
+            CardPayment.MinimumRule minimum) {
+
+        /** A card whose minimum is estimated the usual way. */
+        public Terms(
+                int closeDay, int dueDay, CardPayment.Mode mode, Money monthlyEstimate, InterestTerms apr, List<Promo> promos,
+                Map<LocalDate, Statement> entered) {
+            this(closeDay, dueDay, mode, monthlyEstimate, apr, promos, entered, CardPayment.MinimumRule.USUAL);
+        }
 
         BasisPoints aprOn(LocalDate date) {
             return apr == null ? BasisPoints.of(0) : apr.rateOn(date).orElse(BasisPoints.of(0));
@@ -85,10 +95,14 @@ public final class CardProjector {
      * @param statements every statement closed within the dates followed, earliest first
      * @param exact      the {@link Payment#key()} of each payment sized from a statement the user
      *                   entered, so its amount is the real one rather than an estimate
+     * @param pays       by {@link Payment#key()}, the closing date of the statement a payment was
+     *                   sized from. Only payments that pay a statement (its balance or its
+     *                   minimum) are here, and only once a statement stands behind them: one sized
+     *                   from the balance the card starts with has no statement to name
      */
-    public record Result(List<Derived> derived, List<Statement> statements, Set<Integer> exact) {
+    public record Result(List<Derived> derived, List<Statement> statements, Set<Integer> exact, Map<Integer, LocalDate> pays) {
 
-        public static final Result NONE = new Result(List.of(), List.of(), Set.of());
+        public static final Result NONE = new Result(List.of(), List.of(), Set.of(), Map.of());
     }
 
     /**
@@ -140,16 +154,19 @@ public final class CardProjector {
         // Until the first statement closes, the balance the card starts with stands in for one:
         // it is what a "statement balance" payment pays, and what interest is carried on.
         Money statementBalance = owed;
-        Money minimumDue = CardPayment.estimatedMinimum(owed, Money.ZERO);
+        Money minimumDue = CardPayment.estimatedMinimum(owed, Money.ZERO, terms.minimum());
         Money paidSinceClose = Money.ZERO;
         boolean statementEntered = false;
+        // The closing date of the statement those figures come from; none while the starting balance stands in.
+        LocalDate statementClosed = null;
         // Unless the user entered the statement that closed last before these dates: then that is
         // the one still to be paid, whatever was charged since. An older one says nothing about now.
         Statement before = terms.entered().get(StatementCycle.lastCloseOnOrBefore(terms.closeDay(), start.minusDays(1)));
         if (before != null && before.closeDate().isBefore(start)) {
             statementBalance = before.balance();
-            minimumDue = before.minimumDue() != null ? before.minimumDue() : CardPayment.estimatedMinimum(before.balance(), Money.ZERO);
+            minimumDue = before.minimumDue() != null ? before.minimumDue() : CardPayment.estimatedMinimum(before.balance(), Money.ZERO, terms.minimum());
             statementEntered = true;
+            statementClosed = before.closeDate();
             // Payments made since it closed, before the balance these dates start from, already count toward it.
             for (Map.Entry<LocalDate, List<Money>> earlier : movements.subMap(before.closeDate(), false, start, false).entrySet()) {
                 for (Money amount : earlier.getValue()) {
@@ -160,6 +177,8 @@ public final class CardProjector {
             }
         }
         Set<Integer> exact = new HashSet<>();
+        Map<Integer, LocalDate> pays = new HashMap<>();
+        boolean paysAStatement = terms.mode() == CardPayment.Mode.STATEMENT_BALANCE || terms.mode() == CardPayment.Mode.MINIMUM;
 
         for (LocalDate day : days.subSet(start, true, through, true)) {
             Money anchored = entered.get(day);
@@ -178,8 +197,11 @@ public final class CardProjector {
                 paidSinceClose = paidSinceClose.plus(paid);
                 derived.add(new Derived(day, Kind.PAYMENT, paid.negate(), payment.key()));
                 // The whole balance moves with every charge still to come; a statement that was entered does not.
-                if (statementEntered && (terms.mode() == CardPayment.Mode.STATEMENT_BALANCE || terms.mode() == CardPayment.Mode.MINIMUM)) {
+                if (statementEntered && paysAStatement) {
                     exact.add(payment.key());
+                }
+                if (statementClosed != null && paysAStatement) {
+                    pays.put(payment.key(), statementClosed);
                 }
             }
             BasisPoints apr = terms.aprOn(day);
@@ -199,10 +221,12 @@ public final class CardProjector {
                     // The real statement already holds the month's spending and interest.
                     statements.add(real);
                     statementBalance = real.balance();
-                    minimumDue = real.minimumDue() != null ? real.minimumDue() : CardPayment.estimatedMinimum(real.balance(), Money.ZERO);
+                    minimumDue = real.minimumDue() != null ? real.minimumDue() : CardPayment.estimatedMinimum(real.balance(), Money.ZERO, terms.minimum());
                     statementEntered = true;
+                    statementClosed = real.closeDate();
                 } else {
                     statementEntered = false;
+                    statementClosed = day;
                     if (terms.monthlyEstimate() != null && !terms.monthlyEstimate().isZero()) {
                         owed = owed.plus(terms.monthlyEstimate());
                         derived.add(new Derived(day, Kind.ESTIMATED_SPENDING, terms.monthlyEstimate(), -1));
@@ -218,13 +242,13 @@ public final class CardProjector {
                         derived.add(new Derived(day, Kind.INTEREST, interest, -1));
                     }
                     statementBalance = owed.isNegative() ? Money.ZERO : owed;
-                    minimumDue = CardPayment.estimatedMinimum(statementBalance, interest);
+                    minimumDue = CardPayment.estimatedMinimum(statementBalance, interest, terms.minimum());
                     statements.add(new Statement(
                             day, statementBalance, minimumDue, StatementCycle.dueDate(day, terms.dueDay()), interest, false));
                 }
                 paidSinceClose = Money.ZERO;
             }
         }
-        return new Result(derived, statements, exact);
+        return new Result(derived, statements, exact, pays);
     }
 }

@@ -9,13 +9,22 @@ import java.math.BigDecimal;
  */
 public final class CardPayment {
 
-    /** The least an issuer usually asks for, when the balance is at least that much. */
-    private static final Money MINIMUM_FLOOR = Money.ofCents(2500);
-
-    /** The share of the statement balance an issuer usually asks for, before interest. */
-    private static final BigDecimal MINIMUM_SHARE = new BigDecimal("0.01");
+    private static final BigDecimal BASIS_POINTS = new BigDecimal("10000");
 
     private CardPayment() {}
+
+    /**
+     * How a card's minimum payment is estimated. Issuers differ, so each card has its own.
+     *
+     * @param shareBp      the share of the statement balance asked for, in basis points (1% is 100)
+     * @param floor        the least asked for, when the balance is at least that much
+     * @param plusInterest true when that month's interest is added on top of the share
+     */
+    public record MinimumRule(int shareBp, Money floor, boolean plusInterest) {
+
+        /** What an issuer usually asks for: 1% of the balance plus the month's interest, and at least $25. */
+        public static final MinimumRule USUAL = new MinimumRule(100, Money.ofCents(2500), true);
+    }
 
     public enum Mode {
         /** Everything owed on the day of the payment. */
@@ -49,15 +58,19 @@ public final class CardPayment {
     }
 
     /**
-     * A stand-in for a statement's minimum until the real one is entered: the larger of $25 and
-     * 1% of the balance plus that month's interest, and never more than the balance itself.
+     * A stand-in for a statement's minimum until the real one is entered: the larger of the
+     * rule's floor and its share of the balance (plus that month's interest, when the rule says
+     * so), and never more than the balance itself.
      */
-    public static Money estimatedMinimum(Money statementBalance, Money interest) {
+    public static Money estimatedMinimum(Money statementBalance, Money interest, MinimumRule rule) {
         if (statementBalance.isNegative() || statementBalance.isZero()) {
             return Money.ZERO;
         }
-        Money share = statementBalance.times(MINIMUM_SHARE).plus(interest);
-        Money minimum = share.compareTo(MINIMUM_FLOOR) > 0 ? share : MINIMUM_FLOOR;
+        Money share = statementBalance.times(BigDecimal.valueOf(rule.shareBp()).divide(BASIS_POINTS));
+        if (rule.plusInterest()) {
+            share = share.plus(interest);
+        }
+        Money minimum = share.compareTo(rule.floor()) > 0 ? share : rule.floor();
         return minimum.compareTo(statementBalance) > 0 ? statementBalance : minimum;
     }
 }

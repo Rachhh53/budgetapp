@@ -31,17 +31,30 @@ public final class LoanProjector {
      * @param paymentDay    day of the month a month's interest is added, 1–31 (31 = the last day)
      * @param escrowMonthly the part of a month's regular payments that goes to insurance and taxes
      * @param rate          the loan's rate over time; {@code null} when none was entered
+     * @param assumedPayment what a month's payment takes off the loan (the payment less escrow) in a
+     *                      month nothing was scheduled for it yet; zero to assume nothing
      */
-    public record Terms(int paymentDay, Money escrowMonthly, InterestTerms rate) {}
+    public record Terms(int paymentDay, Money escrowMonthly, InterestTerms rate, Money assumedPayment) {
+
+        /** Terms that assume no payment was made unless one is given. */
+        public Terms(int paymentDay, Money escrowMonthly, InterestTerms rate) {
+            this(paymentDay, escrowMonthly, rate, Money.ZERO);
+        }
+    }
 
     public enum Kind {
         /** A month's interest, added to what is owed. */
         INTEREST,
         /** The part of a regular payment that went to escrow, so it did not lower the loan. */
-        ESCROW
+        ESCROW,
+        /**
+         * A month's payment taken as made, from before any payment was scheduled: a loan entered
+         * as it stood years ago is paid down to today, not left to grow.
+         */
+        ASSUMED_PAYMENT
     }
 
-    /** @param amount what it adds to the amount owed; always positive */
+    /** @param amount always positive: what it adds to the amount owed, or for an assumed payment what it takes off */
     public record Derived(LocalDate date, Kind kind, Money amount) {}
 
     /**
@@ -68,6 +81,7 @@ public final class LoanProjector {
         LocalDate newest = entered.lastKey();
         TreeMap<LocalDate, List<Money>> scheduled = byDay(regular, newest);
         TreeMap<LocalDate, List<Money>> others = byDay(other, newest);
+        YearMonth firstScheduled = scheduled.isEmpty() ? null : YearMonth.from(scheduled.firstKey());
         TreeSet<LocalDate> interestDays = new TreeSet<>(SavingsInterest.creditDates(terms.paymentDay(), start, through));
 
         TreeSet<LocalDate> days = new TreeSet<>(entered.keySet());
@@ -91,6 +105,14 @@ public final class LoanProjector {
                     owed = owed.plus(interest);
                     derived.add(new Derived(day, Kind.INTEREST, interest));
                 }
+            }
+            // Until the first scheduled payment's month, the payment is taken as made on its day. A
+            // balance entered that day already says what was owed after it.
+            if (interestDays.contains(day) && anchored == null && !terms.assumedPayment().isZero() && !terms.assumedPayment().isNegative()
+                    && (firstScheduled == null || YearMonth.from(day).isBefore(firstScheduled)) && !owed.isNegative() && !owed.isZero()) {
+                Money paid = terms.assumedPayment().compareTo(owed) > 0 ? owed : terms.assumedPayment();
+                owed = owed.minus(paid);
+                derived.add(new Derived(day, Kind.ASSUMED_PAYMENT, paid));
             }
             for (Money amount : scheduled.getOrDefault(day, List.of())) {
                 owed = owed.plus(amount);

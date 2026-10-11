@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ACCOUNTS_KEY } from "./accounts";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
+import { ITEMS_KEY } from "./items";
 
 /** A loan's terms. Amounts are whole cents. */
 export interface LoanSettings {
@@ -15,6 +16,8 @@ export interface LoanSettings {
   paymentDay: number;
   escrowInsuranceCents: number;
   escrowTaxesCents: number;
+  /** The recurring item linked as its payment from the loan's page; `null` when none is. */
+  paymentItemId: number | null;
 }
 
 export interface LoanInput {
@@ -25,6 +28,15 @@ export interface LoanInput {
   paymentDay: number;
   escrowInsuranceCents: number;
   escrowTaxesCents: number;
+  /** The recurring item linked as its payment from the loan's page; `null` when none is. */
+  paymentItemId: number | null;
+}
+
+/** A recurring item that pays the loan: the one linked here, or a transfer into the loan. */
+export interface PaidBy {
+  itemId: number;
+  name: string;
+  linked: boolean;
 }
 
 /** How one monthly payment is shared out. `paymentCents` is the whole payment, escrow included. */
@@ -60,12 +72,19 @@ export interface Loan {
   interestRemainingCents: number | null;
   /** False when the payment does not cover the interest. */
   paysOff: boolean;
+  /** The recurring items that pay it. Empty until one does: the payment is then taken as made each month. */
+  paidBy: PaidBy[];
   years: LoanYear[];
 }
 
 /** Under PAY_KEY: what is owed, and so the payoff date, follows everything that moves money. */
-export function useLoan(accountId: number) {
-  return useQuery({ queryKey: [...PAY_KEY, "loan", accountId], queryFn: () => api.get<Loan>(`/api/accounts/${accountId}/loan`) });
+/** `enabled` is false on a page that may not be showing a loan: only a loan has terms to ask for. */
+export function useLoan(accountId: number, enabled = true) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "loan", accountId],
+    queryFn: () => api.get<Loan>(`/api/accounts/${accountId}/loan`),
+    enabled,
+  });
 }
 
 export function useSaveLoan(accountId: number) {
@@ -76,6 +95,20 @@ export function useSaveLoan(accountId: number) {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: PAY_KEY }),
         queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+      ]),
+  });
+}
+
+/** Adds the loan's monthly payment as a recurring transfer into it, from the account chosen. */
+export function useAddLoanPayment(accountId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { payFromAccountId: number; autopay: boolean }) => api.post<Loan>(`/api/accounts/${accountId}/loan/payment`, input),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+        queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
       ]),
   });
 }

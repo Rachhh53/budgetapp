@@ -123,6 +123,19 @@ export interface PeriodDetail {
   bucketMoves: BucketMove[];
   /** Promotional rates that end in this period with a balance still on them. */
   promosEnding?: PromoEnd[];
+  /** Which statement each card payment listed here was sized from, for those that pay a statement's balance or its minimum. */
+  statementsPaid?: StatementPaid[];
+}
+
+/** The statement a card payment that follows its card was sized from. */
+export interface StatementPaid {
+  itemId: number;
+  /** With `itemId`, the occurrence this is about. */
+  scheduledDate: string;
+  /** The day that statement closed, or will close. */
+  closeDate: string;
+  /** True when the statement is one the user entered; false for one the app projected. */
+  entered: boolean;
 }
 
 /** What a "just this one" edit can change. Only what is sent changes. */

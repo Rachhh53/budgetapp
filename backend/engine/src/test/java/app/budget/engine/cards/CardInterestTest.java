@@ -1,6 +1,7 @@
 package app.budget.engine.cards;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import app.budget.engine.BasisPoints;
 import app.budget.engine.Money;
@@ -93,5 +94,26 @@ class CardInterestTest {
         assertThat(CardInterest.deferredCharge(deferred, Money.ofCents(1), APR)).isEqualTo(Money.ofCents(73470));
         assertThat(CardInterest.deferredCharge(deferred, Money.ZERO, APR)).isEqualTo(Money.ZERO);
         assertThat(CardInterest.deferredCharge(zeroPercent(2, 300000, false), Money.ofCents(100000), APR)).isEqualTo(Money.ZERO);
+    }
+
+    @Test
+    void aPromotionOnTheWholeBalanceTakesEverythingOwedHoweverMuch() {
+        // No amount of its own: 0% on the card, so charges made after it started are covered too.
+        Promo everything = new Promo(1, BasisPoints.of(0), date("2026-03-15"), date("2027-03-15"), null, null, false);
+
+        assertThat(CardInterest.allocate(Money.ofCents(400200), List.of(everything), date("2026-10-20"), APR)).containsExactly(
+                new Portion(1L, Money.ofCents(400200), BasisPoints.of(0)),
+                new Portion(null, Money.ZERO, APR));
+        assertThat(CardInterest.forMonth(Money.ofCents(400200), List.of(everything), date("2026-10-20"), APR)).isEqualTo(Money.ZERO);
+        assertThat(CardInterest.remaining(everything, Money.ofCents(400200), List.of(everything), date("2026-10-20"), APR))
+                .isEqualTo(Money.ofCents(400200));
+        // Once it ends, everything is at the rate that follows: 4,002.00 × 24.49% ÷ 12 = 81.674 → 81.67
+        assertThat(CardInterest.forMonth(Money.ofCents(400200), List.of(everything), date("2027-03-20"), APR)).isEqualTo(Money.ofCents(8167));
+    }
+
+    @Test
+    void deferredInterestNeedsASetAmount() {
+        assertThatThrownBy(() -> new Promo(1, BasisPoints.of(0), date("2026-03-15"), date("2027-03-15"), null, null, true))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

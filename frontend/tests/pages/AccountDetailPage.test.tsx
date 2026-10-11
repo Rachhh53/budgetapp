@@ -48,6 +48,18 @@ const PROJECTION: AccountPoint[] = [
   { start: "2026-10-15", end: "2026-10-31", endingCents: 412500, lowestCents: 309610, availableCents: 392500 },
 ];
 
+/** A credit card nothing has been set up on yet, as its own page asks for it. */
+function asCard(detail: AccountDetail) {
+  return {
+    card: { account: detail.account, balanceCents: null, settings: null, aprBp: null, nextPayment: null, promo: null },
+    promos: [],
+    statements: [],
+    rates: [],
+    nextCloseDate: null,
+    nextDueDate: null,
+  };
+}
+
 describe("account detail screen", () => {
   it("shows the balance and every balance entered, with the change between them", async () => {
     fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }) });
@@ -186,7 +198,7 @@ describe("account detail screen", () => {
 
   it("asks what is owed for a credit card", async () => {
     const card: AccountDetail = { ...EMPTY, account: { ...CHECKING, type: "credit_card", latestBalance: null } };
-    fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: card }) });
+    fakeBackend({ "GET /api/accounts/1": () => ({ status: 200, data: card }), "GET /api/cards/1": () => ({ status: 200, data: asCard(card) }) });
     renderApp("/accounts/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Update balance" }));
@@ -850,6 +862,7 @@ describe("account detail screen", () => {
     it("has no buckets or interest for a credit card", async () => {
       fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: { ...EMPTY, account: { ...CHECKING, type: "credit_card" } } }),
+        "GET /api/cards/1": () => ({ status: 200, data: asCard({ ...EMPTY, account: { ...CHECKING, type: "credit_card" } }) }),
       });
       renderApp("/accounts/1");
 

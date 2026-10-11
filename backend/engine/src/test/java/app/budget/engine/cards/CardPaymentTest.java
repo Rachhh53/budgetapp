@@ -54,11 +54,26 @@ class CardPaymentTest {
     @Test
     void anEstimatedMinimumIsOnePercentPlusInterestAndAtLeastTwentyFiveDollars() {
         // 1% of 5,000.00 is 50.00, plus 100.00 of interest.
-        assertThat(CardPayment.estimatedMinimum(cents(500000), cents(10000))).isEqualTo(cents(15000));
+        assertThat(CardPayment.estimatedMinimum(cents(500000), cents(10000), CardPayment.MinimumRule.USUAL)).isEqualTo(cents(15000));
         // 1% of 2,400.00 is 24.00: under the usual floor.
-        assertThat(CardPayment.estimatedMinimum(cents(240000), Money.ZERO)).isEqualTo(cents(2500));
+        assertThat(CardPayment.estimatedMinimum(cents(240000), Money.ZERO, CardPayment.MinimumRule.USUAL)).isEqualTo(cents(2500));
         // Never more than the balance itself.
-        assertThat(CardPayment.estimatedMinimum(cents(1000), Money.ZERO)).isEqualTo(cents(1000));
-        assertThat(CardPayment.estimatedMinimum(Money.ZERO, Money.ZERO)).isEqualTo(Money.ZERO);
+        assertThat(CardPayment.estimatedMinimum(cents(1000), Money.ZERO, CardPayment.MinimumRule.USUAL)).isEqualTo(cents(1000));
+        assertThat(CardPayment.estimatedMinimum(Money.ZERO, Money.ZERO, CardPayment.MinimumRule.USUAL)).isEqualTo(Money.ZERO);
+    }
+
+    @Test
+    void aCardsOwnRuleSetsTheShareTheFloorAndWhetherInterestIsAdded() {
+        // 2% of 5,000.00 with interest left out: 100.00, whatever the month's interest was.
+        CardPayment.MinimumRule twoPercent = new CardPayment.MinimumRule(200, cents(3500), false);
+        assertThat(CardPayment.estimatedMinimum(cents(500000), cents(10000), twoPercent)).isEqualTo(cents(10000));
+        // 2% of 1,000.00 is 20.00: under this card's floor of 35.00.
+        assertThat(CardPayment.estimatedMinimum(cents(100000), Money.ZERO, twoPercent)).isEqualTo(cents(3500));
+        // A flat minimum: no share at all, only the floor.
+        assertThat(CardPayment.estimatedMinimum(cents(500000), cents(10000), new CardPayment.MinimumRule(0, cents(4000), false)))
+                .isEqualTo(cents(4000));
+        // A share that is not a whole number of cents rounds to the nearest: 1.25% of 333.33 is 4.166625.
+        assertThat(CardPayment.estimatedMinimum(cents(33333), Money.ZERO, new CardPayment.MinimumRule(125, Money.ZERO, false)))
+                .isEqualTo(cents(417));
     }
 }

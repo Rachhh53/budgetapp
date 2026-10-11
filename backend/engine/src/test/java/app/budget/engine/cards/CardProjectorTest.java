@@ -224,6 +224,8 @@ class CardProjectorTest {
         assertThat(result.statements()).extracting(Statement::balance).containsExactly(cents(240000));
         // The first is the amount on a real statement; the second is sized from a projected one.
         assertThat(result.exact()).containsExactly(1);
+        // Each says which statement it pays: the one entered, then the one projected to close in October.
+        assertThat(result.pays()).containsExactlyInAnyOrderEntriesOf(Map.of(1, date("2026-09-20"), 2, date("2026-10-20")));
     }
 
     @Test
@@ -238,6 +240,8 @@ class CardProjectorTest {
 
         assertThat(result.derived()).containsExactly(new Derived(date("2026-10-15"), Kind.PAYMENT, cents(-312500), 1));
         assertThat(result.exact()).isEmpty();
+        // It is sized from the balance the card starts with, so there is no statement to name.
+        assertThat(result.pays()).isEmpty();
     }
 
     @Test

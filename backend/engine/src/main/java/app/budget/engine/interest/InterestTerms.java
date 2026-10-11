@@ -9,10 +9,22 @@ import java.util.Optional;
 /**
  * How one account earns interest: the day of the month it is credited, and its APY over time.
  *
- * @param creditDay day of the month, 1–31 (31 = the last day)
+ * @param creditDay day of the month, 1–31 (31 = the last day); not used when {@code daily}
  * @param rates     every rate the user entered, in any order
+ * @param daily     true when it builds up a little every day instead of arriving once a month:
+ *                  an investment's assumed growth, which no bank posts on a day of its own
  */
-public record InterestTerms(int creditDay, List<RateChange> rates) {
+public record InterestTerms(int creditDay, List<RateChange> rates, boolean daily) {
+
+    /** An account credited once a month, as a bank pays interest. */
+    public InterestTerms(int creditDay, List<RateChange> rates) {
+        this(creditDay, rates, false);
+    }
+
+    /** An account that builds up every day at the yearly rate given. */
+    public static InterestTerms growingDaily(List<RateChange> rates) {
+        return new InterestTerms(SavingsInterest.LAST_DAY, rates, true);
+    }
 
     /** An APY that applies from {@code effectiveFrom} until the next change. */
     public record RateChange(LocalDate effectiveFrom, BasisPoints apy) {}

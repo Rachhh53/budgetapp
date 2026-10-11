@@ -99,6 +99,9 @@ public final class ItemsRoutes {
      *                       account). A transfer: optionally, a bucket in the account it goes to.
      * @param saveUpBucketId a bill or budget: optionally, a bucket in the account it is paid from,
      *                       to set a share aside in every paycheck
+     * @param cardPaymentMode a card payment: how much it pays. {@code fixed} is the amount sent; {@code
+     *                       statement_balance}, {@code full_balance} and {@code minimum} follow the card,
+     *                       so the amount sent means nothing. Left out, it stays as it was (fixed, when new).
      */
     public record ItemInput(
             String name,
@@ -119,7 +122,8 @@ public final class ItemsRoutes {
             LocalDate effectiveFrom,
             Long bucketId,
             Long saveUpBucketId,
-            Long fromBucketId) {}
+            Long fromBucketId,
+            String cardPaymentMode) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -148,10 +152,11 @@ public final class ItemsRoutes {
      * @param history     every version, oldest first: the item's price history
      * @param paused      true while it is paused today, so nothing it is scheduled for happens
      * @param pausedUntil the first day it runs again; {@code null} when not paused, or paused until turned back on
-     * @param paymentOfCardId the credit card whose own payment this is, kept in step with that card's
-     *                    payment setting; {@code null} for any other item
-     * @param followsCard true when its amount is whatever that card's payment setting works out to
-     *                    (its statement balance, say), so {@code amountCents} means nothing
+     * @param paymentOfCardId the credit card whose own payment this is; {@code null} for any other item
+     * @param followsCard true when its amount is worked out from that card (its statement balance,
+     *                    say), so {@code amountCents} means nothing
+     * @param cardPaymentMode how much a card's own payment pays ({@code fixed}, {@code statement_balance},
+     *                    {@code full_balance} or {@code minimum}); {@code null} for any other item
      */
     public record ItemView(
             long id,
@@ -182,7 +187,8 @@ public final class ItemsRoutes {
             boolean paused,
             LocalDate pausedUntil,
             Long paymentOfCardId,
-            boolean followsCard) {}
+            boolean followsCard,
+            String cardPaymentMode) {}
 
     /** @param until the first day it runs again; left out to pause until it is turned back on */
     public record PauseInput(LocalDate until) {}
@@ -196,10 +202,13 @@ public final class ItemsRoutes {
 
     private void create(Context ctx) {
         ItemInput input = Inputs.body(ctx, ItemInput.class);
-        Terms terms = terms(input, kind(input));
+        Terms sent = terms(input, kind(input));
+        OfCard card = ofCard(input, kind(input), sent, null);
+        Terms terms = sized(sent, card);
         // The first version covers the item's whole life, so it is dated from when the schedule starts.
         long id = items.create(identity(input), terms, terms.schedule().startDate());
         letItsBucketCountFromItsStart(terms);
+        keepItsCardInStep(id, card, terms);
         ApiResponse.send(ctx, 201, view(id));
     }
 
@@ -229,7 +238,9 @@ public final class ItemsRoutes {
         long id = Inputs.id(ctx, "id");
         ItemInput input = Inputs.body(ctx, ItemInput.class);
         Identity identity = identity(input);
-        Terms terms = terms(input, identity.kind());
+        Terms sent = terms(input, identity.kind());
+        OfCard card = ofCard(input, identity.kind(), sent, id);
+        Terms terms = sized(sent, card);
         LocalDate effectiveFrom = input.effectiveFrom() == null ? pay.today() : input.effectiveFrom();
         if (!Inputs.inSupportedYears(effectiveFrom)) {
             throw ApiException.badRequest("Please choose the date this change starts from.");
@@ -246,6 +257,7 @@ public final class ItemsRoutes {
         }
         items.update(id, identity, terms, effectiveFrom);
         letItsBucketCountFromItsStart(terms);
+        keepItsCardInStep(id, card, terms);
         ApiResponse.ok(ctx, view(id));
     }
 
@@ -259,7 +271,9 @@ public final class ItemsRoutes {
         ItemInput input = Inputs.body(ctx, ItemInput.class);
         // Everything is checked before anything is written, so a mistake leaves the old item as it was.
         Identity identity = identity(input);
-        Terms sent = terms(input, identity.kind());
+        // It stands in for the item it replaces, so it may be the same card's own payment.
+        OfCard card = ofCard(input, identity.kind(), terms(input, identity.kind()), id);
+        Terms sent = sized(terms(input, identity.kind()), card);
         ScheduleRule rule = sent.schedule();
         Terms terms = sent.withSchedule(new ScheduleRule(
                 rule.frequency(), rule.interval(), rule.day1(), rule.day2(), rule.month(),
@@ -269,7 +283,89 @@ public final class ItemsRoutes {
         }
         long created = items.replace(id, identity, terms);
         letItsBucketCountFromItsStart(terms);
+        keepItsCardInStep(created, card, terms);
         ApiResponse.send(ctx, 201, view(created));
+    }
+
+    /** A card's own payment: the card's settings as they stand, and how much the payment pays. */
+    private record OfCard(CardsRepository.Settings settings, CardPayment.Mode mode) {}
+
+    /**
+     * Works out whether a card payment is its card's own payment: the one that can follow the card
+     * (its statement balance, say) instead of having an amount. A card has one. It is the payment
+     * already tied to the card, or else the first one added while the card has none; a payment that
+     * follows the card also takes over from one that has a fixed amount. A promotion's payoff is
+     * never it.
+     *
+     * @param itemId the item being changed; {@code null} for a new one
+     * @return {@code null} for anything that is not a card's own payment
+     */
+    private OfCard ofCard(ItemInput input, ItemKind kind, Terms terms, Long itemId) {
+        if (kind != ItemKind.CARD_PAYMENT) {
+            return null;
+        }
+        CardsRepository.Settings settings = cards.settings(terms.payToAccountId()).orElse(null);
+        boolean already = settings != null && itemId != null && itemId.equals(settings.paymentItemId());
+        CardPayment.Mode mode = input.cardPaymentMode() == null
+                ? already ? settings.paymentMode() : CardPayment.Mode.FIXED
+                : Inputs.choice(CardPayment.Mode.class, input.cardPaymentMode(), "how much this payment pays");
+        boolean follows = mode != CardPayment.Mode.FIXED;
+        if (settings == null) {
+            if (follows) {
+                throw ApiException.badRequest(
+                        "Please enter this card's statement and due dates on its page first, so the payment knows which statement to follow.");
+            }
+            return null;
+        }
+        if (already) {
+            return new OfCard(settings, mode);
+        }
+        boolean payoff = itemId != null && cards.promos(settings.accountId()).stream()
+                .anyMatch(promo -> itemId.equals(promo.payoffItemId()));
+        boolean hasOne = settings.paymentItemId() != null
+                && items.find(settings.paymentItemId()).filter(item -> !item.archived()).isPresent();
+        boolean itsOwn = !payoff && (!hasOne || follows && settings.paymentMode() == CardPayment.Mode.FIXED);
+        if (follows && !itsOwn) {
+            throw ApiException.badRequest(payoff
+                    ? "This payment pays off a promotion, so it keeps its own amount."
+                    : "This card already has a payment that follows it. Please enter an amount for this one.");
+        }
+        return itsOwn ? new OfCard(settings, mode) : null;
+    }
+
+    /** A payment that follows its card has no amount of its own: the ledger works it out, so it is an estimate until then. */
+    private static Terms sized(Terms terms, OfCard card) {
+        if (card == null || card.mode() == CardPayment.Mode.FIXED) {
+            return terms;
+        }
+        return new Terms(
+                0, AmountMode.PER_OCCURRENCE, true, terms.categoryId(), terms.payFromAccountId(), terms.payToAccountId(),
+                terms.autopay(), terms.placement(), terms.schedule(), terms.daysAfterPayday(), terms.bucketId(),
+                terms.saveUpBucketId(), terms.fromBucketId());
+    }
+
+    /**
+     * Tells a card about its own payment, so the card's page and its projection know how it is
+     * paid. An item that used to be another card's payment (it was pointed at a different card, or
+     * turned into something else) is let go of there.
+     */
+    private void keepItsCardInStep(long itemId, OfCard card, Terms terms) {
+        for (CardsRepository.Settings other : cards.allSettings().values()) {
+            boolean thisCard = card != null && other.accountId() == card.settings().accountId();
+            if (!thisCard && Long.valueOf(itemId).equals(other.paymentItemId())) {
+                cards.saveSettings(new CardsRepository.Settings(
+                        other.accountId(), other.statementCloseDay(), other.dueDay(), CardsRepository.NO_PAYMENT_YET, null, false,
+                        null, null, other.monthlyEstimateCents()));
+            }
+        }
+        if (card == null) {
+            return;
+        }
+        CardsRepository.Settings settings = card.settings();
+        cards.saveSettings(new CardsRepository.Settings(
+                settings.accountId(), settings.statementCloseDay(), settings.dueDay(), card.mode(),
+                card.mode() == CardPayment.Mode.FIXED ? (Long) terms.amountCents() : null,
+                terms.autopay(), terms.payFromAccountId(), itemId, settings.monthlyEstimateCents()));
     }
 
     /** Pauses an item from today, until a date or until it is resumed. */
@@ -424,7 +520,8 @@ public final class ItemsRoutes {
                 pause.isPresent(),
                 pause.map(Pause::until).orElse(null),
                 card == null ? null : (Long) card.accountId(),
-                card != null && card.paymentMode() != CardPayment.Mode.FIXED);
+                card != null && card.paymentMode() != CardPayment.Mode.FIXED,
+                card == null ? null : Inputs.code(card.paymentMode()));
     }
 
     /**

@@ -57,6 +57,36 @@ class LoanProjectorTest {
     }
 
     @Test
+    void untilAPaymentIsScheduledTheMonthlyPaymentIsTakenAsMade() {
+        // 600.00 of the payment reaches the loan. Nothing is scheduled until December.
+        Terms assuming = new Terms(1, cents(40000), SIX_PERCENT, cents(60000));
+        List<Derived> derived = LoanProjector.project(
+                owed("2026-09-15", 10000000),
+                List.of(payment("2026-12-01", 100000)),
+                List.of(),
+                assuming,
+                date("2026-12-31"));
+
+        // Oct 1: 500.00 interest, 600.00 paid: 99,900.00. Nov 1: 499.50 interest, 600.00 paid: 99,799.50.
+        // Dec 1: 499.00 interest (rounded half-even from 498.9975), then the real payment and its escrow.
+        assertThat(derived).containsExactly(
+                new Derived(date("2026-10-01"), Kind.INTEREST, cents(50000)),
+                new Derived(date("2026-10-01"), Kind.ASSUMED_PAYMENT, cents(60000)),
+                new Derived(date("2026-11-01"), Kind.INTEREST, cents(49950)),
+                new Derived(date("2026-11-01"), Kind.ASSUMED_PAYMENT, cents(60000)),
+                new Derived(date("2026-12-01"), Kind.INTEREST, cents(49900)),
+                new Derived(date("2026-12-01"), Kind.ESCROW, cents(40000)));
+    }
+
+    @Test
+    void anAssumedPaymentNeverPaysMoreThanIsOwed() {
+        List<Derived> derived = LoanProjector.project(
+                owed("2026-09-15", 50000), List.of(), List.of(), new Terms(1, Money.ZERO, null, cents(60000)), date("2026-12-31"));
+
+        assertThat(derived).containsExactly(new Derived(date("2026-10-01"), Kind.ASSUMED_PAYMENT, cents(50000)));
+    }
+
+    @Test
     void anExtraPaymentGoesWhollyToTheLoan() {
         List<Derived> derived = LoanProjector.project(
                 owed("2026-10-15", 10000000), List.of(), List.of(payment("2026-10-20", 50000)), TERMS, date("2026-10-31"));

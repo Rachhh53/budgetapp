@@ -48,6 +48,7 @@ import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.ledger.BucketMoves.Move;
 import app.budget.server.loans.LoansRepository;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -59,6 +60,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -89,11 +91,13 @@ public final class Ledger {
     public static final String CARD_ESTIMATE_KIND = "card_estimate";
     public static final String LOAN_INTEREST_KIND = "loan_interest";
     public static final String ESCROW_KIND = "escrow";
+    public static final String ASSUMED_PAYMENT_KIND = "loan_payment";
 
     private static final String CARD_INTEREST_LABEL = "Estimated interest";
     private static final String DEFERRED_INTEREST_LABEL = "Deferred interest";
     private static final String CARD_ESTIMATE_LABEL = "Estimated spending";
     private static final String ESCROW_LABEL = "Escrow (insurance and taxes)";
+    private static final String ASSUMED_PAYMENT_LABEL = "Monthly payment (taken as made)";
 
     /** How far ahead to look for a card's next payment: past the next statement and its due date. */
     private static final int NEXT_PAYMENT_MONTHS = 2;
@@ -163,8 +167,9 @@ public final class Ledger {
     public record BucketPeriod(long bucketId, long accountId, long startingCents, long endingCents) {}
 
     /**
-     * A month's estimated interest arriving in a checking or savings account, or a month's
-     * assumed growth in an investment account: the same sum, from the rate the user gave.
+     * A month's estimated interest arriving in a checking or savings account, or an investment
+     * account's assumed growth over one pay period. Growth builds up every day, so its line is
+     * the period's days added together, dated the last of them.
      */
     public record InterestLine(long accountId, LocalDate date, long amountCents, int rateBp) {}
 
@@ -213,6 +218,8 @@ public final class Ledger {
      * @param buckets     every open bucket
      * @param bucketMoves what moved those buckets during the period, earliest first
      * @param promosEnding promotional rates that end in this period with a balance left on them
+     * @param statementsPaid which statement each card payment listed here was sized from, for those
+     *                    that pay a statement's balance or its minimum
      */
     public record PeriodDetail(
             LocalDate start,
@@ -228,7 +235,18 @@ public final class Ledger {
             List<AccountPeriod> accounts,
             List<BucketPeriod> buckets,
             List<Move> bucketMoves,
-            List<PromoEnd> promosEnding) {}
+            List<PromoEnd> promosEnding,
+            List<StatementPaid> statementsPaid) {}
+
+    /**
+     * The statement a card payment that follows its card was sized from, so the screen can say
+     * what the amount is for.
+     *
+     * @param scheduledDate with {@code itemId}, the occurrence this is about
+     * @param closeDate     the day that statement closed, or will close
+     * @param entered       true when the statement is one the user entered; false for one the app projected
+     */
+    public record StatementPaid(long itemId, LocalDate scheduledDate, LocalDate closeDate, boolean entered) {}
 
     /** One account at the end of one pay period: a point on its chart. */
     public record AccountPoint(LocalDate start, LocalDate end, long endingCents, long lowestCents, long availableCents) {}
@@ -280,10 +298,21 @@ public final class Ledger {
             for (AccountPeriod figures : accountPeriods(workings, account)) {
                 accountPeriods.add(figures);
                 // Interest dated before a balance entered this period, or on the day of one, is already in that balance.
-                for (InterestCredit credit : workings.projection(account.id()).interest()) {
-                    if (!credit.inEnteredBalance()
-                            && !credit.date().isBefore(figures.startingOn())
-                            && !credit.date().isAfter(period.end())) {
+                List<InterestCredit> counted = workings.projection(account.id()).interest().stream()
+                        .filter(credit -> !credit.inEnteredBalance()
+                                && !credit.date().isBefore(figures.startingOn())
+                                && !credit.date().isAfter(period.end()))
+                        .toList();
+                if (isInvestment(account.type())) {
+                    // Growth is added a little every day: the period's days are one line, not fourteen.
+                    if (!counted.isEmpty()) {
+                        interestLines.add(new InterestLine(
+                                account.id(), counted.getLast().date(),
+                                counted.stream().mapToLong(credit -> credit.amount().cents()).sum(),
+                                counted.getLast().apy().value()));
+                    }
+                } else {
+                    for (InterestCredit credit : counted) {
                         interestLines.add(new InterestLine(account.id(), credit.date(), credit.amount().cents(), credit.apy().value()));
                     }
                 }
@@ -314,7 +343,17 @@ public final class Ledger {
                 accountPeriods,
                 bucketPeriods,
                 workings.bucketMoves().stream().filter(move -> within(move.date(), period.start(), period.end())).toList(),
-                promosEnding(workings, accounts.all(), period.start(), period.end())));
+                promosEnding(workings, accounts.all(), period.start(), period.end()),
+                // Both lists on the screen can hold a card payment: this period's own, and those carried into it.
+                workings.statementsPaid().stream()
+                        .filter(paid -> Stream.concat(
+                                        workings.occurrences().stream().filter(occurrence -> start.equals(occurrence.periodStart())),
+                                        workings.carried().stream()
+                                                .filter(carried -> within(carried.countsOn(), period.start(), period.end()))
+                                                .map(Carried::occurrence))
+                                .anyMatch(occurrence ->
+                                        occurrence.itemId() == paid.itemId() && occurrence.scheduledDate().equals(paid.scheduledDate())))
+                        .toList()));
     }
 
     /**
@@ -444,12 +483,23 @@ public final class Ledger {
                 found.add(line);
             }
         }
-        boolean grows = isInvestment(account.type());
-        for (InterestCredit credit : workings.projection(account.id()).interest()) {
-            if (within(credit.date(), from, to)) {
-                found.add(new Transaction(
-                        credit.date(), grows ? GROWTH_LABEL : INTEREST_LABEL, grows ? GROWTH_KIND : INTEREST_KIND,
-                        credit.amount().cents(), false));
+        if (isInvestment(account.type())) {
+            // Growth is added a little every day. A line a day would bury everything else, so each
+            // month's days are one line, dated the last of them that falls within the dates asked for.
+            Map<YearMonth, List<InterestCredit>> byMonth = new TreeMap<>();
+            for (InterestCredit credit : workings.projection(account.id()).interest()) {
+                if (within(credit.date(), from, to)) {
+                    byMonth.computeIfAbsent(YearMonth.from(credit.date()), month -> new ArrayList<>()).add(credit);
+                }
+            }
+            byMonth.values().forEach(month -> found.add(new Transaction(
+                    month.getLast().date(), GROWTH_LABEL, GROWTH_KIND,
+                    month.stream().mapToLong(credit -> credit.amount().cents()).sum(), false)));
+        } else {
+            for (InterestCredit credit : workings.projection(account.id()).interest()) {
+                if (within(credit.date(), from, to)) {
+                    found.add(new Transaction(credit.date(), INTEREST_LABEL, INTEREST_KIND, credit.amount().cents(), false));
+                }
             }
         }
         for (BalanceEntry entry : accounts.balances(account.id())) {
@@ -621,10 +671,12 @@ public final class Ledger {
             List<Move> bucketMoves,
             Map<Long, CardProjector.Result> cards,
             Map<Long, List<CardsRepository.Promo>> promos,
-            Map<Long, InterestTerms> aprs) {
+            Map<Long, InterestTerms> aprs,
+            List<StatementPaid> statementsPaid) {
 
         static final Workings NONE = new Workings(
-                List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), Map.of(), List.of(), Map.of(), Map.of(), Map.of());
+                List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), Map.of(), List.of(), Map.of(), Map.of(), Map.of(),
+                List.of());
 
         Projection projection(long accountId) {
             return projections.getOrDefault(accountId, Projection.NONE);
@@ -776,6 +828,7 @@ public final class Ledger {
         // A card's own payment follows the card (its statement balance, say) unless it is a fixed
         // amount, so what it comes to is only known once the card itself has been followed.
         Map<Long, CardsRepository.Settings> cardSettings = new HashMap<>(cards.allSettings());
+        Map<Long, CardPayment.MinimumRule> minimumRules = cards.minimumRules();
         Map<Long, Long> followsCard = new HashMap<>();
         // Settings left behind on an account that was since changed to another type mean nothing.
         cardSettings.keySet().removeIf(cardId -> !Inputs.code(AccountType.CREDIT_CARD).equals(types.get(cardId)));
@@ -788,6 +841,15 @@ public final class Ledger {
         // Scheduled payments into each loan: the escrow part of the monthly payment comes out of these.
         Map<Long, List<Movement>> scheduledInto = new HashMap<>();
         Counting counting = new Counting(movements, lines, types, stillToPay, new ArrayList<>(), scheduledInto);
+        // Terms left behind on an account that was since changed to another type mean nothing.
+        Map<Long, LoansRepository.Settings> loanSettings = new HashMap<>(loans.allSettings());
+        loanSettings.keySet().removeIf(loanId -> !Inputs.code(AccountType.LOAN).equals(types.get(loanId)));
+        Map<Long, Long> paysLoan = new HashMap<>();
+        loanSettings.forEach((loanId, settings) -> {
+            if (settings.paymentItemId() != null) {
+                paysLoan.put(settings.paymentItemId(), loanId);
+            }
+        });
         for (Occurrence occurrence : occurrences) {
             // A bucket move sets money aside inside its account: the account's balance does not change.
             if (occurrence.skipped() || occurrence.kind() == ItemKind.BUCKET_MOVE) {
@@ -800,6 +862,13 @@ public final class Ledger {
                 continue;
             }
             counting.count(occurrence, occurrence.amountCents());
+            // A bill linked as a loan's payment goes nowhere as an item, yet it is what pays the loan down.
+            Long loan = paysLoan.get(occurrence.itemId());
+            if (loan != null && occurrence.payToAccountId() == null && loan != occurrence.payFromAccountId()) {
+                Movement arriving = add(movements, lines, types, loan, occurrence.payBy(), occurrence.amountCents(), true,
+                        outstanding(occurrence, stillToPay.get(loan)), occurrence.name(), Inputs.code(occurrence.kind()));
+                scheduledInto.computeIfAbsent(loan, id -> new ArrayList<>()).add(arriving);
+            }
         }
         List<Carried> carried = counting.carried();
 
@@ -826,6 +895,7 @@ public final class Ledger {
         Map<Long, Map<LocalDate, Long>> followedAmounts = new HashMap<>();
         // Those of them sized from a projected statement rather than one the user entered.
         Map<Long, Set<LocalDate>> followedEstimates = new HashMap<>();
+        List<StatementPaid> statementsPaid = new ArrayList<>();
         cardSettings.forEach((cardId, settings) -> {
             List<Occurrence> payments = following.getOrDefault(cardId, List.of());
             List<Movement> fixed = movements.getOrDefault(cardId, List.of());
@@ -854,7 +924,8 @@ public final class Ledger {
                             settings.monthlyEstimateCents() == null ? null : Money.ofCents(settings.monthlyEstimateCents()),
                             aprs.get(cardId),
                             promos.getOrDefault(cardId, List.of()).stream().map(CardsRepository.Promo::terms).toList(),
-                            real),
+                            real,
+                            minimumRules.getOrDefault(cardId, CardPayment.MinimumRule.USUAL)),
                     last);
             cardResults.put(cardId, result);
             Set<Integer> answered = new HashSet<>();
@@ -865,8 +936,13 @@ public final class Ledger {
                         long cents = -derived.amount().cents();
                         counting.count(payment, cents);
                         followedAmounts.computeIfAbsent(payment.itemId(), id -> new HashMap<>()).put(payment.scheduledDate(), cents);
-                        if (!result.exact().contains(derived.key())) {
+                        boolean exact = result.exact().contains(derived.key());
+                        if (!exact) {
                             followedEstimates.computeIfAbsent(payment.itemId(), id -> new HashSet<>()).add(payment.scheduledDate());
+                        }
+                        LocalDate closed = result.pays().get(derived.key());
+                        if (closed != null) {
+                            statementsPaid.add(new StatementPaid(payment.itemId(), payment.scheduledDate(), closed, exact));
                         }
                         answered.add(derived.key());
                     }
@@ -886,13 +962,11 @@ public final class Ledger {
             }
         });
 
-        // Loans: a month's interest on the payment day, and the escrow part of the monthly payment,
+        // Loans: a month's interest on the payment day, the escrow part of the monthly payment, and the
+        // payment itself for the months before any item was scheduled to pay it,
         // which is paid but never reaches the loan.
         Map<Long, List<Rate>> loanRates = interest.allRates(RateKind.LOAN_RATE);
-        loans.allSettings().forEach((loanId, settings) -> {
-            if (!Inputs.code(AccountType.LOAN).equals(types.get(loanId))) {
-                return;
-            }
+        loanSettings.forEach((loanId, settings) -> {
             List<Movement> all = movements.getOrDefault(loanId, List.of());
             Set<Movement> regular = Collections.newSetFromMap(new IdentityHashMap<>());
             regular.addAll(scheduledInto.getOrDefault(loanId, List.of()));
@@ -902,12 +976,19 @@ public final class Ledger {
                     List.copyOf(scheduledInto.getOrDefault(loanId, List.of())),
                     all.stream().filter(movement -> !regular.contains(movement)).toList(),
                     new LoanProjector.Terms(
-                            settings.paymentDay(), Money.ofCents(settings.escrowCents()), interestTerms(null, loanRates.get(loanId))),
+                            settings.paymentDay(), Money.ofCents(settings.escrowCents()), interestTerms(null, loanRates.get(loanId)),
+                            Money.ofCents(settings.paymentCents() - settings.escrowCents())),
                     last);
             for (LoanProjector.Derived derived : worked) {
-                boolean isInterest = derived.kind() == LoanProjector.Kind.INTEREST;
-                add(movements, lines, types, loanId, derived.date(), derived.amount().cents(), false, false,
-                        isInterest ? INTEREST_LABEL : ESCROW_LABEL, isInterest ? LOAN_INTEREST_KIND : ESCROW_KIND);
+                switch (derived.kind()) {
+                    case INTEREST -> add(movements, lines, types, loanId, derived.date(), derived.amount().cents(), false, false,
+                            INTEREST_LABEL, LOAN_INTEREST_KIND);
+                    case ESCROW -> add(movements, lines, types, loanId, derived.date(), derived.amount().cents(), false, false,
+                            ESCROW_LABEL, ESCROW_KIND);
+                    // Arrives in the loan like any payment, but leaves no account: nothing was scheduled to pay it yet.
+                    case ASSUMED_PAYMENT -> add(movements, lines, types, loanId, derived.date(), derived.amount().cents(), true, false,
+                            ASSUMED_PAYMENT_LABEL, ASSUMED_PAYMENT_KIND);
+                }
             }
         });
 
@@ -926,12 +1007,12 @@ public final class Ledger {
         Map<Long, List<Rate>> apys = interest.allRates(RateKind.APY);
         Map<Long, List<Rate>> growthRates = interest.allRates(RateKind.GROWTH);
         // Checking and savings earn interest at their APY, on the day the user chose. An investment
-        // grows by the rate the user assumes, at the end of each month: the same sum, differently named.
+        // grows by the rate the user assumes, a little every day, so every pay period has its share.
         Map<Long, InterestTerms> earning = new HashMap<>();
         for (Account account : allAccounts) {
             InterestTerms terms = cash.contains(account.id())
                     ? interestTerms(interestSettings.get(account.id()), apys.get(account.id()))
-                    : isInvestment(account.type()) ? interestTerms(null, growthRates.get(account.id())) : null;
+                    : isInvestment(account.type()) ? growthTerms(growthRates.get(account.id())) : null;
             if (terms != null) {
                 earning.put(account.id(), terms);
             }
@@ -992,7 +1073,8 @@ public final class Ledger {
         });
         bucketMoves.sort(Comparator.comparing(Move::date));
         return new Workings(
-                listed, carried, oneOffs, projections, builtFromZero, lines, bucketsByAccount, bucketMoves, cardResults, promos, aprs);
+                listed, carried, oneOffs, projections, builtFromZero, lines, bucketsByAccount, bucketMoves, cardResults, promos, aprs,
+                statementsPaid);
     }
 
     /**
@@ -1084,6 +1166,15 @@ public final class Ledger {
         return new InterestTerms(
                 (settings == null ? Settings.DEFAULT : settings).creditDay(),
                 apys.stream().map(rate -> new RateChange(rate.effectiveDate(), BasisPoints.of(rate.rateBp()))).toList());
+    }
+
+    /** How an investment account is assumed to grow; {@code null} when no rate has been entered for it. */
+    private static InterestTerms growthTerms(List<Rate> rates) {
+        if (rates == null || rates.isEmpty()) {
+            return null;
+        }
+        return InterestTerms.growingDaily(
+                rates.stream().map(rate -> new RateChange(rate.effectiveDate(), BasisPoints.of(rate.rateBp()))).toList());
     }
 
     /** Where an account's interest goes. A bucket that has since been archived no longer receives any. */

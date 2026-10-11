@@ -1,7 +1,9 @@
 import { HandCoins, Landmark } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import type { Account, Rate } from "../../api/accounts";
-import { type Loan, type LoanInput, type LoanSettings, useLoan, useSaveLoan } from "../../api/loans";
+import { Link } from "react-router";
+import { type Account, holdsCash, type Rate, useAccounts } from "../../api/accounts";
+import { useItems } from "../../api/items";
+import { type Loan, type LoanInput, type LoanSettings, useAddLoanPayment, useLoan, useSaveLoan } from "../../api/loans";
 import { formatDate } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { formatRate } from "../../lib/rates";
@@ -12,7 +14,8 @@ import { DaySelect } from "../DaySelect";
 import { EditButton } from "../EditButton";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { Picker } from "../Picker";
+import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /** The longest loan the backend takes: 50 years. */
 const MAX_TERM_YEARS = 50;
@@ -28,6 +31,7 @@ function asInput(settings: LoanSettings): LoanInput {
     paymentDay: settings.paymentDay,
     escrowInsuranceCents: settings.escrowInsuranceCents,
     escrowTaxesCents: settings.escrowTaxesCents,
+    paymentItemId: settings.paymentItemId,
   };
 }
 
@@ -47,7 +51,7 @@ function termInWords(months: number): string {
  */
 export function LoanCards({ account, rates }: { account: Account; rates: readonly Rate[] }) {
   const loan = useLoan(account.id);
-  const [open, setOpen] = useState<"payment" | "terms" | null>(null);
+  const [open, setOpen] = useState<"payment" | "terms" | "paidFrom" | null>(null);
   const close = () => setOpen(null);
 
   if (loan.isPending) {
@@ -75,7 +79,10 @@ export function LoanCards({ account, rates }: { account: Account; rates: readonl
         action={settings ? <EditButton name="monthly payment" onClick={() => setOpen("payment")} /> : undefined}
       >
         {settings ? (
-          <PaymentSummary loan={loan.data} settings={settings} />
+          <>
+            <PaymentSummary loan={loan.data} settings={settings} />
+            <PaidBy loan={loan.data} onLink={() => setOpen("payment")} onAdd={() => setOpen("paidFrom")} />
+          </>
         ) : (
           <>
             <p className="text-muted">
@@ -122,6 +129,7 @@ export function LoanCards({ account, rates }: { account: Account; rates: readonl
 
       {open === "payment" && <PaymentForm account={account} settings={settings} onClose={close} />}
       {open === "terms" && settings && <TermsForm account={account} settings={settings} onClose={close} />}
+      {open === "paidFrom" && <AddPaymentForm account={account} onClose={close} />}
     </>
   );
 }
@@ -267,7 +275,26 @@ function PaymentForm({ account, settings, onClose }: { account: Account; setting
   const [day, setDay] = useState(settings?.paymentDay ?? 1);
   const [insurance, setInsurance] = useState(settings && settings.escrowInsuranceCents > 0 ? centsToInput(settings.escrowInsuranceCents) : "");
   const [taxes, setTaxes] = useState(settings && settings.escrowTaxesCents > 0 ? centsToInput(settings.escrowTaxesCents) : "");
+  const [paidBy, setPaidBy] = useState<string | null>(settings?.paymentItemId != null ? String(settings.paymentItemId) : null);
   const [problem, setProblem] = useState<string>();
+
+  // What could pay a loan: a bill, or a transfer into this loan. Archived items are left out, unless one is already linked.
+  const payingItems = (useItems().data ?? []).filter(
+    (item) =>
+      (!item.archived || String(item.id) === paidBy) &&
+      item.payFromAccountId !== account.id &&
+      (item.kind === "bill" || (item.kind === "transfer" && item.payToAccountId === account.id)),
+  );
+  const payingOptions = payingItems.map((item) => ({ id: String(item.id), label: `${item.name} · ${formatCents(item.perOccurrenceCents)}` }));
+
+  const choosePaidBy = (chosen: string | null) => {
+    setPaidBy(chosen);
+    // An empty payment takes the item's amount, so the same number is not typed twice.
+    const item = payingItems.find((candidate) => String(candidate.id) === chosen);
+    if (item !== undefined && payment.trim() === "") {
+      setPayment(centsToInput(item.perOccurrenceCents));
+    }
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -292,6 +319,7 @@ function PaymentForm({ account, settings, onClose }: { account: Account; setting
         paymentDay: day,
         escrowInsuranceCents,
         escrowTaxesCents,
+        paymentItemId: paidBy === null ? null : Number(paidBy),
       },
       { onSuccess: onClose },
     );
@@ -312,12 +340,126 @@ function PaymentForm({ account, settings, onClose }: { account: Account; setting
         <p className={HINT}>
           The payment as your lender takes it, with any insurance and taxes they collect included. Those two never lower the loan.
         </p>
+        <div>
+          <Picker
+            label="Recurring item that pays it (optional)"
+            noun="recurring item"
+            placeholder={payingOptions.length === 0 ? "No bill or transfer to link yet" : "Choose or type a recurring item"}
+            options={payingOptions}
+            value={paidBy}
+            onChange={choosePaidBy}
+            clearable
+          />
+          <p className={HINT}>Link the bill you already pay this with, so each payment lowers the loan from then on.</p>
+        </div>
         {failure && (
           <p role="alert" className="text-danger">
             {failure}
           </p>
         )}
         <Buttons onClose={onClose} pending={save.isPending} />
+      </form>
+    </Modal>
+  );
+}
+
+/**
+ * Which recurring item takes the payment out of an account. Until one does, the payment is taken
+ * as made each month, so a loan entered as it stood years ago is still paid down to today; the
+ * two ways to fix that are offered here.
+ */
+function PaidBy({ loan, onLink, onAdd }: { loan: Loan; onLink: () => void; onAdd: () => void }) {
+  if (loan.paidBy.length > 0) {
+    return (
+      <p className="mt-3 border-t border-line pt-3">
+        <span className="text-muted">Paid by </span>
+        {loan.paidBy.map((item, index) => (
+          <span key={item.itemId}>
+            {index > 0 && ", "}
+            <Link to={`/recurring/${item.itemId}`} className="font-semibold text-accent-ink underline">
+              {item.name}
+            </Link>
+          </span>
+        ))}
+        <span className="text-muted">, one of your recurring items. Months before it started are counted as paid.</span>
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <p className="font-medium">No recurring item pays this yet.</p>
+      <p className="text-muted">
+        The payment is counted as made each month, so the loan goes down, but nothing comes out of an account for it in your pay
+        periods.
+      </p>
+      <div className="mt-2 flex flex-col gap-x-4 sm:flex-row">
+        <button type="button" onClick={onLink} className={`${BUTTON_LINK} -ml-2 text-left`}>
+          Link a recurring item you already have
+        </button>
+        <button type="button" onClick={onAdd} className={`${BUTTON_LINK} -ml-2 text-left sm:ml-0`}>
+          Add it as a recurring payment
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Adds the loan's payment as a recurring item from here: only the account it comes out of is asked. */
+function AddPaymentForm({ account, onClose }: { account: Account; onClose: () => void }) {
+  const add = useAddLoanPayment(account.id);
+  const accounts = useAccounts().data ?? [];
+  const [payFrom, setPayFrom] = useState<string | null>(null);
+  const [autopay, setAutopay] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const options = accounts
+    .filter((candidate) => holdsCash(candidate.type) && !candidate.archived)
+    .map((candidate) => ({ id: String(candidate.id), label: candidate.name, color: candidate.color }));
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (payFrom === null) {
+      setProblem("Please choose the account this payment comes out of.");
+      return;
+    }
+    setProblem(undefined);
+    add.mutate({ payFromAccountId: Number(payFrom), autopay }, { onSuccess: onClose });
+  };
+
+  const failure = problem ?? add.error?.message;
+  return (
+    <Modal title={`Add the payment — ${account.name}`} icon={HandCoins} tone={account.color} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <Picker
+            label="Paid from"
+            noun="account"
+            placeholder={options.length === 0 ? "No checking or savings account yet" : "Choose or type an account"}
+            options={options}
+            value={payFrom}
+            onChange={setPayFrom}
+          />
+          <p className={HINT}>
+            Adds the whole monthly payment to your recurring items, on the loan's payment day from today on. You can change it there
+            like any other.
+          </p>
+        </div>
+        <label className="flex min-h-11 items-center gap-3">
+          <input type="checkbox" checked={autopay} onChange={(event) => setAutopay(event.target.checked)} className="size-5 accent-(--accent)" />
+          <span className="font-medium">Autopay: the lender takes it without me doing anything</span>
+        </label>
+        {failure && (
+          <p role="alert" className="text-danger">
+            {failure}
+          </p>
+        )}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+            Cancel
+          </button>
+          <button type="submit" disabled={add.isPending} className={BUTTON_PRIMARY}>
+            {add.isPending ? "Adding…" : "Add recurring payment"}
+          </button>
+        </div>
       </form>
     </Modal>
   );

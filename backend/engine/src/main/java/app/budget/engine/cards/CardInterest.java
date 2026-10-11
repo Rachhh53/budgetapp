@@ -46,9 +46,9 @@ public final class CardInterest {
      *
      * <p>A card issuer puts what is paid beyond the minimum toward the highest rate first, so
      * the lowest rate keeps its balance longest: the balance is given to promotions in order
-     * of the rate they charge on {@code on}, lowest first, each up to the balance it started
-     * with, and whatever is left over is at the regular APR. A promotion that has ended is
-     * still its own part, at the rate that follows it.
+     * of the rate they charge on {@code on}, lowest first, each up to the amount it is on, and
+     * whatever is left over is at the regular APR. A promotion on the whole balance takes all
+     * that reaches it. A promotion that has ended is still its own part, at the rate that follows it.
      */
     public static List<Portion> allocate(Money balance, List<Promo> promos, LocalDate on, BasisPoints regularApr) {
         List<Portion> portions = new ArrayList<>();
@@ -60,7 +60,7 @@ public final class CardInterest {
                         .thenComparingLong(Promo::id))
                 .toList();
         for (Promo promo : started) {
-            Money share = left.compareTo(promo.original()) < 0 ? left : promo.original();
+            Money share = promo.onWholeBalance() || left.compareTo(promo.original()) < 0 ? left : promo.original();
             portions.add(new Portion(promo.id(), share, promo.rateOn(on, regularApr)));
             left = left.minus(share);
         }

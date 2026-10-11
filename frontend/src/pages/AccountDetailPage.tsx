@@ -1,20 +1,18 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
-  type BalanceChange,
-  type BalanceEntry,
   holdsCash,
   useAccount,
   useAccountPerformance,
   useAccountProjection,
   useAccounts,
-  useDeleteBalance,
 } from "../api/accounts";
 import { useIncomeSources } from "../api/income";
 import { useAccountBalances } from "../api/periods";
 import { TransactionsCard } from "../components/accounts/TransactionsCard";
 import { useBuckets } from "../api/buckets";
 import { AccountForm } from "../components/accounts/AccountForm";
+import { BalanceList, signed } from "../components/accounts/BalanceList";
 import { BalanceForm } from "../components/accounts/BalanceForm";
 import { GrowthCard } from "../components/accounts/GrowthCard";
 import { InterestCard } from "../components/accounts/InterestCard";
@@ -25,18 +23,13 @@ import { BucketsCard } from "../components/buckets/BucketsCard";
 import { Card } from "../components/Card";
 import { EditPageButton } from "../components/EditButton";
 import { LoanCards } from "../components/loans/LoanCards";
-import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
+import { hasLifetime, LoanLifetimeChart } from "../components/loans/LoanLifetimeChart";
+import { useLoan } from "../api/loans";
+import { CardDetailPage } from "./CardDetailPage";
+import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
-
-/* One row of "Balances you entered": stacked on a phone, columns from `md` up. */
-const ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[8rem_8rem_8rem_8rem_8rem_1fr_auto] md:items-center";
-
-/** A change with its sign: "+$1,000.00", "−$250.00" as formatCents writes it, or a dash when there is nothing to compare. */
-function signed(cents: number | null): string {
-  return cents === null ? "—" : `${cents > 0 ? "+" : ""}${formatCents(cents)}`;
-}
 
 /**
  * Account detail (design/account-detail.png): the balance and where it is heading, how it has
@@ -53,6 +46,8 @@ export function AccountDetailPage() {
   const balancesToday = useAccountBalances();
   const buckets = useBuckets();
   const performance = useAccountPerformance(id);
+  // Only a loan has terms; its chart runs over the loan's whole life.
+  const loan = useLoan(id, detail.data?.account.type === "loan");
   const [editing, setEditing] = useState(false);
   const [updating, setUpdating] = useState(false);
 
@@ -76,6 +71,10 @@ export function AccountDetailPage() {
   }
 
   const { account, balances } = detail.data;
+  // A credit card has its own page: statements, promo rates and the payoff helper beside what every account shows.
+  if (account.type === "credit_card") {
+    return <CardDetailPage detail={detail.data} />;
+  }
   const latest = account.latestBalance;
   const today = balancesToday.data?.find((balance) => balance.accountId === account.id);
   const cash = holdsCash(account.type);
@@ -86,7 +85,7 @@ export function AccountDetailPage() {
   const investment = account.type === "investment";
   const thisYear = performance.data?.thisYear ?? null;
   // Money put in is "paid off" on something owed, and "growth" there would be interest charged: other words.
-  const owed = account.type === "credit_card" || account.type === "loan";
+  const owed = account.type === "loan";
 
   return (
     <>
@@ -166,7 +165,7 @@ export function AccountDetailPage() {
             )}
             {currentRate && (
               <div>
-                <p className="text-muted">{investment ? "Assumed growth" : account.type === "credit_card" ? "Regular APR" : "Rate"}</p>
+                <p className="text-muted">{investment ? "Assumed growth" : "Rate"}</p>
                 <p className="text-2xl font-bold tabular-nums">{formatRate(currentRate.rateBp)}</p>
                 <p className="text-muted">
                   {investment ? "a year, your assumption" : cash ? "APY" : "a year"} since {formatDate(currentRate.effectiveDate)}
@@ -192,10 +191,18 @@ export function AccountDetailPage() {
             </p>
           </Card>
         )}
-        {latest && points.length > 0 && (
+        {/* A loan is shown over its whole life, to the day it is paid off; any other account over the pay periods ahead. */}
+        {hasLifetime(loan.data) ? (
           <Card title="Where it's heading">
-            <ProjectionChart account={account} balances={balances} points={points} showAvailable={hasBuckets} />
+            <LoanLifetimeChart account={account} balances={balances} loan={loan.data} />
           </Card>
+        ) : (
+          latest &&
+          points.length > 0 && (
+            <Card title="Where it's heading">
+              <ProjectionChart account={account} balances={balances} points={points} showAvailable={hasBuckets} />
+            </Card>
+          )
         )}
 
         {cash && <BucketsCard account={account} />}
@@ -203,16 +210,6 @@ export function AccountDetailPage() {
         {investment && <ContributionsCard accountId={account.id} />}
         {investment && <GrowthCard detail={detail.data} />}
         {account.type === "loan" && <LoanCards account={account} rates={detail.data.rates} />}
-        {account.type === "credit_card" && (
-          <Card title="Statements, payment and promo rates">
-            <p className="text-muted">
-              How this card bills and is paid, its promotional rates and the payoff helper are on its own page.
-            </p>
-            <Link to={`/cards/${account.id}`} className="mt-2 inline-block font-semibold text-accent-ink underline">
-              Open {account.name} under Credit cards
-            </Link>
-          </Card>
-        )}
 
         <TransactionsCard account={account} />
 
@@ -311,77 +308,3 @@ function ContributionsCard({ accountId }: { accountId: number }) {
   );
 }
 
-function BalanceList({
-  accountId,
-  balances,
-  changes,
-  owed,
-}: {
-  accountId: number;
-  balances: BalanceEntry[];
-  /** Each balance set against the one before it; empty until that has loaded. */
-  changes: readonly BalanceChange[];
-  /** A card or loan: what moves it is charges and payments, so "put in" and "growth" do not apply. */
-  owed: boolean;
-}) {
-  const remove = useDeleteBalance(accountId);
-  return (
-    <>
-      <div aria-hidden className={`${ROW} hidden border-b border-line pt-0 text-sm font-semibold text-muted md:grid`}>
-        <span>Date</span>
-        <span className="text-right">Balance</span>
-        <span className="text-right">Change</span>
-        <span className="text-right">{owed ? "Charged less paid" : "Put in"}</span>
-        <span className="text-right">{owed ? "The rest" : "Growth"}</span>
-        <span>Note</span>
-        <span />
-      </div>
-      <ul className="divide-y divide-line">
-        {balances.map((entry, index) => {
-          // Newest first, so the entry before this one in time is the next in the list.
-          const previous = balances[index + 1];
-          const change = previous ? entry.amountCents - previous.amountCents : null;
-          const split = changes.find((candidate) => candidate.entryId === entry.id);
-          return (
-            <li key={entry.id} className={ROW}>
-              <span className="font-medium">{formatDate(entry.date)}</span>
-              <span className="text-right">
-                <Amount cents={entry.amountCents} className="font-semibold" />
-              </span>
-              <span className="text-muted md:sr-only">Change since the entry before</span>
-              <span data-amount className="pr-2 text-right tabular-nums">
-                {signed(change)}
-              </span>
-              {/* Growth = change − what was put in (spec §5.5): only ever from balances that were entered. */}
-              <span className="text-muted md:sr-only">{owed ? "Charged less paid" : "Put in since then"}</span>
-              <span data-amount className="pr-2 text-right tabular-nums">
-                {signed(split?.depositsCents ?? null)}
-              </span>
-              <span className="text-muted md:sr-only">{owed ? "The rest of the change" : "Growth: the change less what was put in"}</span>
-              <span data-amount className="pr-2 text-right font-semibold tabular-nums">
-                {signed(split?.growthCents ?? null)}
-              </span>
-              <span className="col-span-2 min-w-0 text-muted md:col-span-1">{entry.note}</span>
-              <span className="col-span-2 text-right md:col-span-1">
-                <button
-                  type="button"
-                  disabled={remove.isPending}
-                  onClick={() => remove.mutate(entry.id)}
-                  aria-label={`Remove the balance from ${formatDate(entry.date)}`}
-                  className={BUTTON_LINK}
-                >
-                  Remove
-                </button>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-      {remove.isError && (
-        <p role="alert" className="mt-3 text-danger">
-          {remove.error.message}
-        </p>
-      )}
-    </>
-  );
-}

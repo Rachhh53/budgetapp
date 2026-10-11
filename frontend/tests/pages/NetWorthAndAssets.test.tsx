@@ -92,10 +92,16 @@ describe("accounts screen: net worth", () => {
 
     const worth = await screen.findByRole("region", { name: "Net worth" });
     expect(within(worth).getByText("$145,311.78")).toBeInTheDocument();
-    expect(worth).toHaveTextContent("what you own less what you owe");
+    expect(worth).toHaveTextContent("today");
     expect(within(worth).getByText("$430,311.78")).toBeInTheDocument();
-    expect(worth).toHaveTextContent("$2,845.12 cash · $0.00 invested · $427,466.66 home & assets");
-    expect(worth).toHaveTextContent("$0.00 on cards · $285,000.00 in loans");
+    // Each total lists its parts under it, a label and an amount to a line.
+    const owned = within(worth).getByLabelText("What makes up what you own");
+    expect(within(owned).getByText("Cash").parentElement).toHaveTextContent("Cash$2,845.12");
+    expect(within(owned).getByText("Invested").parentElement).toHaveTextContent("Invested$0.00");
+    expect(within(owned).getByText("Home & assets").parentElement).toHaveTextContent("Home & assets$427,466.66");
+    const owed = within(worth).getByLabelText("What makes up what you owe");
+    expect(within(owed).getByText("Cards").parentElement).toHaveTextContent("Cards$0.00");
+    expect(within(owed).getByText("Loans").parentElement).toHaveTextContent("Loans$285,000.00");
   });
 
   it("says so kindly when net worth cannot be worked out, and still lists the accounts", async () => {

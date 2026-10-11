@@ -144,7 +144,7 @@ public final class BudgetServer {
             new LedgerRoutes(ledger, payCalendar, accounts).register(routes);
             new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
-            new LoansRoutes(loans, accounts, interest, ledger, payCalendar).register(routes);
+            new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
 

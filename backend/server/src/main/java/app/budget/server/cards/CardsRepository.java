@@ -30,6 +30,12 @@ public final class CardsRepository {
             FROM card_promos
             """;
 
+    /**
+     * What a card's payment mode is stored as while no recurring payment is tied to it. It sizes
+     * nothing until there is one; a fixed amount is not used because that needs an amount to store.
+     */
+    public static final CardPayment.Mode NO_PAYMENT_YET = CardPayment.Mode.STATEMENT_BALANCE;
+
     private final Jdbi jdbi;
 
     public CardsRepository(Jdbi jdbi) {
@@ -38,12 +44,14 @@ public final class CardsRepository {
 
     /**
      * How a card bills and is paid. Days are days of the month, 1–31, where 31 means the last day.
+     * The dates and the estimate are the card's own. How it is paid is a copy of its recurring
+     * payment, written here whenever that item is saved, so the card's projection can read it.
      *
-     * @param fixedPaymentCents    set exactly when {@code paymentMode} is {@code FIXED}
-     * @param payFromAccountId     the account the payment comes out of; {@code null} when no payment
-     *                             is scheduled from these settings
-     * @param paymentItemId        the recurring item kept in step with these settings; {@code null}
-     *                             until a payment is scheduled, or once that item is deleted
+     * @param paymentMode          how much the card's own payment pays; {@link #NO_PAYMENT_YET} while it has none
+     * @param fixedPaymentCents    that payment's amount when {@code paymentMode} is {@code FIXED}
+     * @param payFromAccountId     the account that payment comes out of; {@code null} while there is none
+     * @param paymentItemId        the recurring item that is this card's own payment; {@code null}
+     *                             until one is added, or once that item is deleted
      * @param monthlyEstimateCents what a statement month's spending is expected to come to, for a card
      *                             whose charges are not entered one by one; {@code null} otherwise
      */
@@ -64,8 +72,9 @@ public final class CardsRepository {
     public enum PromoKind { BALANCE_TRANSFER, PURCHASE, OTHER }
 
     /**
-     * A promotional rate on part of a card's balance.
+     * A promotional rate, on a set amount or on everything the card owes.
      *
+     * @param originalBalanceCents the amount it is on; {@code null} for the whole balance
      * @param rateAfterBp  the rate on what is left afterwards; {@code null} for the card's regular APR
      * @param payoffItemId the recurring payment the payoff helper added for it; {@code null} when none
      */
@@ -77,7 +86,7 @@ public final class CardsRepository {
             int rateBp,
             LocalDate startDate,
             LocalDate endDate,
-            long originalBalanceCents,
+            Long originalBalanceCents,
             Integer rateAfterBp,
             boolean deferredInterest,
             Long payoffItemId) {
@@ -89,7 +98,7 @@ public final class CardsRepository {
                     BasisPoints.of(rateBp),
                     startDate,
                     endDate,
-                    Money.ofCents(originalBalanceCents),
+                    originalBalanceCents == null ? null : Money.ofCents(originalBalanceCents),
                     rateAfterBp == null ? null : BasisPoints.of(rateAfterBp),
                     deferredInterest);
         }
@@ -102,7 +111,7 @@ public final class CardsRepository {
             int rateBp,
             LocalDate startDate,
             LocalDate endDate,
-            long originalBalanceCents,
+            Long originalBalanceCents,
             Integer rateAfterBp,
             boolean deferredInterest) {}
 
@@ -121,6 +130,39 @@ public final class CardsRepository {
                 .map((rs, ctx) -> settings(rs))
                 .stream()
                 .collect(Collectors.toMap(Settings::accountId, found -> found)));
+    }
+
+    /**
+     * How each card's minimum payment is estimated, by account, for every card that has settings.
+     * Kept beside the settings rather than in them: it is changed on its own, and saving the
+     * settings leaves it as it is.
+     */
+    public Map<Long, CardPayment.MinimumRule> minimumRules() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT account_id, minimum_share_bp, minimum_floor, minimum_plus_interest FROM card_settings")
+                .map((rs, ctx) -> Map.entry(
+                        rs.getLong("account_id"),
+                        new CardPayment.MinimumRule(
+                                rs.getInt("minimum_share_bp"),
+                                Money.ofCents(rs.getLong("minimum_floor")),
+                                rs.getBoolean("minimum_plus_interest"))))
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+    }
+
+    /** @return false when the card has no settings yet, so there was nothing to change */
+    public boolean saveMinimumRule(long accountId, CardPayment.MinimumRule rule) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("""
+                        UPDATE card_settings
+                        SET minimum_share_bp = :shareBp, minimum_floor = :floor, minimum_plus_interest = :plusInterest
+                        WHERE account_id = :accountId
+                        """)
+                .bind("accountId", accountId)
+                .bind("shareBp", rule.shareBp())
+                .bind("floor", rule.floor().cents())
+                .bind("plusInterest", rule.plusInterest())
+                .execute()) > 0;
     }
 
     public void saveSettings(Settings settings) {
@@ -314,7 +356,7 @@ public final class CardsRepository {
                 rs.getInt("rate_bp"),
                 LocalDate.parse(rs.getString("start_date")),
                 LocalDate.parse(rs.getString("end_date")),
-                rs.getLong("original_balance"),
+                nullableLong(rs, "original_balance"),
                 rateAfterBp,
                 rs.getBoolean("deferred_interest"),
                 nullableLong(rs, "payoff_item_id"));

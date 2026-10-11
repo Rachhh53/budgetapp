@@ -46,7 +46,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Credit cards: how each one bills and is paid, its statements, its promotional rates and the
@@ -69,6 +72,9 @@ public final class CardsRoutes {
     private static final String STATUS_PAID = "paid";
     private static final String STATUS_PART_PAID = "part_paid";
     private static final String STATUS_DUE = "due";
+
+    /** The whole balance: 100%, in basis points. */
+    private static final int MAX_SHARE_BP = 10_000;
 
     private final CardsRepository cards;
     private final AccountsRepository accounts;
@@ -99,6 +105,7 @@ public final class CardsRoutes {
         routes.get("/api/cards", ctx -> ApiResponse.ok(ctx, list()));
         routes.get("/api/cards/{id}", ctx -> ApiResponse.ok(ctx, detail(card(ctx))));
         routes.put("/api/cards/{id}/settings", this::saveSettings);
+        routes.put("/api/cards/{id}/minimum", this::saveMinimum);
         routes.post("/api/cards/{id}/statements", this::saveStatement);
         routes.delete("/api/cards/{id}/statements/{statementId}", this::deleteStatement);
         routes.post("/api/cards/{id}/promos", this::createPromo);
@@ -108,28 +115,35 @@ public final class CardsRoutes {
     }
 
     /**
-     * Request body for how a card bills and is paid. Days are days of the month, 1–31 (31 = the last day).
+     * Request body for how a card bills. Days are days of the month, 1–31 (31 = the last day). How the
+     * card is paid is not here: its payment is a recurring item, and is set there (see {@code ItemsRoutes}).
      *
-     * @param paymentMode          {@code full_balance}, {@code statement_balance}, {@code minimum} or {@code fixed}
-     * @param fixedPaymentCents    the monthly amount, for {@code fixed}
-     * @param payFromAccountId     the checking or savings account the payment comes out of; left out
-     *                             for no scheduled payment
      * @param monthlyEstimateCents what a statement month's spending is expected to come to, for a card
      *                             whose charges are not entered one by one; left out otherwise
      */
-    public record SettingsInput(
-            Integer statementCloseDay,
-            Integer dueDay,
-            String paymentMode,
-            Long fixedPaymentCents,
-            Boolean autopay,
-            Long payFromAccountId,
-            Long monthlyEstimateCents) {}
+    public record SettingsInput(Integer statementCloseDay, Integer dueDay, Long monthlyEstimateCents) {}
+
+    /**
+     * Request body for how a card's minimum payment is estimated until a statement with the real one is entered.
+     *
+     * @param shareBp      the share of the statement balance, in basis points (1% is 100); 0 to 10000
+     * @param floorCents   the least it comes to, when the balance is at least that much
+     * @param plusInterest true when that month's interest is added to the share
+     */
+    public record MinimumInput(Integer shareBp, Long floorCents, Boolean plusInterest) {}
+
+    /** How a card's minimum payment is estimated, as the API returns it. */
+    public record MinimumView(int shareBp, long floorCents, boolean plusInterest) {}
 
     /** Request body for a statement as it arrived. {@code dueDate} defaults to the card's next due day. */
     public record StatementInput(LocalDate closeDate, Long balanceCents, Long minimumDueCents, LocalDate dueDate) {}
 
-    /** Request body for a promotional rate. Rates are basis points (0% is 0, 24.49% is 2449). */
+    /**
+     * Request body for a promotional rate. Rates are basis points (0% is 0, 24.49% is 2449).
+     *
+     * @param originalBalanceCents the amount the rate is on (a balance transfer, one purchase); left
+     *                             out when it is on everything the card owes, new charges included
+     */
     public record PromoInput(
             String label,
             String kind,
@@ -143,8 +157,10 @@ public final class CardsRoutes {
     /**
      * A promotion with where it stands today.
      *
-     * @param remainingCents             what is left of its balance
-     * @param paidPercent                how much of the balance it started with is gone, 0–100
+     * @param originalBalanceCents       the amount it is on; {@code null} when it is on the whole balance
+     * @param remainingCents             what is left of its balance; for one on the whole balance, all that is owed
+     * @param paidPercent                how much of the amount it started with is gone, 0–100; {@code null}
+     *                                   for one on the whole balance, which has no amount to measure against
      * @param daysLeft                   days until its last day; negative once it has ended
      * @param warning                    {@code none}, {@code soon}, {@code soon_deferred} or {@code ended}
      * @param warnFrom                   the day warnings start
@@ -162,11 +178,11 @@ public final class CardsRoutes {
             int rateBp,
             LocalDate startDate,
             LocalDate endDate,
-            long originalBalanceCents,
+            Long originalBalanceCents,
             Integer rateAfterBp,
             boolean deferredInterest,
             long remainingCents,
-            int paidPercent,
+            Integer paidPercent,
             long daysLeft,
             PromoPayoff.Warning warning,
             LocalDate warnFrom,
@@ -217,10 +233,11 @@ public final class CardsRoutes {
      * @param statements    the next statement (projected) first, then the ones entered, newest first
      * @param rates         the regular APR over time, newest first
      * @param nextCloseDate when the statement being built closes; {@code null} without settings
+     * @param minimum       how its minimum payment is estimated; the usual rule until it is changed
      */
     public record CardDetail(
             CardView card, List<PromoView> promos, List<StatementView> statements, List<Rate> rates, LocalDate nextCloseDate,
-            LocalDate nextDueDate) {}
+            LocalDate nextDueDate, MinimumView minimum) {}
 
     private List<CardView> list() {
         LocalDate today = pay.today();
@@ -252,7 +269,27 @@ public final class CardsRoutes {
                 statementViews(account, cardSettings, nextClose, today),
                 interest.rates(account.id()).stream().filter(rate -> rate.kind() == RateKind.APR).toList(),
                 nextClose,
-                nextClose == null ? null : StatementCycle.dueDate(nextClose, cardSettings.dueDay()));
+                nextClose == null ? null : StatementCycle.dueDate(nextClose, cardSettings.dueDay()),
+                minimumView(cards.minimumRules().getOrDefault(account.id(), CardPayment.MinimumRule.USUAL)));
+    }
+
+    private static MinimumView minimumView(CardPayment.MinimumRule rule) {
+        return new MinimumView(rule.shareBp(), rule.floor().cents(), rule.plusInterest());
+    }
+
+    private void saveMinimum(Context ctx) {
+        Account account = card(ctx);
+        MinimumInput input = Inputs.body(ctx, MinimumInput.class);
+        if (input.shareBp() == null || input.shareBp() < 0 || input.shareBp() > MAX_SHARE_BP) {
+            throw ApiException.badRequest("Please enter the share of the balance as a percentage from 0 to 100.");
+        }
+        long floor = Inputs.amount(input.floorCents(), "The least the minimum comes to");
+        CardPayment.MinimumRule rule = new CardPayment.MinimumRule(input.shareBp(), Money.ofCents(floor), Boolean.TRUE.equals(input.plusInterest()));
+        // The rule is kept with the card's dates, and means nothing without them: no statement is projected until they are in.
+        if (!cards.saveMinimumRule(account.id(), rule)) {
+            throw ApiException.conflict("Please enter this card's statement and due dates first.");
+        }
+        ApiResponse.ok(ctx, detail(account));
     }
 
     private CardView view(
@@ -275,82 +312,78 @@ public final class CardsRoutes {
         SettingsInput input = Inputs.body(ctx, SettingsInput.class);
         int closeDay = dayOfMonth(input.statementCloseDay(), "Please choose the day of the month the statement closes.");
         int dueDay = dayOfMonth(input.dueDay(), "Please choose the day of the month the payment is due.");
-        CardPayment.Mode mode = Inputs.choice(CardPayment.Mode.class, input.paymentMode(), "how this card is paid");
-        Long fixed = null;
-        if (mode == CardPayment.Mode.FIXED) {
-            fixed = Inputs.amount(input.fixedPaymentCents(), "The amount you pay each month");
-            if (fixed == 0) {
-                throw ApiException.badRequest("Please enter the amount you pay each month.");
-            }
-        }
         Long estimate = input.monthlyEstimateCents() == null
                 ? null
                 : (Long) Inputs.amount(input.monthlyEstimateCents(), "The monthly estimate");
-        Long payFrom = input.payFromAccountId();
-        if (payFrom != null && accounts.find(payFrom).filter(AccountType::holdsCash).isEmpty()) {
-            throw ApiException.badRequest("Please choose a checking or savings account to pay this card from.");
-        }
-        boolean autopay = Boolean.TRUE.equals(input.autopay());
 
-        Long paymentItemId = cards.settings(account.id()).map(Settings::paymentItemId).orElse(null);
-        Settings saved = new Settings(account.id(), closeDay, dueDay, mode, fixed, autopay, payFrom, paymentItemId, estimate);
-        cards.saveSettings(new Settings(
-                account.id(), closeDay, dueDay, mode, fixed, autopay, payFrom, keepPaymentInStep(account, saved), estimate));
+        // How it is paid belongs to its recurring payment, so that part is kept exactly as it stands.
+        Settings was = cards.settings(account.id()).orElse(null);
+        Settings saved = was == null
+                ? new Settings(account.id(), closeDay, dueDay, CardsRepository.NO_PAYMENT_YET, null, false, null, null, estimate)
+                : new Settings(
+                        account.id(), closeDay, dueDay, was.paymentMode(), was.fixedPaymentCents(), was.autopay(),
+                        was.payFromAccountId(), was.paymentItemId(), estimate);
+        cards.saveSettings(withItsPayment(account, saved, was != null && was.dueDay() != dueDay));
         ApiResponse.ok(ctx, detail(account));
     }
 
     /**
-     * Keeps the card's own recurring payment in step with its settings: monthly on the due day,
-     * from the chosen account. It is added the first time an account to pay from is chosen, changed
-     * from today when the settings change, and archived when there is no longer an account to pay
-     * from. Being an ordinary recurring item, it shows in each pay period with its paid tick and
-     * confirmation code; only its amount is special, following the card unless the mode is fixed.
-     *
-     * @return the id of that item; {@code null} when there is none
+     * Ties a card's dates to its recurring payment. A payment into this card that was already among
+     * the recurring items becomes the card's own, as the fixed amount it was entered as. And when the
+     * due day moves, a monthly payment moves with it from today: it is due when the card says it is.
      */
-    private Long keepPaymentInStep(Account account, Settings saved) {
+    private Settings withItsPayment(Account account, Settings saved, boolean dueDayMoved) {
         LocalDate today = pay.today();
-        Item existing = saved.paymentItemId() == null ? null : items.find(saved.paymentItemId()).orElse(null);
-        if (saved.payFromAccountId() == null) {
-            if (existing != null && !existing.archived()) {
-                items.update(
-                        existing.id(),
-                        new Identity(existing.name(), existing.kind(), existing.note(), true, existing.tagIds()),
-                        existing.versionOn(today).terms(),
-                        today);
-            }
-            return existing == null ? null : (Long) existing.id();
+        Item linked = saved.paymentItemId() == null
+                ? null
+                : items.find(saved.paymentItemId()).filter(item -> !item.archived()).orElse(null);
+        if (linked == null) {
+            return paymentAlreadyThere(account, today)
+                    .map(item -> {
+                        Terms terms = item.versionOn(today).terms();
+                        return new Settings(
+                                saved.accountId(), saved.statementCloseDay(), saved.dueDay(), CardPayment.Mode.FIXED,
+                                terms.amountCents(), terms.autopay(), terms.payFromAccountId(), item.id(),
+                                saved.monthlyEstimateCents());
+                    })
+                    .orElse(saved);
         }
-        boolean fixed = saved.paymentMode() == CardPayment.Mode.FIXED;
-        Terms was = existing == null ? null : existing.versionOn(today).terms();
-        Terms terms = new Terms(
-                // A payment that follows the card has no amount of its own: the ledger works it out.
-                fixed ? saved.fixedPaymentCents() : 0,
-                AmountMode.PER_OCCURRENCE,
-                !fixed,
-                was == null ? null : was.categoryId(),
-                saved.payFromAccountId(),
-                account.id(),
-                saved.autopay(),
-                Placement.DUE_PERIOD,
-                new ScheduleRule(
-                        Frequency.MONTHLY, 1, saved.dueDay(), null, null,
-                        was == null ? today : was.schedule().startDate(), null, WeekendRule.NONE, List.of()),
-                0,
-                null,
-                null,
-                // The bucket it came out of belongs to the account it was paid from.
-                was != null && was.payFromAccountId() == saved.payFromAccountId() ? was.fromBucketId() : null);
-        if (existing == null) {
-            return items.create(
-                    new Identity(shortened(account.name() + " payment"), ItemKind.CARD_PAYMENT, null, false, List.of()), terms, today);
+        Terms terms = linked.versionOn(today).terms();
+        ScheduleRule rule = terms.schedule();
+        if (dueDayMoved && rule.frequency() == Frequency.MONTHLY) {
+            items.update(
+                    linked.id(),
+                    new Identity(linked.name(), linked.kind(), linked.note(), linked.archived(), linked.tagIds()),
+                    new Terms(
+                            terms.amountCents(), terms.amountMode(), terms.estimate(), terms.categoryId(), terms.payFromAccountId(),
+                            terms.payToAccountId(), terms.autopay(), terms.placement(),
+                            new ScheduleRule(
+                                    rule.frequency(), rule.interval(), saved.dueDay(), rule.day2(), rule.month(), rule.startDate(),
+                                    rule.endDate(), rule.weekendRule(), rule.manualDates()),
+                            terms.daysAfterPayday(), terms.bucketId(), terms.saveUpBucketId(), terms.fromBucketId()),
+                    today);
         }
-        items.update(
-                existing.id(),
-                new Identity(existing.name(), ItemKind.CARD_PAYMENT, existing.note(), false, existing.tagIds()),
-                terms,
-                today);
-        return existing.id();
+        return saved;
+    }
+
+    /**
+     * The one recurring card payment into this card that the user set up before the card's dates
+     * were entered. With none, or more than one, nothing is taken over. A promotion's payoff is
+     * a different payment and is left alone.
+     */
+    private Optional<Item> paymentAlreadyThere(Account account, LocalDate today) {
+        Set<Long> payoffs = cards.promos(account.id()).stream()
+                .map(Promo::payoffItemId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        List<Item> found = items.all().stream()
+                .filter(item -> !item.archived() && item.kind() == ItemKind.CARD_PAYMENT && !payoffs.contains(item.id()))
+                .filter(item -> {
+                    Long payTo = item.versionOn(today).terms().payToAccountId();
+                    return payTo != null && payTo == account.id();
+                })
+                .toList();
+        return found.size() == 1 ? Optional.of(found.getFirst()) : Optional.empty();
     }
 
     private void saveStatement(Context ctx) {
@@ -388,7 +421,9 @@ public final class CardsRoutes {
 
     private void createPromo(Context ctx) {
         Account account = card(ctx);
-        cards.createPromo(account.id(), promoFields(Inputs.body(ctx, PromoInput.class)));
+        PromoFields fields = promoFields(Inputs.body(ctx, PromoInput.class));
+        cards.createPromo(account.id(), fields);
+        regularAprFrom(account, fields);
         ApiResponse.send(ctx, 201, detail(account));
     }
 
@@ -398,6 +433,7 @@ public final class CardsRoutes {
         if (!cards.updatePromo(account.id(), Inputs.id(ctx, "promoId"), fields)) {
             throw ApiException.notFound();
         }
+        regularAprFrom(account, fields);
         ApiResponse.ok(ctx, detail(account));
     }
 
@@ -436,7 +472,7 @@ public final class CardsRoutes {
                 ? cardSettings.payFromAccountId()
                 : pay.primaryAccountId().orElse(null);
         if (payFrom == null || payFrom == account.id()) {
-            throw ApiException.conflict("Please choose the account this card is paid from first, under Payment setting.");
+            throw ApiException.conflict("Please add this card's recurring payment first, so the payoff knows which account to come out of.");
         }
         LocalDate lastPayday = promo.endDate().minusDays(1);
         LocalDate firstPayday = paydays(today.plusDays(1), lastPayday).getFirst();
@@ -474,12 +510,14 @@ public final class CardsRoutes {
             // Paydays strictly after today and before the end date: the ones still to come.
             int paydaysLeft = paydays(today.plusDays(1), promo.endDate().minusDays(1)).size();
             BasisPoints after = promo.rateAfterBp() != null ? BasisPoints.of(promo.rateAfterBp()) : apr;
-            long paid = promo.originalBalanceCents() - remaining.cents();
             views.add(new PromoView(
                     promo.id(), promo.label(), promo.kind(), promo.rateBp(), promo.startDate(), promo.endDate(),
                     promo.originalBalanceCents(), promo.rateAfterBp(), promo.deferredInterest(),
                     remaining.cents(),
-                    (int) Math.max(0, Math.min(100, paid * 100 / promo.originalBalanceCents())),
+                    promo.originalBalanceCents() == null
+                            ? null
+                            : (Integer) (int) Math.max(0, Math.min(100,
+                                    (promo.originalBalanceCents() - remaining.cents()) * 100 / promo.originalBalanceCents())),
                     PromoPayoff.daysLeft(today, promo.endDate()),
                     PromoPayoff.warning(own, remaining, today, leadDays),
                     promo.endDate().minusDays(leadDays),
@@ -544,6 +582,21 @@ public final class CardsRoutes {
         return balances;
     }
 
+    /**
+     * The rate a promotion goes to afterwards is the card's regular APR (Rachel, 2026-10-10), so on a
+     * card that has none yet, entering it on a promotion enters it for the card as well. A card
+     * that already has a regular APR keeps it: a promotion may end at a different rate.
+     */
+    private void regularAprFrom(Account account, PromoFields fields) {
+        boolean hasApr = interest.rates(account.id()).stream().anyMatch(rate -> rate.kind() == RateKind.APR);
+        if (fields.rateAfterBp() == null || hasApr) {
+            return;
+        }
+        // In force from the promotion's start, or today if it starts later, so it is the card's rate now.
+        LocalDate today = pay.today();
+        interest.saveRate(account.id(), RateKind.APR, fields.rateAfterBp(), fields.startDate().isAfter(today) ? today : fields.startDate());
+    }
+
     private Optional<BasisPoints> aprToday(long accountId, LocalDate today) {
         // Newest first, so the first one that has started is the one in force.
         return interest.rates(accountId).stream()
@@ -581,13 +634,18 @@ public final class CardsRoutes {
         if (!input.endDate().isAfter(input.startDate())) {
             throw ApiException.badRequest("A promotion ends after it starts. Please check the two dates.");
         }
-        long original = Inputs.amount(input.originalBalanceCents(), "The balance it started with");
-        if (original == 0) {
-            throw ApiException.badRequest("Please enter the balance this promotion started with.");
+        // Left out, the rate is on everything the card owes.
+        Long original = input.originalBalanceCents() == null ? null : (Long) Inputs.amount(input.originalBalanceCents(), "The amount on this rate");
+        if (original != null && original == 0) {
+            throw ApiException.badRequest("Please enter the amount this rate is on, or choose everything on the card.");
+        }
+        boolean deferred = Boolean.TRUE.equals(input.deferredInterest());
+        if (deferred && original == null) {
+            throw ApiException.badRequest(
+                    "Deferred interest is charged on the amount a promotion started with. Please enter the amount this rate is on.");
         }
         return new PromoFields(
-                label, kind, input.rateBp(), input.startDate(), input.endDate(), original, input.rateAfterBp(),
-                Boolean.TRUE.equals(input.deferredInterest()));
+                label, kind, input.rateBp(), input.startDate(), input.endDate(), original, input.rateAfterBp(), deferred);
     }
 
     /** The credit card in the path. Any other kind of account is not a card, so it is "not found". */

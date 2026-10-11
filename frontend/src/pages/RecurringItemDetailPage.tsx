@@ -8,6 +8,7 @@ import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
+import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
 import { PauseControls } from "../components/items/PauseItem";
 import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
@@ -23,6 +24,9 @@ import { formatCents } from "../lib/money";
  * schedule and nothing else, and so on, so no form is longer than what it is about. Edit item
  * is the small one (type, name, archiving, deleting), as Edit account is. A bucket's own
  * recurring amount is the exception: it is changed in its bucket's form, so it has the one button.
+ *
+ * A credit card's payment is an item like any other and is changed here, including how much it
+ * pays (the statement balance, say): the card's page shows the payment, and this page sets it.
  */
 export function RecurringItemDetailPage() {
   const id = Number(useParams().id);
@@ -65,10 +69,10 @@ export function RecurringItemDetailPage() {
   const itemTags = (tags.data ?? []).filter((tag) => item.tagIds.includes(tag.id));
   const everyPaycheck = item.schedule.frequency === "every_pay_period";
   // Set up on its bucket, and changed there: one form, so one button.
-  // A card's own payment is the same: it is kept in step with the card's payment setting, and changed there.
-  const cardId = item.paymentOfCardId ?? null;
-  const ownForm = item.kind !== "bucket_move" && cardId === null;
-  const edit =(part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
+  const ownForm = item.kind !== "bucket_move";
+  const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
+  // A payment that follows its card says how, in place of an amount.
+  const follows = item.followsCard && item.cardPaymentMode ? PAYMENT_MODE_LABELS[item.cardPaymentMode] : null;
 
   return (
     <>
@@ -89,11 +93,7 @@ export function RecurringItemDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
-          {cardId === null ? (
-            <EditPageButton label="Edit item" onClick={() => setEditing("item")} />
-          ) : (
-            <EditPageButton label="Edit on the card's page" onClick={() => navigate(`/cards/${cardId}`)} />
-          )}
+          <EditPageButton label="Edit item" onClick={() => setEditing("item")} />
           {ownForm && (
             <button type="button" onClick={() => setEditing("amount")} aria-label={`Change the amount of ${item.name}`} className={BUTTON_PRIMARY}>
               Change the amount
@@ -107,10 +107,10 @@ export function RecurringItemDetailPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <p className="text-muted">Amount</p>
-              {item.followsCard ? (
+              {follows ? (
                 <>
-                  <p className="text-2xl font-bold">Follows the card</p>
-                  <p className="text-muted">worked out from the card's payment setting for each statement</p>
+                  <p className="text-2xl font-bold">{follows}</p>
+                  <p className="text-muted">worked out from the card each time</p>
                 </>
               ) : (
                 <>
@@ -125,7 +125,7 @@ export function RecurringItemDetailPage() {
             </div>
             <div>
               <p className="text-muted">A year</p>
-              {item.followsCard ? (
+              {follows ? (
                 <>
                   <p className="text-2xl font-bold">—</p>
                   <p className="text-muted">it changes with what is charged</p>

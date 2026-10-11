@@ -2,24 +2,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type Account, ACCOUNTS_KEY, type Rate } from "./accounts";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
-import { ITEMS_KEY } from "./items";
+import { CARD_PAYMENT_MODES, type CardPaymentMode, ITEMS_KEY } from "./items";
 
 /** How a card's own payment is sized. */
-export const PAYMENT_MODES = ["statement_balance", "full_balance", "minimum", "fixed"] as const;
-export type PaymentMode = (typeof PAYMENT_MODES)[number];
+export const PAYMENT_MODES = CARD_PAYMENT_MODES;
+export type PaymentMode = CardPaymentMode;
 
-/** How a card bills and is paid. Days are days of the month, 1–31, where 31 means the last day. */
+/**
+ * How a card bills and is paid. Days are days of the month, 1–31, where 31 means the last day.
+ * The dates and the estimate are the card's own; how it is paid is a copy of its recurring payment,
+ * which is where that is set.
+ */
 export interface CardSettings {
   accountId: number;
   statementCloseDay: number;
   dueDay: number;
   paymentMode: PaymentMode;
-  /** The monthly amount; set exactly when `paymentMode` is `fixed`. */
+  /** That payment's amount when `paymentMode` is `fixed`. */
   fixedPaymentCents: number | null;
   autopay: boolean;
-  /** The account the payment comes out of; `null` when no payment is scheduled. */
+  /** The account the payment comes out of; `null` while the card has no recurring payment. */
   payFromAccountId: number | null;
-  /** The recurring item kept in step with these settings; `null` when there is none. */
+  /** The recurring item that is this card's own payment; `null` when there is none. */
   paymentItemId: number | null;
   /** For a card whose charges are not entered one by one: what a statement month's spending comes to. */
   monthlyEstimateCents: number | null;
@@ -28,10 +32,6 @@ export interface CardSettings {
 export interface CardSettingsInput {
   statementCloseDay: number;
   dueDay: number;
-  paymentMode: PaymentMode;
-  fixedPaymentCents: number | null;
-  autopay: boolean;
-  payFromAccountId: number | null;
   monthlyEstimateCents: number | null;
 }
 
@@ -50,13 +50,15 @@ export interface Promo {
   startDate: string;
   /** The last day the promotional rate applies. */
   endDate: string;
-  originalBalanceCents: number;
+  /** The amount the rate is on; `null` when it is on everything the card owes, new charges included. */
+  originalBalanceCents: number | null;
   /** The rate on what is left afterwards; `null` for the card's regular APR. */
   rateAfterBp: number | null;
   deferredInterest: boolean;
+  /** What is left on the rate; for one on everything, all that is owed. */
   remainingCents: number;
-  /** How much of the balance it started with is gone, 0–100. */
-  paidPercent: number;
+  /** How much of the amount it started with is gone, 0–100; `null` for one on everything. */
+  paidPercent: number | null;
   /** Days until its last day; negative once it has ended. */
   daysLeft: number;
   warning: PromoWarning;
@@ -82,7 +84,8 @@ export interface PromoInput {
   rateBp: number;
   startDate: string;
   endDate: string;
-  originalBalanceCents: number;
+  /** The amount the rate is on; `null` for everything the card owes. */
+  originalBalanceCents: number | null;
   rateAfterBp: number | null;
   deferredInterest: boolean;
 }
@@ -127,7 +130,7 @@ export interface Card {
   account: Account;
   /** What is owed today; `null` for an archived card nothing is known about. */
   balanceCents: number | null;
-  /** `null` until the user says how the card bills and is paid. */
+  /** `null` until the card's statement and due days are entered. */
   settings: CardSettings | null;
   /** The regular APR in force today, in basis points; `null` until one is entered. */
   aprBp: number | null;
@@ -147,6 +150,18 @@ export interface CardDetail {
   /** When the statement being built closes, and falls due; `null` without settings. */
   nextCloseDate: string | null;
   nextDueDate: string | null;
+  /** How its minimum payment is estimated until a statement with the real one is entered. */
+  minimum: MinimumRule;
+}
+
+/** How a card's minimum payment is estimated: a share of the statement balance, never less than a floor. */
+export interface MinimumRule {
+  /** The share of the statement balance, in basis points (1% is 100). */
+  shareBp: number;
+  /** The least it comes to, when the balance is at least that much. */
+  floorCents: number;
+  /** True when that month's interest is added to the share. */
+  plusInterest: boolean;
 }
 
 // Under PAY_KEY: a card's balance, next payment and promotions follow everything that moves money.
@@ -179,6 +194,15 @@ export function useSaveCardSettings(cardId: number) {
   const refresh = useRefresh();
   return useMutation({
     mutationFn: (input: CardSettingsInput) => api.put<CardDetail>(`/api/cards/${cardId}/settings`, input),
+    onSuccess: refresh,
+  });
+}
+
+/** Changes how the card's minimum payment is estimated. */
+export function useSaveMinimumRule(cardId: number) {
+  const refresh = useRefresh();
+  return useMutation({
+    mutationFn: (input: MinimumRule) => api.put<CardDetail>(`/api/cards/${cardId}/minimum`, input),
     onSuccess: refresh,
   });
 }

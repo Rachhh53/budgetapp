@@ -257,4 +257,154 @@ class LoansApiTest extends ApiTestBase {
             }
         }
     }
+
+    /** $1,000.00 a month on the 1st, $400.00 of it escrow, at 6%: $600.00 reaches the loan. */
+    @Nested
+    class PaidByARecurringItem {
+        private static final String PAYMENT = """
+                {"paymentCents":100000,"paymentDay":1,"escrowInsuranceCents":15000,"escrowTaxesCents":25000%s}""";
+
+        private long checking;
+
+        @BeforeEach
+        void aLoanEnteredAsItStoodInJuly() throws Exception {
+            checking = createAccount("Everyday Checking", "checking");
+            createSalary(checking);
+            enterBalance(checking, "2026-10-01", 500000);
+            enterBalance(mortgage, "2026-07-01", 10000000);
+            setRate(600);
+        }
+
+        private JsonNode loan() throws Exception {
+            return server.get("/api/accounts/" + mortgage + "/loan", cookie).data();
+        }
+
+        private JsonNode lines(String from, String to) throws Exception {
+            return server.get("/api/accounts/" + mortgage + "/transactions?from=" + from + "&to=" + to, cookie).data();
+        }
+
+        private long count(JsonNode lines, String kind) {
+            long found = 0;
+            for (JsonNode line : lines) {
+                if (line.get("kind").asText().equals(kind)) {
+                    found++;
+                }
+            }
+            return found;
+        }
+
+        private long bill() throws Exception {
+            return created("/api/items", """
+                    {"name":"Mortgage","kind":"bill","amountCents":100000,"payFromAccountId":%d,
+                     "autopay":true,"schedule":{"frequency":"monthly","day1":1,"startDate":"2026-11-01"}}"""
+                    .formatted(checking));
+        }
+
+        @Test
+        void untilAnItemPaysItTheMonthlyPaymentIsTakenAsMade() throws Exception {
+            saveTerms(PAYMENT.formatted(""));
+
+            // Aug 1: +500.00 interest, −600.00. Sep 1: +499.50, −600.00. Oct 1: +499.00, −600.00.
+            assertThat(loan().get("balanceCents").asLong()).isEqualTo(9969850);
+            assertThat(loan().get("paidBy")).isEmpty();
+            JsonNode sinceJuly = lines("2026-07-01", "2026-10-01");
+            assertThat(count(sinceJuly, "loan_payment")).isEqualTo(3);
+            assertThat(count(sinceJuly, "loan_interest")).isEqualTo(3);
+        }
+
+        @Test
+        void aBillLinkedToTheLoanPaysItDownFromItsFirstMonth() throws Exception {
+            long bill = bill();
+
+            Reply saved = saveTerms(PAYMENT.formatted(",\"paymentItemId\":" + bill));
+
+            assertThat(saved.status()).isEqualTo(200);
+            assertThat(saved.data().get("settings").get("paymentItemId").asLong()).isEqualTo(bill);
+            JsonNode paidBy = saved.data().get("paidBy");
+            assertThat(paidBy).hasSize(1);
+            assertThat(paidBy.get(0).get("name").asText()).isEqualTo("Mortgage");
+            assertThat(paidBy.get(0).get("linked").asBoolean()).isTrue();
+            // November is paid by the bill itself: its escrow stays out of the loan, and nothing is assumed.
+            JsonNode november = lines("2026-11-01", "2026-11-30");
+            assertThat(count(november, "bill")).isEqualTo(1);
+            assertThat(count(november, "escrow")).isEqualTo(1);
+            assertThat(count(november, "loan_payment")).isZero();
+            // The months before the bill starts are still taken as paid.
+            assertThat(count(lines("2026-07-01", "2026-10-31"), "loan_payment")).isEqualTo(3);
+        }
+
+        @Test
+        void removingTheLinkedItemLeavesTheLoanUnlinked() throws Exception {
+            long bill = bill();
+            saveTerms(PAYMENT.formatted(",\"paymentItemId\":" + bill));
+
+            assertThat(server.delete("/api/items/" + bill, cookie).status()).isEqualTo(200);
+
+            assertThat(loan().get("settings").get("paymentItemId").isNull()).isTrue();
+            assertThat(loan().get("paidBy")).isEmpty();
+        }
+
+        @Test
+        void thePaymentCanBeAddedFromTheLoanAsARecurringTransfer() throws Exception {
+            saveTerms(PAYMENT.formatted(""));
+
+            Reply added = server.post("/api/accounts/" + mortgage + "/loan/payment",
+                    "{\"payFromAccountId\":%d,\"autopay\":true}".formatted(checking), cookie);
+
+            assertThat(added.status()).isEqualTo(201);
+            assertThat(added.changed()).isTrue();
+            JsonNode paidBy = added.data().get("paidBy");
+            assertThat(paidBy).hasSize(1);
+            assertThat(paidBy.get(0).get("name").asText()).isEqualTo("Maple Street mortgage payment");
+            JsonNode item = null;
+            for (JsonNode found : server.get("/api/items", cookie).data()) {
+                if (found.get("id").asLong() == paidBy.get(0).get("itemId").asLong()) {
+                    item = found;
+                }
+            }
+            assertThat(item).isNotNull();
+            assertThat(item.get("kind").asText()).isEqualTo("transfer");
+            assertThat(item.get("amountCents").asLong()).isEqualTo(100000);
+            assertThat(item.get("payFromAccountId").asLong()).isEqualTo(checking);
+            assertThat(item.get("payToAccountId").asLong()).isEqualTo(mortgage);
+            assertThat(item.get("autopay").asBoolean()).isTrue();
+            assertThat(item.get("schedule").get("day1").asInt()).isEqualTo(1);
+
+            // It is not offered twice.
+            Reply again = server.post("/api/accounts/" + mortgage + "/loan/payment",
+                    "{\"payFromAccountId\":%d}".formatted(checking), cookie);
+            assertThat(again.status()).isEqualTo(409);
+            assertThat(again.error()).isEqualTo("This loan is already paid by one of your recurring items.");
+        }
+
+        @Test
+        void addingThePaymentRequiresASessionTheTermsAndAnAccountThatHoldsMoney() throws Exception {
+            String body = "{\"payFromAccountId\":%d}".formatted(checking);
+            assertThat(server.post("/api/accounts/" + mortgage + "/loan/payment", body, null).status()).isEqualTo(401);
+
+            Reply early = server.post("/api/accounts/" + mortgage + "/loan/payment", body, cookie);
+            assertThat(early.status()).isEqualTo(409);
+            assertThat(early.error()).isEqualTo("Please enter the monthly payment first.");
+
+            saveTerms(PAYMENT.formatted(""));
+            assertError(
+                    server.post("/api/accounts/" + mortgage + "/loan/payment", "{\"payFromAccountId\":%d}".formatted(mortgage), cookie),
+                    "Please choose a checking or savings account to pay this loan from.");
+            assertThat(loan().get("paidBy")).isEmpty();
+        }
+
+        @Test
+        void onlyAnItemThatCouldPayALoanCanBeLinked() throws Exception {
+            long groceries = created("/api/items", """
+                    {"name":"Groceries","kind":"budget","amountCents":30000,"payFromAccountId":%d,
+                     "schedule":{"frequency":"every_pay_period","startDate":"2026-10-01"}}""".formatted(checking));
+
+            assertError(
+                    saveTerms(PAYMENT.formatted(",\"paymentItemId\":" + groceries)),
+                    "Please choose a bill, or a transfer into this loan, as the item that pays it.");
+            assertError(
+                    saveTerms(PAYMENT.formatted(",\"paymentItemId\":999999")),
+                    "Please choose the recurring item that pays this loan.");
+        }
+    }
 }

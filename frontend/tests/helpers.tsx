@@ -67,6 +67,7 @@ const noLoanTerms: Handler = () => ({
     payoffDate: null,
     interestRemainingCents: null,
     paysOff: true,
+    paidBy: [],
     years: [],
   },
 });

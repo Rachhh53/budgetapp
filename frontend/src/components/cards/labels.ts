@@ -1,5 +1,4 @@
-import type { Account } from "../../api/accounts";
-import type { Card, CardSettings, PaymentMode, Promo, PromoKind, StatementStatus } from "../../api/cards";
+import type { MinimumRule, PaymentMode, Promo, PromoKind, StatementStatus } from "../../api/cards";
 import { LAST_DAY } from "../../api/income";
 import { formatDate, formatDay, ordinal } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
@@ -16,8 +15,9 @@ export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
 export const PAYMENT_MODE_HELP: Record<PaymentMode, string> = {
   statement_balance: "What the last statement said, each month. Nothing is carried, so no interest.",
   full_balance: "Everything owed on the due day, including charges made since the statement.",
-  minimum: "Only the statement's minimum. The rest is carried and charged interest.",
-  fixed: "The same amount every month, whatever the statement says.",
+  minimum:
+    "The minimum on the statement you enter; the rest is carried and charged interest. Until that statement is entered it is an estimate, worked out the way the card's page says under Minimum payment estimate.",
+  fixed: "The same amount each time, whatever the statement says.",
 };
 
 export const PROMO_KIND_LABELS: Record<PromoKind, string> = {
@@ -33,33 +33,19 @@ export const STATEMENT_STATUS_LABELS: Record<StatementStatus, string> = {
   due: "To pay",
 };
 
+/** A card's minimum rule in words: "1% of the statement balance plus that month's interest, and at least $25.00". */
+export function minimumRule(rule: MinimumRule): string {
+  const share = rule.shareBp === 0 ? null : `${formatRate(rule.shareBp).replace(/\.00%$/, "%")} of the statement balance`;
+  const withInterest = share && rule.plusInterest ? `${share} plus that month's interest` : share;
+  if (withInterest === null) {
+    return rule.plusInterest ? `That month's interest, and at least ${formatCents(rule.floorCents)}` : formatCents(rule.floorCents);
+  }
+  return rule.floorCents === 0 ? withInterest : `${withInterest}, and at least ${formatCents(rule.floorCents)}`;
+}
+
 /** A day of the month in words: "the 20th", or "the last day" for 31. */
 export function dayOfMonth(day: number): string {
   return day === LAST_DAY ? "the last day" : `the ${ordinal(day)}`;
-}
-
-/** The payment setting in a few words: "Statement balance", "Fixed $240.00". */
-export function paymentSetting(settings: CardSettings): string {
-  return settings.paymentMode === "fixed" && settings.fixedPaymentCents !== null
-    ? `Fixed ${formatCents(settings.fixedPaymentCents)}`
-    : PAYMENT_MODE_LABELS[settings.paymentMode];
-}
-
-/** How the payment is made and from where: "autopay · from Everyday Checking", or that none is scheduled. */
-export function paymentSource(settings: CardSettings, accounts: readonly Account[]): string {
-  if (settings.payFromAccountId === null) {
-    return "no payment scheduled";
-  }
-  const from = accounts.find((account) => account.id === settings.payFromAccountId)?.name ?? "an account that was removed";
-  return `${settings.autopay ? "autopay" : "paid by hand"} · from ${from}`;
-}
-
-/** The line under a card's name on the overview. */
-export function cardSummary(card: Card): string {
-  if (card.settings === null) {
-    return "Statement and due days not set up yet";
-  }
-  return `${paymentSetting(card.settings)} · ${card.settings.autopay ? "autopay" : "paid by hand"} · due ${dayOfMonth(card.settings.dueDay)}`;
 }
 
 /** A promotional rate as offers are written: "0%" rather than "0.00%", and "1.99%" as it is. */

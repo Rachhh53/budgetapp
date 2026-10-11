@@ -28,16 +28,32 @@ class CardsApiTest extends ApiTestBase {
         card = createAccount("Travel Rewards Visa", "credit_card");
     }
 
-    private String settings(String mode, String extra) {
-        return "{\"statementCloseDay\":20,\"dueDay\":13,\"paymentMode\":\"%s\"%s}".formatted(mode, extra);
+    private static final String DATES = "{\"statementCloseDay\":20,\"dueDay\":13%s}";
+
+    /** The card's own dates: its statement closes on the 20th and is due on the 13th. */
+    private Reply saveDates(String extra) throws Exception {
+        return server.put("/api/cards/" + card + "/settings", DATES.formatted(extra), cookie);
     }
 
-    private Reply saveSettings(String mode, String extra) throws Exception {
-        return server.put("/api/cards/" + card + "/settings", settings(mode, extra), cookie);
+    private String payment(String mode, long amountCents, String extra) {
+        return """
+                {"name":"Travel Rewards Visa payment","kind":"card_payment","amountCents":%d,"cardPaymentMode":"%s",
+                 "payFromAccountId":%d,"payToAccountId":%d,
+                 "schedule":{"frequency":"monthly","day1":13,"startDate":"2026-10-01"}%s}"""
+                .formatted(amountCents, mode, checking, card, extra);
     }
 
-    private String paidFromChecking() {
-        return ",\"payFromAccountId\":%d,\"autopay\":true".formatted(checking);
+    /** Sets the card's dates, then adds its recurring payment (or changes the one it has), on autopay. */
+    private Reply payBy(String mode, long amountCents, String extra) throws Exception {
+        saveDates("");
+        JsonNode items = server.get("/api/items", cookie).data();
+        return items.isEmpty()
+                ? server.post("/api/items", payment(mode, amountCents, extra), cookie)
+                : server.put("/api/items/" + items.get(0).get("id").asLong(), payment(mode, amountCents, extra), cookie);
+    }
+
+    private Reply payBy(String mode) throws Exception {
+        return payBy(mode, 0, ",\"autopay\":true");
     }
 
     private void setApr(int rateBp) throws Exception {
@@ -92,7 +108,9 @@ class CardsApiTest extends ApiTestBase {
 
             assertThat(server.get("/api/cards", null).status()).isEqualTo(401);
             assertThat(server.get(base, null).status()).isEqualTo(401);
-            assertThat(server.put(base + "/settings", settings("minimum", ""), null).status()).isEqualTo(401);
+            assertThat(server.put(base + "/settings", DATES.formatted(""), null).status()).isEqualTo(401);
+            assertThat(server.put(base + "/minimum", "{\"shareBp\":200,\"floorCents\":3500,\"plusInterest\":false}", null).status())
+                    .isEqualTo(401);
             assertThat(server.post(base + "/statements", "{\"closeDate\":\"2026-09-20\",\"balanceCents\":1}", null).status()).isEqualTo(401);
             assertThat(server.delete(base + "/statements/1", null).status()).isEqualTo(401);
             assertThat(server.post(base + "/promos", PROMO.formatted("2027-03-15", ""), null).status()).isEqualTo(401);
@@ -125,7 +143,7 @@ class CardsApiTest extends ApiTestBase {
         @Test
         void anAccountThatIsNotACardIsNotFound() throws Exception {
             assertThat(server.get("/api/cards/" + checking, cookie).status()).isEqualTo(404);
-            assertThat(server.put("/api/cards/" + checking + "/settings", settings("minimum", ""), cookie).status()).isEqualTo(404);
+            assertThat(server.put("/api/cards/" + checking + "/settings", DATES.formatted(""), cookie).status()).isEqualTo(404);
             assertThat(server.get("/api/cards/999", cookie).status()).isEqualTo(404);
         }
     }
@@ -133,103 +151,171 @@ class CardsApiTest extends ApiTestBase {
     @Nested
     class SettingsAndThePayment {
         @Test
-        void settingsAreSavedAndShownWithTheRegularApr() throws Exception {
+        void datesAreSavedAndShownWithTheRegularApr() throws Exception {
             setApr(2449);
 
-            Reply saved = saveSettings("minimum", ",\"monthlyEstimateCents\":45000");
+            Reply saved = saveDates(",\"monthlyEstimateCents\":45000");
 
             assertThat(saved.status()).isEqualTo(200);
             assertThat(saved.changed()).isTrue();
             JsonNode found = saved.data().get("card");
             assertThat(found.get("settings").get("statementCloseDay").asInt()).isEqualTo(20);
             assertThat(found.get("settings").get("dueDay").asInt()).isEqualTo(13);
-            assertThat(found.get("settings").get("paymentMode").asText()).isEqualTo("minimum");
             assertThat(found.get("settings").get("monthlyEstimateCents").asLong()).isEqualTo(45000);
             assertThat(found.get("aprBp").asInt()).isEqualTo(2449);
             assertThat(saved.data().get("nextCloseDate").asText()).isEqualTo("2026-10-20");
             assertThat(saved.data().get("nextDueDate").asText()).isEqualTo("2026-11-13");
-            // With no account to pay from, no payment is scheduled.
+            // How it is paid is its recurring payment's business: saving the dates adds none.
+            assertThat(found.get("settings").get("paymentItemId").isNull()).isTrue();
             assertThat(server.get("/api/items", cookie).data()).isEmpty();
         }
 
         @Test
-        void choosingAnAccountToPayFromAddsTheCardsOwnRecurringPayment() throws Exception {
-            Reply saved = saveSettings("statement_balance", paidFromChecking());
+        void aRecurringPaymentIntoTheCardIsItsOwnAndCanFollowIt() throws Exception {
+            Reply added = payBy("statement_balance");
 
-            JsonNode items = server.get("/api/items", cookie).data();
-            assertThat(items).hasSize(1);
-            JsonNode payment = items.get(0);
-            assertThat(payment.get("name").asText()).isEqualTo("Travel Rewards Visa payment");
-            assertThat(payment.get("kind").asText()).isEqualTo("card_payment");
-            assertThat(payment.get("payFromAccountId").asLong()).isEqualTo(checking);
-            assertThat(payment.get("payToAccountId").asLong()).isEqualTo(card);
-            assertThat(payment.get("autopay").asBoolean()).isTrue();
-            assertThat(payment.get("schedule").get("frequency").asText()).isEqualTo("monthly");
-            assertThat(payment.get("schedule").get("day1").asInt()).isEqualTo(13);
+            assertThat(added.status()).isEqualTo(201);
+            JsonNode payment = added.data();
             assertThat(payment.get("paymentOfCardId").asLong()).isEqualTo(card);
+            assertThat(payment.get("cardPaymentMode").asText()).isEqualTo("statement_balance");
             assertThat(payment.get("followsCard").asBoolean()).isTrue();
-            assertThat(saved.data().get("card").get("settings").get("paymentItemId").asLong()).isEqualTo(payment.get("id").asLong());
+            // It has no amount of its own: the card works it out.
+            assertThat(payment.get("amountCents").asLong()).isZero();
+            assertThat(payment.get("estimate").asBoolean()).isTrue();
+            JsonNode settings = detail().get("card").get("settings");
+            assertThat(settings.get("paymentItemId").asLong()).isEqualTo(payment.get("id").asLong());
+            assertThat(settings.get("paymentMode").asText()).isEqualTo("statement_balance");
+            assertThat(settings.get("payFromAccountId").asLong()).isEqualTo(checking);
+            assertThat(settings.get("autopay").asBoolean()).isTrue();
         }
 
         @Test
-        void changingTheSettingsChangesThatSamePayment() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+        void changingThePaymentIsDoneOnTheItemAndTheCardFollows() throws Exception {
+            payBy("statement_balance");
 
-            saveSettings("fixed", ",\"fixedPaymentCents\":24000,\"payFromAccountId\":" + checking);
+            Reply changed = payBy("fixed", 24000, ",\"placement\":\"one_early\"");
 
+            assertThat(changed.status()).isEqualTo(200);
             JsonNode items = server.get("/api/items", cookie).data();
             assertThat(items).hasSize(1);
             assertThat(items.get(0).get("amountCents").asLong()).isEqualTo(24000);
             assertThat(items.get(0).get("estimate").asBoolean()).isFalse();
             assertThat(items.get(0).get("autopay").asBoolean()).isFalse();
+            assertThat(items.get(0).get("placement").asText()).isEqualTo("one_early");
             assertThat(items.get(0).get("followsCard").asBoolean()).isFalse();
+            assertThat(items.get(0).get("cardPaymentMode").asText()).isEqualTo("fixed");
             assertThat(items.get(0).get("paymentOfCardId").asLong()).isEqualTo(card);
+            JsonNode settings = detail().get("card").get("settings");
+            assertThat(settings.get("paymentMode").asText()).isEqualTo("fixed");
+            assertThat(settings.get("fixedPaymentCents").asLong()).isEqualTo(24000);
+            assertThat(settings.get("autopay").asBoolean()).isFalse();
         }
 
         @Test
-        void takingTheAccountAwayArchivesThePaymentAndChoosingOneAgainBringsItBack() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+        void savingTheItemWithoutSayingHowMuchItPaysLeavesThatAsItWas() throws Exception {
+            long itemId = payBy("full_balance").data().get("id").asLong();
 
-            saveSettings("statement_balance", "");
-            assertThat(server.get("/api/items", cookie).data().get(0).get("archived").asBoolean()).isTrue();
+            Reply saved = server.put("/api/items/" + itemId, """
+                    {"name":"Visa","kind":"card_payment","amountCents":0,"payFromAccountId":%d,"payToAccountId":%d,
+                     "schedule":{"frequency":"monthly","day1":13,"startDate":"2026-10-01"}}""".formatted(checking, card), cookie);
 
-            saveSettings("statement_balance", paidFromChecking());
-            JsonNode items = server.get("/api/items", cookie).data();
-            assertThat(items).hasSize(1);
-            assertThat(items.get(0).get("archived").asBoolean()).isFalse();
+            assertThat(saved.data().get("cardPaymentMode").asText()).isEqualTo("full_balance");
+            assertThat(saved.data().get("followsCard").asBoolean()).isTrue();
         }
 
         @Test
-        void savingSettingsCanBeUndoneTogetherWithThePaymentItAdded() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+        void aCardPaymentThatWasAlreadyThereBecomesTheCardsOwn() throws Exception {
+            // Set up before the card had its dates, paid a period early.
+            long already = created("/api/items", """
+                    {"name":"Visa bill","kind":"card_payment","amountCents":25000,"payFromAccountId":%d,"payToAccountId":%d,
+                     "placement":"one_early","schedule":{"frequency":"monthly","day1":13,"startDate":"2026-01-13"}}"""
+                    .formatted(checking, card));
+
+            Reply saved = saveDates("");
+
+            // No second payment is added beside it, and it stays exactly as it was entered.
+            JsonNode settings = saved.data().get("card").get("settings");
+            assertThat(settings.get("paymentItemId").asLong()).isEqualTo(already);
+            assertThat(settings.get("paymentMode").asText()).isEqualTo("fixed");
+            assertThat(settings.get("fixedPaymentCents").asLong()).isEqualTo(25000);
+            JsonNode all = server.get("/api/items", cookie).data();
+            assertThat(all).hasSize(1);
+            assertThat(all.get(0).get("name").asText()).isEqualTo("Visa bill");
+            assertThat(all.get(0).get("amountCents").asLong()).isEqualTo(25000);
+            assertThat(all.get(0).get("placement").asText()).isEqualTo("one_early");
+            assertThat(all.get(0).get("paymentOfCardId").asLong()).isEqualTo(card);
+        }
+
+        @Test
+        void movingTheDueDayMovesAMonthlyPaymentWithIt() throws Exception {
+            payBy("statement_balance");
+
+            server.put("/api/cards/" + card + "/settings", "{\"statementCloseDay\":20,\"dueDay\":17}", cookie);
+
+            JsonNode payment = server.get("/api/items", cookie).data().get(0);
+            assertThat(payment.get("schedule").get("day1").asInt()).isEqualTo(17);
+            assertThat(payment.get("followsCard").asBoolean()).isTrue();
+        }
+
+        @Test
+        void onlyOnePaymentFollowsACardAndItNeedsTheCardsDates() throws Exception {
+            // Without the card's dates there is no statement to follow.
+            assertError(server.post("/api/items", payment("statement_balance", 0, ""), cookie),
+                    "Please enter this card's statement and due dates on its page first, so the payment knows which statement to follow.");
+            assertError(server.post("/api/items", payment("whenever", 0, ""), cookie),
+                    "Please choose how much this payment pays from the list.");
+            payBy("statement_balance");
+
+            assertError(server.post("/api/items", payment("minimum", 0, ""), cookie),
+                    "This card already has a payment that follows it. Please enter an amount for this one.");
+            // An extra payment of a fixed amount is fine, and the card's own payment stays the one that follows it.
+            long extra = created("/api/items", payment("fixed", 5000, ""));
+            assertThat(server.get("/api/items/" + extra, cookie).data().get("paymentOfCardId").isNull()).isTrue();
+            assertThat(detail().get("card").get("settings").get("paymentMode").asText()).isEqualTo("statement_balance");
+        }
+
+        @Test
+        void aPaymentPointedAtAnotherCardLetsGoOfTheFirst() throws Exception {
+            long itemId = payBy("fixed", 24000, "").data().get("id").asLong();
+            long other = createAccount("Everyday Mastercard", "credit_card");
+
+            server.put("/api/items/" + itemId, """
+                    {"name":"Card payment","kind":"card_payment","amountCents":24000,"payFromAccountId":%d,"payToAccountId":%d,
+                     "schedule":{"frequency":"monthly","day1":13,"startDate":"2026-10-01"}}""".formatted(checking, other), cookie);
+
+            JsonNode settings = detail().get("card").get("settings");
+            assertThat(settings.get("paymentItemId").isNull()).isTrue();
+            assertThat(settings.get("payFromAccountId").isNull()).isTrue();
+        }
+
+        @Test
+        void deletingThePaymentLeavesTheCardWithNone() throws Exception {
+            long itemId = payBy("statement_balance").data().get("id").asLong();
+
+            server.delete("/api/items/" + itemId, cookie);
+
+            assertThat(detail().get("card").get("settings").get("paymentItemId").isNull()).isTrue();
+            assertThat(detail().get("card").get("nextPayment").isNull()).isTrue();
+        }
+
+        @Test
+        void savingTheDatesCanBeUndone() throws Exception {
+            saveDates("");
 
             assertThat(server.post("/api/undo", "", cookie).status()).isEqualTo(200);
 
             assertThat(detail().get("card").get("settings").isNull()).isTrue();
-            assertThat(server.get("/api/items", cookie).data()).isEmpty();
         }
 
         @Test
         void explainsWhatIsWrong() throws Exception {
             String base = "/api/cards/" + card + "/settings";
-            long savings = createAccount("Rainy Day", "savings");
-            long loan = createAccount("Car loan", "loan");
 
-            assertError(server.put(base, "{\"dueDay\":13,\"paymentMode\":\"minimum\"}", cookie),
-                    "Please choose the day of the month the statement closes.");
-            assertError(server.put(base, "{\"statementCloseDay\":20,\"dueDay\":32,\"paymentMode\":\"minimum\"}", cookie),
+            assertError(server.put(base, "{\"dueDay\":13}", cookie), "Please choose the day of the month the statement closes.");
+            assertError(server.put(base, "{\"statementCloseDay\":20,\"dueDay\":32}", cookie),
                     "Please choose the day of the month the payment is due.");
-            assertError(saveSettings("whenever", ""), "Please choose how this card is paid from the list.");
-            assertError(saveSettings("fixed", ""), "The amount you pay each month is missing. Please enter an amount.");
-            assertError(saveSettings("fixed", ",\"fixedPaymentCents\":0"), "Please enter the amount you pay each month.");
-            assertError(saveSettings("minimum", ",\"monthlyEstimateCents\":-1"), "The monthly estimate can't be less than zero.");
-            assertError(saveSettings("minimum", ",\"payFromAccountId\":" + loan),
-                    "Please choose a checking or savings account to pay this card from.");
-            assertError(saveSettings("minimum", ",\"payFromAccountId\":999"),
-                    "Please choose a checking or savings account to pay this card from.");
+            assertError(saveDates(",\"monthlyEstimateCents\":-1"), "The monthly estimate can't be less than zero.");
             assertThat(detail().get("card").get("settings").isNull()).isTrue();
-            // A savings account is fine.
-            assertThat(saveSettings("minimum", ",\"payFromAccountId\":" + savings).status()).isEqualTo(200);
         }
     }
 
@@ -244,7 +330,7 @@ class CardsApiTest extends ApiTestBase {
 
         @Test
         void aStatementBalancePaymentIsWhatTheCardOwed() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+            payBy("statement_balance");
 
             JsonNode period = period("2026-10-01");
 
@@ -259,8 +345,39 @@ class CardsApiTest extends ApiTestBase {
         }
 
         @Test
+        void aPaymentSaysWhichStatementItPaysAndWhetherThatOneIsReal() throws Exception {
+            payBy("minimum");
+            server.post("/api/cards/" + card + "/statements",
+                    "{\"closeDate\":\"2026-09-20\",\"balanceCents\":68248,\"minimumDueCents\":4000}", cookie);
+
+            // October's payment is the minimum on the statement that was entered.
+            JsonNode october = period("2026-10-01");
+            assertThat(october.get("occurrences").get(0).get("amountCents").asLong()).isEqualTo(4000);
+            assertThat(october.get("occurrences").get(0).get("estimate").asBoolean()).isFalse();
+            JsonNode paid = october.get("statementsPaid");
+            assertThat(paid).hasSize(1);
+            assertThat(paid.get(0).get("itemId").asLong()).isEqualTo(october.get("occurrences").get(0).get("itemId").asLong());
+            assertThat(paid.get(0).get("scheduledDate").asText()).isEqualTo("2026-10-13");
+            assertThat(paid.get(0).get("closeDate").asText()).isEqualTo("2026-09-20");
+            assertThat(paid.get(0).get("entered").asBoolean()).isTrue();
+
+            // November's pays the statement still to close in October, which nobody has entered: an estimate.
+            JsonNode november = period("2026-11-01");
+            assertThat(november.get("occurrences").get(0).get("estimate").asBoolean()).isTrue();
+            assertThat(november.get("statementsPaid").get(0).get("closeDate").asText()).isEqualTo("2026-10-20");
+            assertThat(november.get("statementsPaid").get(0).get("entered").asBoolean()).isFalse();
+        }
+
+        @Test
+        void aFullBalancePaymentPaysNoParticularStatement() throws Exception {
+            payBy("full_balance");
+
+            assertThat(period("2026-10-01").get("statementsPaid")).isEmpty();
+        }
+
+        @Test
         void chargesMadeSinceThenWaitForTheNextStatement() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+            payBy("statement_balance");
             server.post("/api/entries", """
                     {"kind":"money_out","date":"2026-10-05","amountCents":10000,"description":"Vet visit","accountId":%d}"""
                     .formatted(card), cookie);
@@ -276,7 +393,7 @@ class CardsApiTest extends ApiTestBase {
 
         @Test
         void aFullBalancePaymentIsEverythingOwedThatDay() throws Exception {
-            saveSettings("full_balance", paidFromChecking());
+            payBy("full_balance");
             server.post("/api/entries", """
                     {"kind":"money_out","date":"2026-10-05","amountCents":10000,"description":"Vet visit","accountId":%d}"""
                     .formatted(card), cookie);
@@ -286,7 +403,7 @@ class CardsApiTest extends ApiTestBase {
 
         @Test
         void theNextPaymentShowsOnTheCard() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+            payBy("statement_balance");
 
             JsonNode next = server.get("/api/cards", cookie).data().get(0).get("nextPayment");
 
@@ -299,7 +416,7 @@ class CardsApiTest extends ApiTestBase {
 
         @Test
         void anAmountTypedOverThePaymentStands() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+            payBy("statement_balance");
             long itemId = server.get("/api/items", cookie).data().get(0).get("id").asLong();
 
             Reply typed = server.put("/api/items/" + itemId + "/occurrences/2026-10-13", "{\"amountCents\":50000}", cookie);
@@ -315,7 +432,7 @@ class CardsApiTest extends ApiTestBase {
 
         @Test
         void aFixedPaymentIsItsOwnAmount() throws Exception {
-            saveSettings("fixed", ",\"fixedPaymentCents\":24000,\"payFromAccountId\":" + checking);
+            payBy("fixed", 24000, "");
 
             JsonNode period = period("2026-10-01");
 
@@ -326,12 +443,84 @@ class CardsApiTest extends ApiTestBase {
     }
 
     @Nested
+    class TheMinimumEstimate {
+        private Reply saveMinimum(String body) throws Exception {
+            return server.put("/api/cards/" + card + "/minimum", body, cookie);
+        }
+
+        @BeforeEach
+        void payAndBalances() throws Exception {
+            createSalary(checking);
+            enterBalance(checking, "2026-10-01", 300000);
+            enterBalance(card, "2026-10-01", 500000);
+        }
+
+        @Test
+        void startsAsOnePercentPlusInterestAndAtLeastTwentyFiveDollars() throws Exception {
+            saveDates("");
+
+            JsonNode minimum = detail().get("minimum");
+
+            assertThat(minimum.get("shareBp").asInt()).isEqualTo(100);
+            assertThat(minimum.get("floorCents").asLong()).isEqualTo(2500);
+            assertThat(minimum.get("plusInterest").asBoolean()).isTrue();
+        }
+
+        @Test
+        void theCardsOwnRuleSizesAMinimumPaymentUntilTheRealOneIsEntered() throws Exception {
+            payBy("minimum");
+            // The usual rule: 1% of the 5,000.00 it starts with.
+            assertThat(period("2026-10-01").get("occurrences").get(0).get("amountCents").asLong()).isEqualTo(5000);
+
+            Reply saved = saveMinimum("{\"shareBp\":200,\"floorCents\":3500,\"plusInterest\":false}");
+
+            assertThat(saved.status()).isEqualTo(200);
+            assertThat(saved.changed()).isTrue();
+            assertThat(saved.data().get("minimum").get("shareBp").asInt()).isEqualTo(200);
+            assertThat(saved.data().get("minimum").get("floorCents").asLong()).isEqualTo(3500);
+            assertThat(saved.data().get("minimum").get("plusInterest").asBoolean()).isFalse();
+            // 2% of 5,000.00.
+            assertThat(period("2026-10-01").get("occurrences").get(0).get("amountCents").asLong()).isEqualTo(10000);
+
+            // A statement entered with its minimum is the real figure, whatever the rule says.
+            server.post("/api/cards/" + card + "/statements",
+                    "{\"closeDate\":\"2026-09-20\",\"balanceCents\":500000,\"minimumDueCents\":4000}", cookie);
+            assertThat(period("2026-10-01").get("occurrences").get(0).get("amountCents").asLong()).isEqualTo(4000);
+        }
+
+        @Test
+        void savingTheCardsDatesAgainLeavesTheRuleAlone() throws Exception {
+            saveDates("");
+            saveMinimum("{\"shareBp\":200,\"floorCents\":3500,\"plusInterest\":false}");
+
+            saveDates(",\"monthlyEstimateCents\":45000");
+
+            assertThat(detail().get("minimum").get("shareBp").asInt()).isEqualTo(200);
+            assertThat(detail().get("minimum").get("floorCents").asLong()).isEqualTo(3500);
+        }
+
+        @Test
+        void explainsWhatIsWrong() throws Exception {
+            // The rule is kept with the card's dates.
+            assertThat(saveMinimum("{\"shareBp\":200,\"floorCents\":3500,\"plusInterest\":false}").status()).isEqualTo(409);
+            saveDates("");
+            assertError(saveMinimum("{\"floorCents\":3500}"), "Please enter the share of the balance as a percentage from 0 to 100.");
+            assertError(saveMinimum("{\"shareBp\":10001,\"floorCents\":3500}"),
+                    "Please enter the share of the balance as a percentage from 0 to 100.");
+            assertError(saveMinimum("{\"shareBp\":100,\"floorCents\":-1}"), "The least the minimum comes to can't be less than zero.");
+            assertThat(server.put("/api/cards/" + checking + "/minimum", "{\"shareBp\":100,\"floorCents\":0}", cookie).status())
+                    .isEqualTo(404);
+            assertThat(detail().get("minimum").get("shareBp").asInt()).isEqualTo(100);
+        }
+    }
+
+    @Nested
     class InterestAndEstimates {
         @Test
         void aBalanceCarriedPastTheStatementIsChargedEstimatedInterest() throws Exception {
             enterBalance(card, "2026-10-01", 100000);
             setApr(2449);
-            saveSettings("minimum", "");
+            saveDates("");
 
             JsonNode interest = ofKind(transactions("2026-10-01", "2026-10-31"), "card_interest");
 
@@ -352,7 +541,7 @@ class CardsApiTest extends ApiTestBase {
         @Test
         void aCardThatIsNotItemizedTakesItsMonthlyEstimateOnTheClosingDate() throws Exception {
             enterBalance(card, "2026-10-01", 0);
-            saveSettings("full_balance", ",\"monthlyEstimateCents\":45000");
+            saveDates(",\"monthlyEstimateCents\":45000");
 
             JsonNode lines = transactions("2026-10-01", "2026-10-31");
 
@@ -367,7 +556,7 @@ class CardsApiTest extends ApiTestBase {
     class Statements {
         @BeforeEach
         void cardSettings() throws Exception {
-            saveSettings("statement_balance", "");
+            saveDates("");
         }
 
         private Reply addStatement(String body) throws Exception {
@@ -398,7 +587,7 @@ class CardsApiTest extends ApiTestBase {
 
         @Test
         void theNextPaymentIsTheStatementEvenWhenMoreIsOwedByNow() throws Exception {
-            saveSettings("statement_balance", paidFromChecking());
+            payBy("statement_balance");
             addStatement("{\"closeDate\":\"2026-09-20\",\"balanceCents\":51230,\"minimumDueCents\":3500}");
             // Charges since it closed: the balance entered today is higher than the statement.
             enterBalance(card, "2026-10-01", 90000);
@@ -515,8 +704,65 @@ class CardsApiTest extends ApiTestBase {
         }
 
         @Test
+        void theRateAfterAPromotionBecomesTheRegularAprOfACardThatHasNone() throws Exception {
+            long store = createAccount("Harbor Home store card", "credit_card");
+            String promo = """
+                    {"label":"New sofa","kind":"purchase","rateBp":0,"startDate":"2026-06-01","endDate":"2027-06-01",
+                     "originalBalanceCents":200000,"rateAfterBp":%d,"deferredInterest":false}""";
+
+            Reply added = server.post("/api/cards/" + store + "/promos", promo.formatted(2999), cookie);
+
+            assertThat(added.status()).isEqualTo(201);
+            assertThat(added.data().get("card").get("aprBp").asInt()).isEqualTo(2999);
+            JsonNode rates = added.data().get("rates");
+            assertThat(rates).hasSize(1);
+            // In force since the promotion started, so it is the card's rate today.
+            assertThat(rates.get(0).get("effectiveDate").asText()).isEqualTo("2026-06-01");
+
+            // A card that already has a regular APR keeps it, whatever a later promotion goes to.
+            Reply second = server.post("/api/cards/" + store + "/promos", promo.formatted(1999), cookie);
+            assertThat(second.data().get("card").get("aprBp").asInt()).isEqualTo(2999);
+            assertThat(second.data().get("rates")).hasSize(1);
+        }
+
+        @Test
+        void aPromotionOnEverythingCoversTheWholeBalanceHoweverMuchIsOwed() throws Exception {
+            enterBalance(card, "2026-10-01", 400200);
+            setApr(2367);
+            saveDates("");
+
+            Reply added = server.post("/api/cards/" + card + "/promos", """
+                    {"label":"Intro rate","kind":"purchase","rateBp":0,"startDate":"2026-10-01","endDate":"2026-10-31"}""", cookie);
+
+            assertThat(added.status()).isEqualTo(201);
+            JsonNode promo = added.data().get("promos").get(0);
+            assertThat(promo.get("originalBalanceCents").isNull()).isTrue();
+            // All that is owed is on the rate, so there is no starting amount to be a share of.
+            assertThat(promo.get("remainingCents").asLong()).isEqualTo(400200);
+            assertThat(promo.get("paidPercent").isNull()).isTrue();
+            // Nothing is charged while it runs: October's statement closes inside it.
+            assertThat(ofKind(transactions("2026-10-01", "2026-10-31"), "card_interest")).isNull();
+            // November's closes after it ended, at the regular APR on everything: 4,002.00 Ã— 23.67% Ã· 12.
+            assertThat(ofKind(transactions("2026-11-01", "2026-11-30"), "card_interest").get("amountCents").asLong()).isEqualTo(7894);
+        }
+
+        @Test
+        void aPromotionOnASetAmountLeavesTheRestAtTheRegularApr() throws Exception {
+            enterBalance(card, "2026-10-01", 400200);
+            setApr(2367);
+            saveDates("");
+
+            server.post("/api/cards/" + card + "/promos", """
+                    {"label":"Balance transfer","kind":"balance_transfer","rateBp":0,"startDate":"2026-10-01","endDate":"2026-10-31",
+                     "originalBalanceCents":100000}""", cookie);
+
+            // Only 1,000.00 is on the 0% rate: the other 3,002.00 is charged 23.67% Ã· 12.
+            assertThat(ofKind(transactions("2026-10-01", "2026-10-31"), "card_interest").get("amountCents").asLong()).isEqualTo(5921);
+        }
+
+        @Test
         void aPromotionCostsNothingWhileItRuns() throws Exception {
-            saveSettings("minimum", "");
+            saveDates("");
             addPromo("2027-03-15", "");
 
             assertThat(ofKind(transactions("2026-10-01", "2027-03-19"), "card_interest")).isNull();
@@ -543,7 +789,7 @@ class CardsApiTest extends ApiTestBase {
         @Test
         void thePayoffHelperAddsAPaymentForEveryPaycheckBeforeItEnds() throws Exception {
             enterBalance(checking, "2026-10-01", 300000);
-            saveSettings("minimum", "");
+            saveDates("");
             long promoId = addPromo("2027-03-15", "").data().get("promos").get(0).get("id").asLong();
 
             Reply added = server.post("/api/cards/" + card + "/promos/" + promoId + "/payoff", "", cookie);
@@ -663,7 +909,11 @@ class CardsApiTest extends ApiTestBase {
                     cookie), "A promotion ends after it starts. Please check the two dates.");
             assertError(server.post(base, """
                     {"label":"New sofa","kind":"purchase","rateBp":0,"startDate":"2026-03-15","endDate":"2027-03-15","originalBalanceCents":0}""",
-                    cookie), "Please enter the balance this promotion started with.");
+                    cookie), "Please enter the amount this rate is on, or choose everything on the card.");
+            // Deferred interest is charged on an amount, so a promotion on the whole balance cannot be one.
+            assertError(server.post("/api/cards/" + card + "/promos", """
+                    {"label":"Store card","kind":"purchase","rateBp":0,"startDate":"2026-03-15","endDate":"2027-03-15","deferredInterest":true}""",
+                    cookie), "Deferred interest is charged on the amount a promotion started with. Please enter the amount this rate is on.");
             assertError(server.post(base, "{\"label\":\"New sofa\",\"rateAfterBp\":-1," + ok + "}", cookie),
                     "Please enter the rate afterwards between 0% and 1,000%, or leave it empty.");
             assertThat(detail().get("promos")).isEmpty();

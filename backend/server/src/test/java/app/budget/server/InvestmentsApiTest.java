@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import app.budget.server.TestServer.Reply;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -320,25 +322,47 @@ class InvestmentsApiTest extends ApiTestBase {
         }
 
         @Test
-        void itGrowsAtTheEndOfEachMonthOnWhatItHoldsThen() throws Exception {
+        void itGrowsALittleEveryDaySoEveryPayPeriodHasItsShare() throws Exception {
             assume(700);
 
             JsonNode period = period("2026-10-15");
 
-            // 40,000 plus two paydays of 225.00 is 40,450.00; × ((1.07)^(1/12) − 1) = 228.71
+            // The period's seventeen days are one line, dated the last of them: about 7.50 a day on a little over 40,300.
+            assertThat(period.get("interest")).hasSize(1);
             JsonNode growth = period.get("interest").get(0);
             assertThat(growth.get("accountId").asLong()).isEqualTo(retirement);
             assertThat(growth.get("date").asText()).isEqualTo("2026-10-31");
-            assertThat(growth.get("amountCents").asLong()).isEqualTo(22871);
+            assertThat(growth.get("amountCents").asLong()).isEqualTo(12794);
             assertThat(growth.get("rateBp").asInt()).isEqualTo(700);
-            assertThat(account(period, retirement).get("endingCents").asLong()).isEqualTo(4000000 + 22500 + 22500 + 22871);
+            JsonNode held = account(period, retirement);
+            // One payday's 225.00 and the growth are all that came in.
+            assertThat(held.get("inCents").asLong()).isEqualTo(22500 + 12794);
+            assertThat(held.get("endingCents").asLong()).isEqualTo(held.get("startingCents").asLong() + 22500 + 12794);
+            // The period before had its share too, and so does the one after: none is left without.
+            assertThat(period("2026-10-01").get("interest")).hasSize(1);
+            assertThat(period("2026-11-01").get("interest")).hasSize(1);
+        }
+
+        @Test
+        void theAccountsListShowsAMonthOfGrowthAsOneLine() throws Exception {
+            assume(700);
+
+            JsonNode lines = server.get("/api/accounts/" + retirement + "/transactions?from=2026-10-02&to=2026-11-30", cookie).data();
+
+            List<JsonNode> growth = new ArrayList<>();
+            lines.forEach(line -> {
+                if (line.get("kind").asText().equals("growth")) {
+                    growth.add(line);
+                }
+            });
+            assertThat(growth).extracting(line -> line.get("date").asText()).containsExactlyInAnyOrder("2026-10-31", "2026-11-30");
         }
 
         @Test
         void theTransactionsCallItAssumedGrowthNotInterest() throws Exception {
             assume(700);
 
-            JsonNode lines = server.get("/api/accounts/" + retirement + "/transactions?from=2026-10-31&to=2026-10-31", cookie).data();
+            JsonNode lines = server.get("/api/accounts/" + retirement + "/transactions?from=2026-10-30&to=2026-10-30", cookie).data();
 
             assertThat(lines).hasSize(1);
             assertThat(lines.get(0).get("label").asText()).isEqualTo("Assumed growth");

@@ -23,6 +23,7 @@ const KIND_LABELS: Record<string, string> = {
   card_estimate: "Estimate",
   loan_interest: "Interest",
   escrow: "Part of your payment that does not lower the loan",
+  loan_payment: "Payment, before a recurring item paid it",
   balance: "Balance",
 };
 

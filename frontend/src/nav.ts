@@ -1,7 +1,6 @@
 import {
   CalendarRange,
   ChartPie,
-  CreditCard,
   FileChartColumn,
   Landmark,
   LayoutDashboard,
@@ -29,7 +28,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, primaryOnPhone: true },
   { path: "/recurring", label: "Recurring items", icon: Repeat },
   { path: "/accounts", label: "Accounts", icon: Landmark, primaryOnPhone: true },
-  { path: "/cards", label: "Credit cards", icon: CreditCard },
   { path: "/income", label: "Income", icon: Wallet },
   { path: "/expenses", label: "Expenses & receipts", icon: Receipt },
   { path: "/reports", label: "Reports", icon: FileChartColumn },

@@ -13,7 +13,7 @@ public final class LoansRepository {
 
     private static final String SELECT = """
             SELECT account_id, original_principal, term_months, start_date, payment_amount, payment_day,
-                   escrow_insurance, escrow_taxes
+                   escrow_insurance, escrow_taxes, payment_item_id
             FROM loan_settings
             """;
 
@@ -31,6 +31,8 @@ public final class LoansRepository {
      * @param startDate              when it began; {@code null} when not entered
      * @param paymentCents           the whole monthly payment, escrow included
      * @param paymentDay             day of the month it is due and interest is added, 1–31 (31 = the last day)
+     * @param paymentItemId          the recurring item that pays it, when one was linked from the loan's
+     *                               page; {@code null} otherwise (a transfer into the loan needs no link)
      */
     public record Settings(
             long accountId,
@@ -40,7 +42,8 @@ public final class LoansRepository {
             long paymentCents,
             int paymentDay,
             long escrowInsuranceCents,
-            long escrowTaxesCents) {
+            long escrowTaxesCents,
+            Long paymentItemId) {
 
         /** The part of each month's payment that goes to insurance and taxes, not to the loan. */
         public long escrowCents() {
@@ -70,13 +73,13 @@ public final class LoansRepository {
                 .createUpdate("""
                         INSERT INTO loan_settings
                             (account_id, original_principal, term_months, start_date, payment_amount, payment_day,
-                             escrow_insurance, escrow_taxes)
-                        VALUES (:accountId, :principal, :termMonths, :startDate, :payment, :paymentDay, :insurance, :taxes)
+                             escrow_insurance, escrow_taxes, payment_item_id)
+                        VALUES (:accountId, :principal, :termMonths, :startDate, :payment, :paymentDay, :insurance, :taxes, :paymentItemId)
                         ON CONFLICT (account_id) DO UPDATE SET
                             original_principal = excluded.original_principal, term_months = excluded.term_months,
                             start_date = excluded.start_date, payment_amount = excluded.payment_amount,
                             payment_day = excluded.payment_day, escrow_insurance = excluded.escrow_insurance,
-                            escrow_taxes = excluded.escrow_taxes
+                            escrow_taxes = excluded.escrow_taxes, payment_item_id = excluded.payment_item_id
                         """)
                 .bind("accountId", settings.accountId())
                 .bind("principal", settings.originalPrincipalCents())
@@ -86,6 +89,7 @@ public final class LoansRepository {
                 .bind("paymentDay", settings.paymentDay())
                 .bind("insurance", settings.escrowInsuranceCents())
                 .bind("taxes", settings.escrowTaxesCents())
+                .bind("paymentItemId", settings.paymentItemId())
                 .execute());
     }
 
@@ -95,6 +99,8 @@ public final class LoansRepository {
         int term = rs.getInt("term_months");
         Integer termMonths = rs.wasNull() ? null : term;
         String start = rs.getString("start_date");
+        long item = rs.getLong("payment_item_id");
+        Long paymentItemId = rs.wasNull() ? null : item;
         return new Settings(
                 rs.getLong("account_id"),
                 principalCents,
@@ -103,6 +109,7 @@ public final class LoansRepository {
                 rs.getLong("payment_amount"),
                 rs.getInt("payment_day"),
                 rs.getLong("escrow_insurance"),
-                rs.getLong("escrow_taxes"));
+                rs.getLong("escrow_taxes"),
+                paymentItemId);
     }
 }

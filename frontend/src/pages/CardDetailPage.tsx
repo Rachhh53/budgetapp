@@ -1,7 +1,8 @@
 import { Clock, TriangleAlert } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
-import { type Account, useAccounts } from "../api/accounts";
+import { Link, useNavigate } from "react-router";
+import { type Account, type AccountDetail, useAccountPerformance, useAccountProjection, useAccounts } from "../api/accounts";
+import { useCategories, useTags } from "../api/categories";
 import {
   type CardStatement,
   type Promo,
@@ -12,22 +13,24 @@ import {
 } from "../api/cards";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { BalanceForm } from "../components/accounts/BalanceForm";
+import { BalanceList } from "../components/accounts/BalanceList";
+import { ProjectionChart } from "../components/accounts/ProjectionChart";
 import { RateCard } from "../components/accounts/RateCard";
 import { TransactionsCard } from "../components/accounts/TransactionsCard";
 import { useAddItem } from "../components/add/AddItem";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
-import { BillingForm, PaymentForm, PromoForm, StatementForm } from "../components/cards/CardForms";
+import { BillingForm, MinimumForm, PromoForm, StatementForm } from "../components/cards/CardForms";
 import {
   dayOfMonth,
-  paymentSetting,
-  paymentSource,
+  minimumRule,
   PROMO_KIND_LABELS,
   promoCountdown,
   promoNotice,
   STATEMENT_STATUS_LABELS,
 } from "../components/cards/labels";
 import { EditButton, EditPageButton } from "../components/EditButton";
+import { ItemForm } from "../components/items/ItemForm";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, PAGE_TITLE } from "../components/ui";
 import { formatDate, formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
@@ -38,19 +41,29 @@ const STATEMENT_ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[9rem_
 
 /** The pop-up form that is open, if any. One at a time, each short enough for the screen. */
 type Open =
-  | { form: "account" | "balance" | "billing" | "payment" | "statement" }
+  | { form: "account" | "balance" | "billing" | "minimum" | "payment" | "statement" }
   | { form: "promo"; promo?: Promo };
 
 /**
  * One credit card (design/cards.png): what is owed and how it is paid, its promotional rates
  * with their countdown, the payoff helper, what happens if a promotion is not cleared, its
  * statements and its charges. One card per topic, each with its own way in.
+ *
+ * How the card is paid is not set here. Its payment is a recurring item, changed on that item's
+ * page like any other; this page shows the next one and links to it, or offers to add it.
+ *
+ * It is the card's account page: Accounts opens it for a credit card in place of the plain one,
+ * so a card has one page, with the chart and entered balances every account has.
  */
-export function CardDetailPage() {
-  const id = Number(useParams().id);
+export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail }) {
+  const id = asAccount.account.id;
   const navigate = useNavigate();
   const detail = useCard(id);
   const accounts = useAccounts();
+  const categories = useCategories();
+  const tags = useTags();
+  const projection = useAccountProjection(id);
+  const performance = useAccountPerformance(id);
   const { add } = useAddItem();
   const [open, setOpen] = useState<Open | null>(null);
   const close = () => setOpen(null);
@@ -61,22 +74,32 @@ export function CardDetailPage() {
   if (detail.isError) {
     return (
       <>
-        <h1 className={`${PAGE_TITLE} mb-4`}>Credit cards</h1>
+        <h1 className={`${PAGE_TITLE} mb-4`}>{asAccount.account.name}</h1>
         <Card>
           <p role="alert" className="font-medium">
             {detail.error.message}
           </p>
-          <Link to="/cards" className="mt-2 inline-block font-semibold text-accent-ink underline">
-            Back to all cards
+          <Link to="/accounts" className="mt-2 inline-block font-semibold text-accent-ink underline">
+            Back to all accounts
           </Link>
         </Card>
       </>
     );
   }
 
-  const { card, promos, statements, rates, nextCloseDate, nextDueDate } = detail.data;
+  const { card, promos, statements, rates, nextCloseDate, nextDueDate, minimum } = detail.data;
   const { account, settings } = card;
   const everyAccount = accounts.data ?? [];
+  const points = projection.data ?? [];
+  // A promotion's "rate afterwards" is nearly always the card's regular APR: offered for it, never assumed.
+  const promoWithRateAfter = promos.find((promo) => promo.rateAfterBp !== null);
+  const afterPromo =
+    promoWithRateAfter?.rateAfterBp != null
+      ? {
+          rateBp: promoWithRateAfter.rateAfterBp,
+          why: `You entered ${formatRate(promoWithRateAfter.rateAfterBp)} as the rate after ${promoWithRateAfter.label}. If that is this card's regular APR, use it here too.`,
+        }
+      : undefined;
   // Only promotions that still carry a balance are worth a warning or a plan to clear them.
   const withBalance = promos.filter((promo) => promo.remainingCents > 0);
   const flagged = withBalance.filter((promo) => promo.warning !== "none");
@@ -86,10 +109,10 @@ export function CardDetailPage() {
       <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/cards" className="text-accent-ink underline">
-              Credit cards
+            <Link to="/accounts" className="text-accent-ink underline">
+              Accounts
             </Link>{" "}
-            / Card
+            / Credit card
           </p>
           <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
             <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
@@ -104,11 +127,12 @@ export function CardDetailPage() {
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <EditPageButton label="Edit account" onClick={() => setOpen({ form: "account" })} />
-          <button type="button" onClick={() => setOpen({ form: "statement" })} className={BUTTON_SECONDARY}>
-            + Statement
-          </button>
-          <button type="button" onClick={() => add("money_out", account.id)} className={BUTTON_PRIMARY}>
+          {/* Its statements are added from their own card below; the header keeps the same buttons, in the same places, as every account. */}
+          <button type="button" onClick={() => add("money_out", account.id)} className={BUTTON_SECONDARY}>
             + Charge
+          </button>
+          <button type="button" onClick={() => setOpen({ form: "balance" })} className={BUTTON_PRIMARY}>
+            Update balance
           </button>
         </div>
       </div>
@@ -130,19 +154,33 @@ export function CardDetailPage() {
                   <p className="text-muted">owed today</p>
                 </>
               )}
-              <button type="button" onClick={() => setOpen({ form: "balance" })} className={`${BUTTON_LINK} -ml-2`}>
-                Update balance
-              </button>
             </div>
-            <div>
-              <p className="text-muted">Payment setting</p>
-              {settings ? (
+            <div className="min-w-0">
+              <p className="text-muted">Next payment</p>
+              {card.nextPayment ? (
                 <>
-                  <p className="text-2xl font-bold">{paymentSetting(settings)}</p>
-                  <p className="text-muted">{paymentSource(settings, everyAccount)}</p>
+                  <Amount cents={card.nextPayment.amountCents} estimate={card.nextPayment.estimate} className="-ml-2 text-2xl font-bold" />
+                  <p className="text-muted">
+                    {formatDate(card.nextPayment.date)} · {card.nextPayment.autopay ? "by autopay" : "paid by hand"}
+                  </p>
+                  <Link to={`/recurring/${card.nextPayment.itemId}`} className="font-semibold break-words text-accent-ink underline">
+                    {card.nextPayment.name}
+                  </Link>
+                </>
+              ) : settings?.paymentItemId != null ? (
+                <>
+                  <p className="mt-1 text-muted">Nothing is scheduled.</p>
+                  <Link to={`/recurring/${settings.paymentItemId}`} className="font-semibold text-accent-ink underline">
+                    See its recurring payment
+                  </Link>
                 </>
               ) : (
-                <p className="mt-1 text-muted">Not set up yet.</p>
+                <>
+                  <p className="mt-1 text-muted">No recurring payment yet.</p>
+                  <button type="button" onClick={() => setOpen({ form: "payment" })} className={BUTTON_LINK}>
+                    Add it as a recurring payment
+                  </button>
+                </>
               )}
             </div>
             <div>
@@ -168,14 +206,13 @@ export function CardDetailPage() {
               )}
             </div>
           </div>
-          {card.nextPayment && (
-            <p className="mt-3 text-muted">
-              Next payment:{" "}
-              <Amount cents={card.nextPayment.amountCents} estimate={card.nextPayment.estimate} className="font-semibold text-ink" /> on{" "}
-              {formatDate(card.nextPayment.date)}, {card.nextPayment.autopay ? "by autopay" : "paid by hand"}.
-            </p>
-          )}
         </Card>
+
+        {account.latestBalance && points.length > 0 && (
+          <Card title="Where it's heading">
+            <ProjectionChart account={account} balances={asAccount.balances} points={points} showAvailable={false} />
+          </Card>
+        )}
 
         <PromosCard
           account={account}
@@ -217,33 +254,19 @@ export function CardDetailPage() {
           )}
         </Card>
 
-        <Card
-          title="Payment setting"
-          action={settings ? <EditButton name="payment setting" onClick={() => setOpen({ form: "payment" })} /> : undefined}
-        >
-          {settings ? (
-            <>
-              <p>
-                <span className="font-semibold">{paymentSetting(settings)}</span> · {paymentSource(settings, everyAccount)}
-              </p>
-              <p className={HINT}>
-                {settings.paymentItemId === null ? (
-                  "Choose the account it is paid from to see this payment in each pay period."
-                ) : (
-                  <>
-                    This payment is one of your{" "}
-                    <Link to={`/recurring/${settings.paymentItemId}`} className="font-semibold text-accent-ink underline">
-                      recurring items
-                    </Link>
-                    , kept in step with what is set here.
-                  </>
-                )}
-              </p>
-            </>
-          ) : (
-            <p className="text-muted">Set the statement and due dates first; then choose how this card is paid.</p>
-          )}
-        </Card>
+        {/* Kept with the card's dates, and used only once they are in: nothing is projected before then. */}
+        {settings && (
+          <Card
+            title="Minimum payment estimate"
+            action={<EditButton name="minimum payment estimate" onClick={() => setOpen({ form: "minimum" })} />}
+          >
+            <p className="font-semibold">{minimumRule(minimum)}</p>
+            <p className={HINT}>
+              How this card's minimum is worked out until you enter a statement with the real one. Card companies differ, so change it to
+              match yours.
+            </p>
+          </Card>
+        )}
 
         <RateCard
           account={account}
@@ -251,18 +274,45 @@ export function CardDetailPage() {
           title="Regular APR"
           unit="a year"
           about="Charged each month on what was left unpaid from the statement before. Paying the statement in full means no interest."
-          missing="No APR entered yet. Without one, a balance that is carried is projected with no interest."
+          missing="No regular APR entered yet. It is the card's everyday rate, separate from any promo rate. Without one, a balance that is carried is projected with no interest."
+          suggestion={afterPromo}
         />
 
         <TransactionsCard account={account} title="Charges and payments" />
+        <Card title="Balances you entered">
+          {asAccount.balances.length === 0 ? (
+            <p className="text-muted">
+              Nothing here yet. Choose "Update balance" and type in what the card shows as owed. Projections start from the latest number
+              you enter, or from the latest statement.
+            </p>
+          ) : (
+            <BalanceList accountId={account.id} balances={asAccount.balances} changes={performance.data?.balances ?? []} owed />
+          )}
+        </Card>
       </div>
 
       {open?.form === "account" && (
-        <AccountForm account={account} accounts={everyAccount} onClose={close} onDeleted={() => navigate("/cards")} />
+        <AccountForm account={account} accounts={everyAccount} onClose={close} onDeleted={() => navigate("/accounts")} />
       )}
       {open?.form === "balance" && <BalanceForm account={account} onClose={close} />}
       {open?.form === "billing" && <BillingForm account={account} settings={settings} onClose={close} />}
-      {open?.form === "payment" && settings && <PaymentForm account={account} settings={settings} accounts={everyAccount} onClose={close} />}
+      {open?.form === "payment" && (
+        <ItemForm
+          accounts={everyAccount}
+          categories={categories.data ?? []}
+          tags={tags.data ?? []}
+          starting={{
+            kind: "card_payment",
+            name: `${account.name} payment`,
+            payToAccountId: account.id,
+            day1: settings?.dueDay,
+            // With the card's dates in, it can follow the statement; without them it needs an amount.
+            cardPaymentMode: settings ? "statement_balance" : "fixed",
+          }}
+          onClose={close}
+        />
+      )}
+      {open?.form === "minimum" && <MinimumForm account={account} rule={minimum} onClose={close} />}
       {open?.form === "statement" && <StatementForm account={account} settings={settings} onClose={close} />}
       {open?.form === "promo" && <PromoForm account={account} promo={open.promo} onClose={close} />}
     </>
@@ -334,20 +384,30 @@ function PromosCard({
                   </button>
                 </div>
               </div>
-              <div
-                role="progressbar"
-                aria-label={`${promo.label}: paid off`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={promo.paidPercent}
-                className="mt-2 h-3 overflow-hidden rounded-full bg-bg"
-              >
-                <div className="h-full rounded-full bg-accent" style={{ width: `${promo.paidPercent}%` }} />
-              </div>
-              <p className="mt-1 text-sm text-muted">
-                <span data-amount className="font-semibold text-ink tabular-nums">{formatCents(promo.remainingCents)}</span> left of{" "}
-                <span data-amount className="tabular-nums">{formatCents(promo.originalBalanceCents)}</span> · {promo.paidPercent}% paid
-              </p>
+              {promo.originalBalanceCents === null || promo.paidPercent === null ? (
+                // On the whole card there is no starting amount to be a share of, so no bar: only what is on the rate today.
+                <p className="mt-1 text-sm text-muted">
+                  <span data-amount className="font-semibold text-ink tabular-nums">{formatCents(promo.remainingCents)}</span> on this rate
+                  today · everything on the card
+                </p>
+              ) : (
+                <>
+                  <div
+                    role="progressbar"
+                    aria-label={`${promo.label}: paid off`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={promo.paidPercent}
+                    className="mt-2 h-3 overflow-hidden rounded-full bg-bg"
+                  >
+                    <div className="h-full rounded-full bg-accent" style={{ width: `${promo.paidPercent}%` }} />
+                  </div>
+                  <p className="mt-1 text-sm text-muted">
+                    <span data-amount className="font-semibold text-ink tabular-nums">{formatCents(promo.remainingCents)}</span> left of{" "}
+                    <span data-amount className="tabular-nums">{formatCents(promo.originalBalanceCents)}</span> · {promo.paidPercent}% paid
+                  </p>
+                </>
+              )}
             </li>
           ))}
         </ul>

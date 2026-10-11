@@ -1,13 +1,11 @@
 import type { ReactNode } from "react";
-import { Route, Routes } from "react-router";
+import { Navigate, Route, Routes, useParams } from "react-router";
 import { useSettings } from "./api/settings";
 import { AppShell } from "./components/AppShell";
 import { NAV_ITEMS } from "./nav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
-import { CardDetailPage } from "./pages/CardDetailPage";
-import { CardsPage } from "./pages/CardsPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
@@ -23,7 +21,6 @@ const PAGES: Record<string, ReactNode> = {
   "/": <PayPeriodPage />,
   "/recurring": <RecurringItemsPage />,
   "/accounts": <AccountsPage />,
-  "/cards": <CardsPage />,
   "/income": <IncomePage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
@@ -41,7 +38,9 @@ export function App() {
         ))}
         <Route path="/periods/:start" element={<PayPeriodPage />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
-        <Route path="/cards/:id" element={<CardDetailPage />} />
+        {/* Cards live under Accounts; an address that names a card still lands on its page. */}
+        <Route path="/cards" element={<Navigate to="/accounts" replace />} />
+        <Route path="/cards/:id" element={<CardRedirect />} />
         <Route path="/assets/:id" element={<AssetDetailPage />} />
         <Route path="/income/:id" element={<IncomeDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
@@ -49,4 +48,10 @@ export function App() {
       </Route>
     </Routes>
   );
+}
+
+/** A card's old address, sent on to its page under Accounts. */
+function CardRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/accounts/${id}`} replace />;
 }
