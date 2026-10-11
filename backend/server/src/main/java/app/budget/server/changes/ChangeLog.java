@@ -74,6 +74,18 @@ public final class ChangeLog {
         });
     }
 
+    /**
+     * Tidies a change log that was copied while a change was still being recorded (a backup
+     * taken mid-request, now restored): nothing is being recorded any more, and a change
+     * that never wrote a row is not one Undo should offer.
+     */
+    public static void forgetUnfinished(Jdbi jdbi) {
+        jdbi.useTransaction(handle -> {
+            handle.execute("UPDATE change_recording SET group_id = NULL WHERE id = 1");
+            handle.execute("DELETE FROM change_groups WHERE id NOT IN (SELECT group_id FROM change_log)");
+        });
+    }
+
     /** The tables Undo covers. Package-visible so a test can check none is left out. */
     static List<String> trackedTables(Jdbi jdbi) {
         return jdbi.withHandle(handle -> tables(handle).stream().map(Table::name).toList());

@@ -7,15 +7,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationInfo;
 import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,11 +51,13 @@ public final class Database {
     private static final List<String> DB_FILE_SUFFIXES = List.of("", "-wal", "-shm");
 
     private final Path dataDir;
+    private final DataSource dataSource;
     private final Flyway flyway;
     private final Jdbi jdbi;
 
     private Database(Path dataDir, DataSource dataSource, Flyway flyway) {
         this.dataDir = dataDir;
+        this.dataSource = dataSource;
         this.flyway = flyway;
         this.jdbi = Jdbi.create(dataSource);
     }
@@ -82,6 +88,97 @@ public final class Database {
 
     public Jdbi jdbi() {
         return jdbi;
+    }
+
+    public Path dataDir() {
+        return dataDir;
+    }
+
+    /** The newest migration this version of the app knows: the schema it leaves a database at. */
+    public int schemaVersion() {
+        return Arrays.stream(flyway.info().all())
+                .map(MigrationInfo::getVersion)
+                .filter(version -> version != null)
+                .mapToInt(version -> version.getMajor().intValueExact())
+                .max()
+                .orElse(0);
+    }
+
+    /**
+     * Writes a complete, consistent copy of the database to {@code target}, which must not
+     * exist yet. Safe while the app is in use.
+     */
+    public synchronized void snapshotTo(Path target) {
+        // VACUUM INTO writes a consistent snapshot even with WAL pages outstanding.
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement("VACUUM INTO ?")) {
+            statement.setString(1, target.toAbsolutePath().toString());
+            statement.execute();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not copy the database", e);
+        }
+    }
+
+    /**
+     * Looks inside a database file that is not the live one (a backup about to be restored).
+     *
+     * @return the newest migration applied to it
+     * @throws NotABudgetDatabaseException when the file is damaged or is not one of ours
+     */
+    public static int schemaVersionOf(Path dbFile) {
+        SQLiteConfig config = new SQLiteConfig();
+        config.setReadOnly(true);
+        try (Connection connection = config.createConnection("jdbc:sqlite:" + dbFile.toAbsolutePath());
+                Statement statement = connection.createStatement()) {
+            try (ResultSet check = statement.executeQuery("PRAGMA integrity_check")) {
+                if (!check.next() || !"ok".equalsIgnoreCase(check.getString(1))) {
+                    throw new NotABudgetDatabaseException();
+                }
+            }
+            try (ResultSet version = statement.executeQuery(
+                    "SELECT MAX(CAST(version AS INTEGER)) FROM flyway_schema_history WHERE success = 1")) {
+                if (!version.next() || version.getInt(1) < 1) {
+                    throw new NotABudgetDatabaseException();
+                }
+                return version.getInt(1);
+            }
+        } catch (SQLException e) {
+            throw new NotABudgetDatabaseException();
+        }
+    }
+
+    /** The file is not a database this app made, or it is damaged. */
+    public static final class NotABudgetDatabaseException extends RuntimeException {
+        NotABudgetDatabaseException() {
+            super("Not a Budget database");
+        }
+    }
+
+    /**
+     * Puts another database, and its attachments, in place of everything here (Restore).
+     * The files are moved, not copied. An older database is brought up to this version's
+     * schema afterwards. Callers must have backed up what is being replaced.
+     *
+     * @param newFiles the attachments that go with it, or {@code null} when it has none
+     */
+    public synchronized void replaceWith(Path newDatabase, Path newFiles) {
+        try {
+            // The main file first, as in eraseEverything: if it cannot be removed, nothing has changed.
+            for (String suffix : DB_FILE_SUFFIXES) {
+                Files.deleteIfExists(dataDir.resolve(DB_FILE + suffix));
+            }
+            Files.move(newDatabase, dataDir.resolve(DB_FILE));
+            deleteFolder(dataDir.resolve(FILES_DIR));
+            if (newFiles != null) {
+                Files.move(newFiles, dataDir.resolve(FILES_DIR));
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not put the restored data in place", e);
+        }
+        flyway.migrate();
+        ChangeLog.forgetUnfinished(jdbi);
+        ChangeLog.installTracking(jdbi);
+        log.info("Data restored from a backup at the user's request");
     }
 
     /**

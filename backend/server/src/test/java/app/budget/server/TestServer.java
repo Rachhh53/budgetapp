@@ -1,5 +1,6 @@
 package app.budget.server;
 
+import app.budget.server.backups.BackupService;
 import app.budget.server.db.Database;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -88,6 +89,11 @@ public final class TestServer implements AutoCloseable {
                 clock,
                 () -> shutdownRequested.set(true));
         baseUrl = "http://" + config.bindHost() + ":" + server.start();
+    }
+
+    /** The backup service itself, for what only the daily timer calls. */
+    public BackupService backups() {
+        return server.backups();
     }
 
     public URI uri(String path) {

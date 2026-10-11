@@ -7,6 +7,9 @@ import app.budget.server.lifecycle.ParentWatch;
 import java.nio.file.Files;
 import java.time.Clock;
 import java.util.Arrays;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -24,6 +27,26 @@ public final class Main {
     static final int EXIT_ALREADY_RUNNING = 2;
 
     private Main() {}
+
+    /** A little after startup, so opening the app is never held up by it. */
+    private static final long FIRST_BACKUP_CHECK_SECONDS = 30;
+    /** Often enough to catch midnight going by while the app stays open. */
+    private static final long BACKUP_CHECK_EVERY_SECONDS = TimeUnit.HOURS.toSeconds(1);
+
+    /**
+     * The daily backup (spec §7): made the first time the check runs on a calendar day, so
+     * once shortly after the app opens, and again if it is left open past midnight.
+     */
+    private static void startDailyBackups(BudgetServer server) {
+        ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "budget-backup");
+            // Never keeps the app alive: closing the window ends it whatever it is doing.
+            thread.setDaemon(true);
+            return thread;
+        });
+        timer.scheduleWithFixedDelay(
+                server.backups()::backUpIfDue, FIRST_BACKUP_CHECK_SECONDS, BACKUP_CHECK_EVERY_SECONDS, TimeUnit.SECONDS);
+    }
 
     public static void main(String[] args) {
         boolean resetPin = Arrays.asList(args).contains(PinReset.FLAG);
@@ -58,6 +81,7 @@ public final class Main {
 
             int port = server.start();
             config.parentPid().ifPresent(pid -> ParentWatch.watch(pid, exit));
+            startDailyBackups(server);
             System.out.println("READY port=" + port);
             System.out.flush();
         } catch (InstanceLock.AlreadyRunningException e) {

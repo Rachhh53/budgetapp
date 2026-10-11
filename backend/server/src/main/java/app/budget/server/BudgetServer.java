@@ -14,6 +14,9 @@ import app.budget.server.auth.AuthRepository;
 import app.budget.server.auth.PinService;
 import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
+import app.budget.server.backups.BackupRoutes;
+import app.budget.server.backups.BackupService;
+import app.budget.server.backups.FolderBrowser;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRoutes;
 import app.budget.server.cards.CardsRepository;
@@ -57,6 +60,7 @@ import io.javalin.router.Endpoint;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
@@ -94,6 +98,7 @@ public final class BudgetServer {
 
     private final Config config;
     private final Javalin app;
+    private final BackupService backups;
 
     public BudgetServer(Config config, Database database, Clock clock, Runnable onShutdown) {
         this.config = config;
@@ -103,7 +108,10 @@ public final class BudgetServer {
         // Auto-lock follows the setting as it is now, not as it was when the app started.
         SessionStore sessions = new SessionStore(clock,
                 () -> Duration.ofMinutes(Long.parseLong(settings.get(SettingKey.AUTO_LOCK_MINUTES))));
-        PinService pins = new PinService(new AuthRepository(database.jdbi()), clock);
+        AuthRepository auth = new AuthRepository(database.jdbi());
+        PinService pins = new PinService(auth, clock);
+        backups = new BackupService(database, settings, auth, clock);
+        FolderBrowser folders = new FolderBrowser(Path.of(System.getProperty("user.home")));
         AccountsRepository accounts = new AccountsRepository(database.jdbi(), clock);
         HolidaysRepository holidays = new HolidaysRepository(database.jdbi());
         IncomeRepository income = new IncomeRepository(database.jdbi(), clock);
@@ -154,6 +162,7 @@ public final class BudgetServer {
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
             new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
             new DataRoutes(database, sessions).register(routes);
+            new BackupRoutes(backups, folders, settings, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
 
             routes.exception(ApiException.class, (e, ctx) -> ApiResponse.fail(ctx, e.status(), e.getMessage()));
@@ -179,6 +188,11 @@ public final class BudgetServer {
 
     public void stop() {
         app.stop();
+    }
+
+    /** The backup service, for the daily timer (started by {@code Main}, not by tests). */
+    public BackupService backups() {
+        return backups;
     }
 
     private static ObjectMapper jsonMapper() {
