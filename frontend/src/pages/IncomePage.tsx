@@ -14,7 +14,7 @@ import { BUTTON_PRIMARY, PAGE_TITLE, ROW_LINK } from "../components/ui";
  * Income (design/income.png), as an overview like the Accounts screen: every source on one
  * row with what a paycheck brings home, and the paychecks coming up. A row opens the source's
  * own page, where its deductions, employer match and pay history live. Pay stubs join this
- * screen in Phase 9.
+ * screen in Phase 8.
  */
 export function IncomePage() {
   const sources = useIncomeSources();

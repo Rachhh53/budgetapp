@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account, AccountDetail, AccountPoint } from "../../src/api/accounts";
@@ -283,6 +283,45 @@ describe("account detail screen", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Color" }));
     expect(screen.getByRole("group", { name: "How it looks" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /Warn me when/ })).not.toBeInTheDocument();
+  });
+
+  it("narrows the chart to a stretch ahead or to any two dates, and the words follow", async () => {
+    fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+      "GET /api/accounts/1/projection": () => ({ status: 200, data: PROJECTION }),
+    });
+    renderApp("/accounts/1");
+
+    const heading = await screen.findByRole("region", { name: "Where it's heading" });
+    const range = within(heading).getByRole("combobox", { name: "Dates to show" });
+    expect(within(range).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Everything",
+      "Next 30 days",
+      "Next 60 days",
+      "Next 90 days",
+      "Next year",
+      "Custom dates",
+    ]);
+    expect(range).toHaveValue("all");
+    expect(within(heading).queryByLabelText("From")).not.toBeInTheDocument();
+
+    // Custom dates start out as everything there is, and can begin in the past.
+    await userEvent.selectOptions(range, "Custom dates");
+    const from = within(heading).getByLabelText("From");
+    const to = within(heading).getByLabelText("To");
+    expect(to).toHaveValue("2026-11-01");
+    expect((from as HTMLInputElement).value <= "2026-10-01").toBe(true);
+    fireEvent.change(to, { target: { value: "2026-10-20" } });
+    // Only the pay period that ends inside those dates is spoken for.
+    expect(within(heading).getByRole("figure")).toHaveTextContent("the projection, which reaches $3,096.10 by Oct 14, 2026");
+    expect(within(heading).getByRole("figure")).toHaveTextContent("Its lowest point on the way is $313.90");
+
+    // Dates the wrong way round are said kindly, not drawn.
+    fireEvent.change(from, { target: { value: "2026-10-25" } });
+    expect(within(heading).getByRole("status")).toHaveTextContent("The From date is after the To date. Please swap them.");
+
+    await userEvent.selectOptions(range, "Everything");
+    expect(within(heading).getByRole("figure")).toHaveTextContent("the projection, which reaches $4,125.00 by Oct 31, 2026");
   });
 
   it("says where the account is heading, in a chart and in words", async () => {

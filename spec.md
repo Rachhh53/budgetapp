@@ -60,7 +60,7 @@ Mockups for every screen are in `design/` (see §9). They show layout, hierarchy
 | Money/dates | `long` cents, `BigDecimal`, `java.time` | |
 | PIN hashing | Argon2 (Password4j or Bouncy Castle) | |
 | PDF text | **Apache PDFBox** | Pay stubs and receipts, read by text position. |
-| OCR (optional, Phase 9) | Tess4J (Tesseract), bundled and run locally | Scanned stubs only. |
+| OCR (optional, Phase 8) | Tess4J (Tesseract), bundled and run locally | Scanned stubs only. |
 | Logging | SLF4J + Logback, **local log file only** | Rotating file in the app data folder. No remote appenders. |
 | Frontend | **React + TypeScript + Vite** | |
 | Styling | **Tailwind CSS** (v4) | Theme tokens (colors, spacing, radius, fonts) defined once as CSS variables and exposed to Tailwind, so light/dark and the user's accent color switch by changing variables. User-chosen colors (categories, tags, accounts, buckets) come from data and are applied with inline `style`/CSS variables, never generated class names. |
@@ -128,7 +128,7 @@ budget/
 5. The backend also watches Tauri's process ID (`ProcessHandle.of(pid).onExit()`) and exits by itself if Tauri dies, so no stray server is ever left running.
 6. Only one backend may run at a time (lock file in the app data folder).
 - Attachments (receipts, invoices, pay stubs) are copied into `%APPDATA%\<AppName>\files\`, named by content hash, and referenced from the database. Originals are never modified.
-- **Phone access (Phase 7):** when enabled, the server also listens on the chosen interface (LAN IP or Tailscale IP). Plain HTTP on home Wi-Fi is unencrypted, so Settings shows a warning and recommends Tailscale. The PIN is always required. The phone shows "Can't reach your PC" when the app isn't running.
+- **Phone access (Phase 12):** when enabled, the server also listens on the chosen interface (LAN IP or Tailscale IP). Plain HTTP on home Wi-Fi is unencrypted, so Settings shows a warning and recommends Tailscale. The PIN is always required. The phone shows "Can't reach your PC" when the app isn't running.
 
 ---
 
@@ -426,30 +426,31 @@ Card settings, payment modes, statements, charges; bills and one-offs paid by ca
 PIN, recovery code, lockout, `--reset-pin`, auto-lock, Lock now, hide amounts; Settings screen (all dropdowns); accent color; backups and restore (database + files).
 **Done when** the app locks after idle, settings change behavior, and a backup restores.
 
-### Phase 7 — Phone access
-Remote access setting, interface choice, URL and QR code; HTTP warning and optional self-signed HTTPS; responsive phone layouts (pay period, add expense with receipt photo); "Add to Home Screen" manifest; PIN for remote sessions.
-**Done when** the iPhone can open the app over Tailscale, unlock, mark a bill paid, add a confirmation code and add an expense with a photo.
-
-### Phase 8 — Expenses, receipts, reimbursements, reports
+### Phase 7 — Expenses, receipts, reimbursements, reports
 Attachments (files on disk, previews); expenses screen; reimbursement status and "pays back an expense"; tags fully wired; report builder, saved reports, CSV and PDF export (PDF can include receipts).
 **Done when** a "Medical out-of-pocket 2026" report shows totals by month, reimbursed vs waiting, and exports with receipts.
 
-### Phase 9 — Pay stubs
+### Phase 8 — Pay stubs
 Upload a stub PDF; read text locally; map lines to gross, contributions, benefits, taxes, net and match; check gross − deductions = net; flag low-confidence lines; remember the layout per employer; update the income source from the latest stub; YTD figures; optional local OCR for scanned stubs.
 **Done when** uploading a second stub from the same employer fills in every line with no manual mapping.
 Upload is offered in two places (Rachel, 2026-10-09): on the **income source** add/edit form, where one stub sets up the source (salaried pay is much the same every paycheck), and on the **pay period** screen for a single paycheck (hourly pay differs each time).
 
-### Phase 10 — Dashboard and annual costs
+### Phase 9 — Dashboard and annual costs
 Dashboard per §8 (lowest balance ahead, category donut, net worth timeline, attention list); annual costs with calendar / rolling 12 months, price history per item, budget-too-low hints; Projected vs. Actual view.
 **Done when** both screens show the user's real data.
 
-### Phase 11 — Plan next year
+### Phase 10 — Plan next year
 Plan years (draft/active), six-step wizard, suggestion bases (§5.8), "YOURS" for typed amounts, delete draft & start over before it starts, activation on the budget year start date, plan reminder; first-time setup reuses the wizard.
 **Done when** a 2027 draft can be built in October from the last 12 months, deleted, rebuilt, and becomes active on Jan 1 without changing 2026 history.
 
-### Phase 12 — Debt & decisions
+### Phase 11 — Debt & decisions
 Planner per §5.9 with editable growth rates, option cards, payoff order (highest rate / smallest balance, with rollover), flags, and the "estimates, not advice" label.
 **Done when** comparing an extra $300/month across car loan, mortgage, 401(k) and brokerage produces consistent, tested numbers.
+
+### Phase 12 — Phone access
+Remote access setting, interface choice, URL and QR code; HTTP warning and optional self-signed HTTPS; responsive phone layouts (pay period, add expense with receipt photo); "Add to Home Screen" manifest; PIN for remote sessions.
+**Done when** the iPhone can open the app over Tailscale, unlock, mark a bill paid, add a confirmation code and add an expense with a photo.
+Moved to the end on 2026-10-11 (Rachel): it was Phase 7, and the phases after it each moved up one. Everything before it works on the PC alone; this is what makes the PIN required for anything that is not this PC.
 
 ---
 
@@ -499,7 +500,7 @@ Phase 2 is split into two pull requests. 2a is the data, engine, API and the two
 | Add recurring items with item versions and occurrence overrides | Done except bucket moves and save-ups | `/api/items` and `/api/items/{id}/occurrences/{scheduledDate}`; Recurring items screen with filters, search and the edit drawer (a sheet on a phone). Bill, transfer, budget and card payment; pay from any account; per-occurrence or annual amounts; estimate flag; price history. `bucket_move`, `bucket_id` and `save_up_bucket_id` arrive with buckets in Phase 3. Hand-picked dates are not offered for items. |
 | Create the period assignment rule in the engine | Done | `engine/items/PeriodAssigner`: all five §5.2 cases pass. "Every paycheck" items belong to the period they were made for. |
 | Create per-account balance projection in the engine | Done except buckets and low-balance flag | `engine/projection/BalanceProjector` and the server's `Ledger`: starting, in, out, ending and lowest point per period and account, from the latest entered balance (§5.3). "Available after buckets" and the low-balance flag are Phase 3; interest, growth and card payment modes are Phases 3–5. |
-| Add one-off entries for money in, money out and transfers | API done; screen in 2b | `/api/entries`, counted in the projection. They are entered through the + Add item form, which is 2b. `entry_bucket_splits` is Phase 3; the reimbursement columns exist but are unused until Phase 8. |
+| Add one-off entries for money in, money out and transfers | API done; screen in 2b | `/api/entries`, counted in the projection. They are entered through the + Add item form, which is 2b. `entry_bucket_splits` is Phase 3; the reimbursement columns exist but are unused until Phase 7. |
 
 Also in this branch: `GET /api/pay-periods` now carries each period's projected ending and lowest point for the primary paycheck's account, shown on the Pay periods list; `GET /api/pay-periods/{start}` returns everything in one period, ready for the 2b screen. An account used by an item or entry cannot be deleted. 241 backend tests (68 engine, 173 API) and 117 frontend tests. Both new screens and the open item form were checked in a real browser at 375px (no sideways scrolling) and at 1440px. Not yet done: Undo — deleting an item, category or tag asks first until the change log arrives in 2b.
 
@@ -507,10 +508,10 @@ Also in this branch: `GET /api/pay-periods` now carries each period's projected 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Render the pay period home screen | Done except buckets, cards panel and flags | The home screen (`/`, and `/periods/{start}` for any other period): header with prev/next, Current badge, estimate key, Hide amounts and + Add item; the strip of ending balances; starting, coming in, going out, projected ending with its sum; Income, Auto-pay & transfers, Budgets, Pay manually & one-offs, and Accounts with a tab per account. ← / → move between periods. It replaces the list of periods from Phase 1. **Not yet:** "Available after buckets" and the buckets in the Accounts panel (Phase 3) — the fifth figure shows the period's **lowest point** until then; the Credit cards panel and promo flags (Phase 5); the low-balance flag on the strip (Phase 3, with thresholds); paycheck deductions under Income (Phase 9). |
-| Expose the + Add item menu and shared add form | Done except buckets, pay-back and upload | Menu with Money out, Money in, Transfer and Recurring item (Ctrl+N; Ctrl+E and Ctrl+I go straight to money out and money in, from any screen). One form with a kind switch; Recurring shows the recurring item form inside it. It adds to the period on screen and previews that period's new ending for the chosen account. A one-off is opened from its name to change or delete it. **Not yet:** "Set some aside in a bucket" (Phase 3), "Pays back an expense" (Phase 8) and "Upload a pay stub or receipt…" (Phases 8–9), which is listed in the menu but cannot be chosen. |
-| Wire inline editing, overrides, paid checkboxes, confirmation codes, estimate boxes and undo | Done except the report | Click an amount to type over it: Enter saves, Esc cancels, Tab saves and moves on. Recurring items ask "Just this one" (the default) or "This and all future"; items entered as a yearly total offer only "Just this one". Paychecks and one-offs are typed over the same way. The projected value shows on hover or keyboard focus, and on a long press on a phone. Paid checkbox (records today's date), confirmation codes ("+ Add confirmation", then monospace text with a pencil). Undo toast after every change on every screen, and Ctrl+Z; `POST /api/undo`. Deleting a category, tag or one-off no longer asks first; deleting a whole item, account or income source still does, and says it can be undone. **Not yet:** the Projected vs. Actual report (Phase 8). |
-| Add one-off entries for money in, money out and transfers | Done except bucket splits and reimbursements | Finished here by the + Add item form. `entry_bucket_splits` is Phase 3; reimbursement is Phase 8. |
+| Render the pay period home screen | Done except buckets, cards panel and flags | The home screen (`/`, and `/periods/{start}` for any other period): header with prev/next, Current badge, estimate key, Hide amounts and + Add item; the strip of ending balances; starting, coming in, going out, projected ending with its sum; Income, Auto-pay & transfers, Budgets, Pay manually & one-offs, and Accounts with a tab per account. ← / → move between periods. It replaces the list of periods from Phase 1. **Not yet:** "Available after buckets" and the buckets in the Accounts panel (Phase 3) — the fifth figure shows the period's **lowest point** until then; the Credit cards panel and promo flags (Phase 5); the low-balance flag on the strip (Phase 3, with thresholds); paycheck deductions under Income (Phase 8). |
+| Expose the + Add item menu and shared add form | Done except buckets, pay-back and upload | Menu with Money out, Money in, Transfer and Recurring item (Ctrl+N; Ctrl+E and Ctrl+I go straight to money out and money in, from any screen). One form with a kind switch; Recurring shows the recurring item form inside it. It adds to the period on screen and previews that period's new ending for the chosen account. A one-off is opened from its name to change or delete it. **Not yet:** "Set some aside in a bucket" (Phase 3), "Pays back an expense" (Phase 7) and "Upload a pay stub or receipt…" (Phases 7–9), which is listed in the menu but cannot be chosen. |
+| Wire inline editing, overrides, paid checkboxes, confirmation codes, estimate boxes and undo | Done except the report | Click an amount to type over it: Enter saves, Esc cancels, Tab saves and moves on. Recurring items ask "Just this one" (the default) or "This and all future"; items entered as a yearly total offer only "Just this one". Paychecks and one-offs are typed over the same way. The projected value shows on hover or keyboard focus, and on a long press on a phone. Paid checkbox (records today's date), confirmation codes ("+ Add confirmation", then monospace text with a pencil). Undo toast after every change on every screen, and Ctrl+Z; `POST /api/undo`. Deleting a category, tag or one-off no longer asks first; deleting a whole item, account or income source still does, and says it can be undone. **Not yet:** the Projected vs. Actual report (Phase 7). |
+| Add one-off entries for money in, money out and transfers | Done except bucket splits and reimbursements | Finished here by the + Add item form. `entry_bucket_splits` is Phase 3; reimbursement is Phase 7. |
 
 Also in this branch: **Hide amounts** (blurs every number on every screen; remembered on this device), built early because the home screen's header needs it. A compact density for short windows (1366×768, 1280×800). 193 server tests and 68 engine tests, 148 frontend tests. Checked in a real browser at 1440×900, 1366×768, 1280×800 and 375px wide: no sideways scrolling; on wide screens the page itself does not scroll, and a column scrolls inside itself when a period holds more than fits. Accent-colored text (links, small actions, the focus ring) was low-contrast on the dark theme with the default accent on every screen; it now uses `--accent-text`, the chosen accent moved just far enough toward white or black to reach 4.5:1 on that theme's backgrounds (`accentForText`). The accent as a fill is unchanged.
 
@@ -595,7 +596,7 @@ Sums in money fields (decided 2026-10-09 with Rachel):
 
 ### Phase 4 — Investments, home, net worth (`milestone/4-investments-networth`)
 
-**Status: complete. Rachel called the branch done on 2026-10-10**, after two days of hands-on feedback on the installed app (the dated notes below). Branched from Phase 3 and rebased onto `main` once that was merged. Verified with 126 engine, 369 server and 284 frontend tests passing; the installer Rachel tested was built from this branch on 2026-10-10. Not yet merged to `main`. Carried forward: the pop-up forms still longer than one screen (listed in the note on pop-up forms below), loans in Phase 5, pay stubs in Phase 9, the Annual costs screen in Phase 10.
+**Status: complete. Rachel called the branch done on 2026-10-10**, after two days of hands-on feedback on the installed app (the dated notes below). Branched from Phase 3 and rebased onto `main` once that was merged. Verified with 126 engine, 369 server and 284 frontend tests passing; the installer Rachel tested was built from this branch on 2026-10-10. Not yet merged to `main`. Carried forward: the pop-up forms still longer than one screen (listed in the note on pop-up forms below), loans in Phase 5, pay stubs in Phase 8, the Annual costs screen in Phase 9.
 
 Decided with Rachel before building (2026-10-09): the employer match is a single tier; assets are a home, vehicles and "something else", with a growth rate of zero or more and no depreciation; the three Phase 3 leftovers were done first on this branch (interest on the day of an entered balance, §5.4; the 375px check by eye; the grouped layout on the remaining forms).
 
@@ -661,13 +662,13 @@ Also in this branch: a card's own payment shows "Follows the card" in place of a
 - **A loan's "Where it's heading" runs over the loan's whole life**: balances entered, today, and each year's end to the payoff date.
 - The asset form's linked loan is chosen by the user for each asset; nothing links a loan to a home by itself.
 
-Not in this phase: the control for how early promo warnings start (Phase 6, Settings); comparing ways to pay debt down (Phase 12).
+Not in this phase: the control for how early promo warnings start (Phase 6, Settings); comparing ways to pay debt down (Phase 11).
 
 ### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
 
 **Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged; to be rebased onto `main` once it lands. Verified with 193 engine, 497 server and 371 frontend tests passing.
 
-Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 7); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
+Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 12); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
 
 Migration on this branch: `V19` the one-row `auth` table. New dependency: Password4j 1.8.4 (Argon2id), older than 14 days and clean in OSV.
 
@@ -677,7 +678,7 @@ Migration on this branch: `V19` the one-row `auth` table. New dependency: Passwo
 | Expose the Settings screen with dropdown values and the accent color | Done | Cards: Appearance (theme, accent color), Pay periods & projections (which income sets the pay periods, look ahead), Warnings (promo warning days, unpaid-bill highlight days), Security, Backups, Bank holidays, Erase all data. Two columns from `xl`, stacked below. A hand-paid bill due within the chosen days says "Due today", "Due tomorrow" or "Due in N days" on its pay period row, in words with an icon. The low-balance warning is set per account, so Settings points to the account page for it. |
 | Schedule daily backups with restore of the database and files | Done | One dated zip a day while the app is open (`budget-backup-yyyyMMdd-HHmmss.zip`: the database through SQLite's backup API, plus `files/`), into the chosen folder or `backups\` in the data folder until one is chosen; the oldest beyond 7, 14, 30, 60 or 90 are removed. **Back up now** and **Restore…** in Settings. Restore checks the zip, refuses one made by a newer version, first saves the current data as `budget-before-restore-*.zip` in the app's own folder (the last 3 are kept), then swaps in the backup, keeps the current PIN and backup folder, and ends every session. Backups are plain zips, not encrypted; the card says so. |
 
-Not shown in Settings yet, because nothing would act on them: **budget year starts** and **remind me to plan next year** (Phase 11, with Plan next year) and **phone access** (Phase 7). **Density** is not a setting: the compact layout switches on by itself in a short window.
+Not shown in Settings yet, because nothing would act on them: **budget year starts** and **remind me to plan next year** (Phase 10, with Plan next year) and **phone access** (Phase 12). **Density** is not a setting: the compact layout switches on by itself in a short window.
 
 **Pop-up forms never scroll** (the rule of 2026-10-10, finished here; `components/FormParts`). Measured at 1366×768 and 375×812 with room left for an error message:
 
@@ -689,9 +690,11 @@ Not shown in Settings yet, because nothing would act on them: **budget year star
 - **A pay period row** opens a short form for that one time (amount, due date, paid and the day, confirmation code, check number, note), with a link to the item's page for anything about the item itself. A bucket's own amount still opens the bucket's form.
 - Dialogs may now be as tall as the window less a thin strip (`100dvh − 3rem` from `sm`, was `− 6rem`).
 
+**Dates for the account chart** (Rachel, 2026-10-11: "options for the graph. like custom dates to view, 30, 60 90, 1 year"). "Where it's heading" on an account's page has a **Dates to show** list: Everything (as before, and what it opens on), the next 30, 60 or 90 days, the next year, or Custom dates with a From and a To, which can start in the past, back to the first balance entered. The projected lines are cut at the edges of the dates chosen, and the sentence under the chart speaks for the pay periods that end inside them. A loan's chart is unchanged: it shows the loan's whole life.
+
 ### Carried forward into later phases
 
 | What | Notes |
 |---|---|
-| Budget year start and the plan-next-year reminder, in Settings | With Plan next year (Phase 11): until then nothing would act on them. |
-| Phone access, in Settings | Phase 7, which also makes the PIN required for anything that is not this PC. |
+| Budget year start and the plan-next-year reminder, in Settings | With Plan next year (Phase 10): until then nothing would act on them. |
+| Phone access, in Settings | Phase 12, which also makes the PIN required for anything that is not this PC. |
