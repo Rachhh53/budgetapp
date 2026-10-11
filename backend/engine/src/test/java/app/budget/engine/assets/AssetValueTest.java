@@ -44,6 +44,29 @@ class AssetValueTest {
     }
 
     @Test
+    void aYearlyLossShrinksItByWholeMonths() {
+        List<Entered> car = List.of(new Entered(date("2026-01-01"), Money.ofCents(2_000_000)));
+        BasisPoints loses15 = BasisPoints.of(-1500);
+        // $20,000 losing 15% a year: twelve whole months on it is worth exactly 85% of that.
+        assertThat(AssetValue.on(date("2027-01-01"), car, loses15)).contains(Money.ofCents(1_700_000));
+        // Two years on, 85% of 85%.
+        assertThat(AssetValue.on(date("2028-01-01"), car, loses15)).contains(Money.ofCents(1_445_000));
+        // Six months: 20,000 × 0.85^(6/12) = 20,000 × 0.92195444… = 18,439.09
+        assertThat(AssetValue.on(date("2026-07-01"), car, loses15)).contains(Money.ofCents(1_843_909));
+        // Not yet a whole month: still what was entered.
+        assertThat(AssetValue.on(date("2026-01-31"), car, loses15)).contains(Money.ofCents(2_000_000));
+    }
+
+    @Test
+    void aLossNeverTakesItBelowZero() {
+        List<Entered> car = List.of(new Entered(date("2020-01-01"), Money.ofCents(2_000_000)));
+        // The steepest loss allowed, for decades: next to nothing, never less than nothing.
+        Money left = AssetValue.on(date("2060-01-01"), car, BasisPoints.of(-9900)).orElseThrow();
+        assertThat(left.isNegative()).isFalse();
+        assertThat(left.cents()).isLessThan(100);
+    }
+
+    @Test
     void aNewValueReplacesTheEstimate() {
         // At the end of 2025 the first value has grown for eleven months; the next day the new one stands.
         assertThat(AssetValue.on(date("2025-12-31"), HOME, BasisPoints.of(300)).orElseThrow().cents()).isGreaterThan(38_000_000);

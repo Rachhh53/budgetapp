@@ -15,7 +15,7 @@ import org.jdbi.v3.core.Jdbi;
 public final class AssetsRepository {
 
     private static final String SELECT =
-            "SELECT id, name, kind, color, appreciation_bp, linked_loan_account_id, archived FROM assets ";
+            "SELECT id, name, kind, color, appreciation_bp, depreciation_bp, linked_loan_account_id, archived FROM assets ";
 
     private final Jdbi jdbi;
     private final Clock clock;
@@ -30,7 +30,9 @@ public final class AssetsRepository {
     /**
      * An asset as stored.
      *
-     * @param appreciationBp      the yearly rate it is assumed to grow by; {@code null} to hold its value
+     * @param appreciationBp      the yearly rate it is assumed to change by: above zero it grows, below zero it
+     *                            loses value; {@code null} to hold its value. Kept in two columns, a gain in
+     *                            {@code appreciation_bp} and a loss in {@code depreciation_bp} (see migration V20)
      * @param linkedLoanAccountId the loan against it, for equity; {@code null} when it is owned outright
      */
     public record Asset(
@@ -62,15 +64,17 @@ public final class AssetsRepository {
     public long create(Fields fields) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
-                        INSERT INTO assets (name, kind, color, appreciation_bp, linked_loan_account_id, archived, sort_order, created_at)
-                        VALUES (:name, :kind, :color, :appreciationBp, :loanId, :archived,
+                        INSERT INTO assets (name, kind, color, appreciation_bp, depreciation_bp, linked_loan_account_id,
+                                            archived, sort_order, created_at)
+                        VALUES (:name, :kind, :color, :appreciationBp, :depreciationBp, :loanId, :archived,
                                 (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM assets), :now)
                         RETURNING id
                         """)
                 .bind("name", fields.name())
                 .bind("kind", Inputs.code(fields.kind()))
                 .bind("color", fields.color())
-                .bind("appreciationBp", fields.appreciationBp())
+                .bind("appreciationBp", gain(fields.appreciationBp()))
+                .bind("depreciationBp", loss(fields.appreciationBp()))
                 .bind("loanId", fields.linkedLoanAccountId())
                 .bind("archived", fields.archived())
                 .bind("now", clock.instant().toString())
@@ -84,14 +88,15 @@ public final class AssetsRepository {
                 .createUpdate("""
                         UPDATE assets
                         SET name = :name, kind = :kind, color = :color, appreciation_bp = :appreciationBp,
-                            linked_loan_account_id = :loanId, archived = :archived
+                            depreciation_bp = :depreciationBp, linked_loan_account_id = :loanId, archived = :archived
                         WHERE id = :id
                         """)
                 .bind("id", id)
                 .bind("name", fields.name())
                 .bind("kind", Inputs.code(fields.kind()))
                 .bind("color", fields.color())
-                .bind("appreciationBp", fields.appreciationBp())
+                .bind("appreciationBp", gain(fields.appreciationBp()))
+                .bind("depreciationBp", loss(fields.appreciationBp()))
                 .bind("loanId", fields.linkedLoanAccountId())
                 .bind("archived", fields.archived())
                 .execute()) > 0;
@@ -147,9 +152,23 @@ public final class AssetsRepository {
                 .execute()) > 0;
     }
 
+    /** The part of a yearly rate kept in {@code appreciation_bp}: zero or a gain. */
+    private static Integer gain(Integer rateBp) {
+        return rateBp == null || rateBp < 0 ? null : rateBp;
+    }
+
+    /** The part kept in {@code depreciation_bp}: a loss, as a positive number. */
+    private static Integer loss(Integer rateBp) {
+        return rateBp == null || rateBp >= 0 ? null : -rateBp;
+    }
+
     private static Asset asset(ResultSet rs) throws SQLException {
-        int rate = rs.getInt("appreciation_bp");
-        Integer appreciationBp = rs.wasNull() ? null : rate;
+        int gain = rs.getInt("appreciation_bp");
+        Integer appreciationBp = rs.wasNull() ? null : gain;
+        int loss = rs.getInt("depreciation_bp");
+        if (!rs.wasNull()) {
+            appreciationBp = -loss;
+        }
         long loan = rs.getLong("linked_loan_account_id");
         Long loanId = rs.wasNull() ? null : loan;
         return new Asset(

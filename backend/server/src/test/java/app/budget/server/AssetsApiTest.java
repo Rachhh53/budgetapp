@@ -125,8 +125,11 @@ class AssetsApiTest extends ApiTestBase {
                     "Please choose what kind of thing this is from the list.");
             assertError(server.post("/api/assets", "{\"name\":\"Boat\",\"kind\":\"other\",\"color\":\"blue\"}", cookie),
                     "Colors need to be a six-digit hex code, like #0f766e.");
-            // A value never goes down by a rate: only by entering a lower value.
-            assertError(add(",\"appreciationBp\":-500"), "Please enter a yearly rate between 0% and 1,000%, or leave it empty.");
+            // A loss of 100% a year or more is not a rate anything can lose by; nor is a gain past 1,000%.
+            String rateHelp =
+                    "Please enter a yearly rate of up to 1,000% for something that gains value, or up to 99% for something that loses it, or leave it empty.";
+            assertError(add(",\"appreciationBp\":-10000"), rateHelp);
+            assertError(add(",\"appreciationBp\":100001"), rateHelp);
             assertError(add(",\"valueCents\":-1"), "The value can't be less than zero.");
             assertError(add(",\"valueCents\":40000000,\"valueDate\":\"2026-10-02\""), "A value needs a date of today or earlier.");
             assertThat(server.get("/api/assets", cookie).data()).isEmpty();
@@ -189,6 +192,20 @@ class AssetsApiTest extends ApiTestBase {
             assertThat(asset.get("estimate").asBoolean()).isTrue();
             // What was entered is kept as entered.
             assertThat(asset.get("latestValue").get("valueCents").asLong()).isEqualTo(40000000);
+        }
+
+        @Test
+        void aYearlyLossShrinksTheLatestValueAndIsKeptAsEntered() throws Exception {
+            Reply reply = add(",\"appreciationBp\":-1500,\"valueCents\":2000000,\"valueDate\":\"2026-04-01\"");
+
+            // Six whole months to October 1: 20,000 × 0.85^(6/12) = 18,439.09
+            JsonNode asset = reply.data().get("asset");
+            assertThat(asset.get("valueCents").asLong()).isEqualTo(1843909);
+            assertThat(asset.get("estimate").asBoolean()).isTrue();
+            assertThat(asset.get("appreciationBp").asInt()).isEqualTo(-1500);
+            // It reads back as a loss, and can be turned into a gain, or into nothing, again.
+            long id = asset.get("id").asLong();
+            assertThat(server.get("/api/assets/" + id, cookie).data().get("asset").get("appreciationBp").asInt()).isEqualTo(-1500);
         }
 
         @Test

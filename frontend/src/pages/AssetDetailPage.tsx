@@ -93,7 +93,7 @@ export function AssetDetailPage() {
                 <Amount cents={asset.valueCents} estimate={asset.estimate} className="-ml-2 text-3xl font-bold" />
                 <p className="text-muted">
                   {asset.estimate && asset.latestValue
-                    ? `today, at your assumed ${formatRate(asset.appreciationBp ?? 0)} a year · you entered ${formatCents(asset.latestValue.valueCents)} on ${formatDate(asset.latestValue.date)}`
+                    ? `today, ${(asset.appreciationBp ?? 0) < 0 ? "losing" : "at"} your assumed ${formatRate(Math.abs(asset.appreciationBp ?? 0))} a year · you entered ${formatCents(asset.latestValue.valueCents)} on ${formatDate(asset.latestValue.date)}`
                     : asset.latestValue && `entered by you ${formatDate(asset.latestValue.date)}`}
                 </p>
               </div>

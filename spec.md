@@ -150,7 +150,7 @@ Names are suggestions; keep the concepts. Money = integer cents, rates = basis p
 - **buckets** — `id, account_id, name, color, goal_amount (nullable), goal_date (nullable), note, sort_order, archived, opened_on`. With a goal and a goal date, the bucket reports what it is projected to hold on that date from what is already scheduled, how far short that is, and what closing the gap takes per paycheck (shortfall ÷ paydays left, rounded up to the cent) or per month; one click adds that as an every-paycheck bucket move ending on the goal date. **Checking and savings only.** Buckets don't change the account balance; they reduce **available**. Schedules, save-ups and interest reach a bucket only from `opened_on`, shown as **Counts from**: a new bucket is never back-filled from older dates unless the user says so. It defaults to the current pay period's payday, so the paycheck in hand is included, and can be set to any day up to today. An archived bucket holds nothing.
 - **bucket_changes** — `bucket_id, date, amount (+/−), source (manual | transfer | bucket_move | interest | income_split), note`. As built, only what the user moves by hand is stored (`manual`); recurring bucket moves, transfers into a bucket, splits, save-ups and interest shares are worked out on every request, like occurrences, so they always follow the current schedules.
 - **interest_settings** — `account_id, credit_day (1–31; 31 means the last day), destination (unassigned | bucket | proportional), destination_bucket_id`. No row means the defaults: last day, unassigned.
-- **assets** — `id, name, kind (home | vehicle | other), color, appreciation_bp (nullable), linked_loan_account_id, sort_order, archived, created_at`. As built (migration `V12`): the rate is zero or more — there is no depreciation; something that loses value gets a new, lower value entered instead (decided with Rachel, 2026-10-09). The linked account must be a loan; deleting that loan leaves the asset owned outright.
+- **assets** — `id, name, kind (home | vehicle | other), color, appreciation_bp (nullable), linked_loan_account_id, sort_order, archived, created_at`. As built (migration `V12`): the rate is zero or more; something that loses value gets a new, lower value entered instead (decided with Rachel, 2026-10-09). **Changed 2026-10-11** (Rachel: "something like a car depreciates over time"): an asset can also lose value by a yearly rate, up to 99%. Migration `V20` keeps the loss in its own column, `depreciation_bp`, because the check on `appreciation_bp` cannot be changed without rebuilding a table others refer to; at most one of the two is set. In the API it is one signed figure, `appreciationBp`, below zero for a loss. The linked account must be a loan; deleting that loan leaves the asset owned outright.
 - **asset_values** — `asset_id, date, value`. One per asset per day; the same day again replaces it.
 
 ### 4.3 Income and pay stubs
@@ -280,7 +280,7 @@ For an occurrence due on **D**, with **P** = the period containing D:
 
 ### 5.7 Loans, home, net worth
 - Amortization: each payment splits into interest and principal; escrow is part of the payment but not principal.
-- Home value from user entries, with optional appreciation between entries. Equity = value − linked loan balance.
+- Home value from user entries, with optional appreciation between entries. Equity = value − linked loan balance. A yearly loss works the same way downwards (2026-10-11): by whole months since the latest value entered, `value × (1 − loss)^(months/12)`, so a year at 15% leaves exactly 85%, and it never goes below zero.
 - Net worth = cash + savings + investments + assets − card balances − loan balances.
 - As built (loans, Phase 5):
   - A month's interest (rate ÷ 12, HALF_EVEN) is added to what is owed on the payment day; it is skipped on a day a balance was entered, which already includes it.
@@ -666,11 +666,11 @@ Not in this phase: the control for how early promo warnings start (Phase 6, Sett
 
 ### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
 
-**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged; to be rebased onto `main` once it lands. Verified with 193 engine, 497 server and 371 frontend tests passing.
+**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged; to be rebased onto `main` once it lands. Verified with 195 engine, 498 server and 374 frontend tests passing.
 
 Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 12); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
 
-Migration on this branch: `V19` the one-row `auth` table. New dependency: Password4j 1.8.4 (Argon2id), older than 14 days and clean in OSV.
+Migrations on this branch: `V19` the one-row `auth` table; `V20` a yearly loss for an asset (one column). New dependency: Password4j 1.8.4 (Argon2id), older than 14 days and clean in OSV.
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -691,6 +691,8 @@ Not shown in Settings yet, because nothing would act on them: **budget year star
 - Dialogs may now be as tall as the window less a thin strip (`100dvh − 3rem` from `sm`, was `− 6rem`).
 
 **Dates for the account chart** (Rachel, 2026-10-11: "options for the graph. like custom dates to view, 30, 60 90, 1 year"). "Where it's heading" on an account's page has a **Dates to show** list: Everything (as before, and what it opens on), the next 30, 60 or 90 days, the next year, or Custom dates with a From and a To, which can start in the past, back to the first balance entered. The projected lines are cut at the edges of the dates chosen, and the sentence under the chart speaks for the pay periods that end inside them. A loan's chart is unchanged: it shows the loan's whole life.
+
+**An asset can lose value each year** (Rachel, 2026-10-11; §4.2, §5.7). The asset form's last screen, now "Loan and yearly change", asks what the value does between the values entered — stays the same, goes up, or goes down — and by what percent a year. A car set to lose 15% drops a little each month until a real value is entered; its page says "losing your assumed 15.00% a year", and net worth follows it.
 
 ### Carried forward into later phases
 

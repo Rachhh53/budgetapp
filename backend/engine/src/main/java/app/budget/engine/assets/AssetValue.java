@@ -13,7 +13,8 @@ import java.util.Optional;
 
 /**
  * What a home, vehicle or other asset is worth on a day (spec §5.7): the latest value the
- * user entered, grown month by month since then when they gave a yearly rate.
+ * user entered, grown month by month since then when they gave a yearly rate — or shrunk, when
+ * the rate is a loss, as a car's is.
  *
  * <p>The rate is the user's own assumption and only ever fills the gap after the newest
  * value: entering a new value replaces the estimate from that day on.
@@ -29,7 +30,8 @@ public final class AssetValue {
 
     /**
      * @param entered      every value entered, in any order
-     * @param appreciation the yearly rate it is assumed to grow by; {@code null} to hold its value
+     * @param appreciation the yearly rate it is assumed to change by: above zero it grows, below zero
+     *                     (down to a loss of just under 100%) it loses value; {@code null} to hold its value
      * @return empty when no value was entered on or before {@code date}
      */
     public static Optional<Money> on(LocalDate date, List<Entered> entered, BasisPoints appreciation) {
@@ -41,7 +43,7 @@ public final class AssetValue {
         }
         // Whole months only, so a value does not creep up day by day between the months it is looked at.
         int months = Math.toIntExact(ChronoUnit.MONTHS.between(latest.get().date(), date));
-        BigDecimal growth = BigDecimal.ONE.add(SavingsInterest.monthlyRate(appreciation)).pow(months, PRECISION);
+        BigDecimal growth = BigDecimal.ONE.add(SavingsInterest.monthlyChange(appreciation)).pow(months, PRECISION);
         return Optional.of(latest.get().value().times(growth));
     }
 

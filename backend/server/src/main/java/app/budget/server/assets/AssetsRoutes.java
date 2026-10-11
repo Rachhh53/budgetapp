@@ -24,6 +24,9 @@ public final class AssetsRoutes {
     /** 1,000% a year: beyond any real rate, and a typo (3.0 entered as 300) still fits so it can be shown and fixed. */
     private static final int MAX_RATE_BP = 100_000;
 
+    /** The steepest yearly loss taken: 99%. At 100% there would be nothing left after a month. */
+    private static final int MAX_LOSS_BP = 9_900;
+
     private final AssetsRepository assets;
     private final AccountsRepository accounts;
     private final NetWorthCalculator worth;
@@ -138,9 +141,10 @@ public final class AssetsRoutes {
         Kind kind = Inputs.choice(Kind.class, input.kind(), "what kind of thing this is");
         String color = Inputs.color(input.color());
         Integer rate = input.appreciationBp();
-        // Never below zero: a value only goes down when the user enters a lower one.
-        if (rate != null && (rate < 0 || rate > MAX_RATE_BP)) {
-            throw ApiException.badRequest("Please enter a yearly rate between 0% and 1,000%, or leave it empty.");
+        // Below zero is a yearly loss, for something like a car (decided 2026-10-11).
+        if (rate != null && (rate < -MAX_LOSS_BP || rate > MAX_RATE_BP)) {
+            throw ApiException.badRequest(
+                    "Please enter a yearly rate of up to 1,000% for something that gains value, or up to 99% for something that loses it, or leave it empty.");
         }
         Long loanId = input.linkedLoanAccountId();
         if (loanId != null) {

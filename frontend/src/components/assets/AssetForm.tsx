@@ -25,6 +25,17 @@ const PLACEHOLDERS: Record<AssetKind, string> = {
 
 /** The highest rate the backend takes: 1,000% a year, in basis points. */
 const MAX_RATE_BP = 100_000;
+/** The steepest yearly loss it takes: 99%. */
+const MAX_LOSS_BP = 9_900;
+
+/** What an asset's value does between the values entered for it (a loss was added 2026-10-11, for cars). */
+type Trend = "hold" | "up" | "down";
+
+const TRENDS: readonly { value: Trend; label: string }[] = [
+  { value: "hold", label: "Stays the same" },
+  { value: "up", label: "Goes up" },
+  { value: "down", label: "Goes down" },
+];
 
 interface AssetFormProps {
   /** The asset being changed; leave out to add a new one. */
@@ -38,18 +49,18 @@ interface AssetFormProps {
   onDeleted?: () => void;
 }
 
-/** The parts of the form: which kind, its name and color, its first value, its loan and growth, and putting it away. */
+/** The parts of the form: which kind, its name and color, its first value, its loan and yearly change, and putting it away. */
 type AssetPart = "kind" | "what" | "worth" | "loan" | "about";
 
 const ADD_GROUPS: readonly FormGroup<AssetPart>[] = [
   { label: "What it is", parts: ["kind", "what"] },
   { label: "What it is worth", parts: ["worth"] },
-  { label: "Loan and growth", parts: ["loan"] },
+  { label: "Loan and yearly change", parts: ["loan"] },
 ];
 // The first value is entered while adding only; later ones have a history on the asset's page.
 const EDIT_GROUPS: readonly FormGroup<AssetPart>[] = [
   { label: "What it is", parts: ["kind", "what"] },
-  { label: "Loan and growth", parts: ["loan"] },
+  { label: "Loan and yearly change", parts: ["loan"] },
   { label: "Archive or delete", parts: ["about"] },
 ];
 
@@ -71,7 +82,9 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
   const [color, setColor] = useState(asset?.color ?? firstUnusedColor(usedColors));
   const [value, setValue] = useState("");
   const [valueDate, setValueDate] = useState(today);
-  const [rate, setRate] = useState(asset?.appreciationBp != null ? rateToInput(asset.appreciationBp) : "");
+  // A loss is kept as a rate below zero; here it is a direction and a plain percent.
+  const [trend, setTrend] = useState<Trend>(!asset?.appreciationBp ? "hold" : asset.appreciationBp > 0 ? "up" : "down");
+  const [rate, setRate] = useState(asset?.appreciationBp ? rateToInput(Math.abs(asset.appreciationBp)) : "");
   const [loanId, setLoanId] = useState<string | null>(asset?.linkedLoanAccountId != null ? String(asset.linkedLoanAccountId) : null);
   const [archived, setArchived] = useState(asset?.archived ?? false);
 
@@ -81,14 +94,21 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
 
   const valueCents = !asset && value.trim() !== "" ? parseDollars(value) : null;
-  const appreciationBp = rate.trim() === "" ? null : parseRate(rate);
+  const typedRate = trend === "hold" ? null : parseRate(rate);
+  const appreciationBp = typedRate === null || typedRate === 0 ? null : trend === "down" ? -typedRate : typedRate;
 
   const check = (): PartProblem<AssetPart> | null => {
     if (!asset && value.trim() !== "" && (valueCents === null || valueCents < 0)) {
       return { part: "worth", problem: AMOUNT_HELP };
     }
-    if (rate.trim() !== "" && (appreciationBp === null || appreciationBp > MAX_RATE_BP)) {
-      return { part: "loan", problem: "Please enter a yearly rate like 3.00, or leave it empty." };
+    if (trend !== "hold" && typedRate === null) {
+      return { part: "loan", problem: `Please enter a percent a year, like ${trend === "down" ? "15" : "3"}.` };
+    }
+    if (trend === "up" && typedRate !== null && typedRate > MAX_RATE_BP) {
+      return { part: "loan", problem: "Please enter 1,000% a year or less." };
+    }
+    if (trend === "down" && typedRate !== null && typedRate > MAX_LOSS_BP) {
+      return { part: "loan", problem: "Something can lose up to 99% a year. Please enter 99 or less." };
     }
     return null;
   };
@@ -169,7 +189,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
         )}
 
         {parts.shows("loan") && (
-          <FormSection title="Loan and growth">
+          <FormSection title="Loan and yearly change">
             <div>
               <Picker
                 label="Loan against it (optional)"
@@ -187,21 +207,43 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
               </p>
             </div>
             <div>
-              <label htmlFor={`${id}-rate`} className={LABEL}>
-                Assumed growth a year, % (optional)
-              </label>
-              <input
-                id={`${id}-rate`}
-                value={rate}
-                onChange={(event) => setRate(event.target.value)}
-                inputMode="decimal"
-                autoComplete="off"
-                placeholder="e.g. 3.00"
-                className={`${INPUT} tabular-nums`}
-              />
+              {/* Side by side on a phone too: a short list and a short number. */}
+              <div className="grid grid-cols-[minmax(0,1fr)_7rem] gap-3">
+                <div>
+                  <label htmlFor={`${id}-trend`} className={LABEL}>
+                    Between values, it
+                  </label>
+                  <select id={`${id}-trend`} value={trend} onChange={(event) => setTrend(event.target.value as Trend)} className={INPUT}>
+                    {TRENDS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {trend !== "hold" && (
+                  <div>
+                    <label htmlFor={`${id}-rate`} className={LABEL}>
+                      By, % a year
+                    </label>
+                    <input
+                      id={`${id}-rate`}
+                      value={rate}
+                      onChange={(event) => setRate(event.target.value)}
+                      inputMode="decimal"
+                      autoComplete="off"
+                      placeholder={trend === "down" ? "e.g. 15" : "e.g. 3"}
+                      className={`${INPUT} tabular-nums`}
+                    />
+                  </div>
+                )}
+              </div>
               <p className={HINT}>
-                Your own guess, used between the values you enter. Leave it empty and the value simply stays as entered, which suits
-                anything that loses value: for that, enter a new, lower value when you have one.
+                {trend === "hold"
+                  ? "Its value stays what you last entered until you enter a new one."
+                  : trend === "down"
+                    ? "Your own guess, for something like a car. Its value drops a little each month until you enter a real one."
+                    : "Your own guess, for something like a home. Its value rises a little each month until you enter a real one."}
               </p>
             </div>
           </FormSection>
