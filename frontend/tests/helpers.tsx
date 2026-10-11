@@ -11,7 +11,11 @@ export const DEFAULT_SETTINGS = {
   theme: "system",
   accent_color: "#0f766e",
   projection_horizon_months: "12",
+  promo_warning_days: "60",
   auto_lock_minutes: "15",
+  start_amounts_hidden: "false",
+  // Off, so no test depends on how near today is to a fixture's due date; tests of it turn it on.
+  unpaid_highlight_days: "0",
 };
 
 /** Open, with no PIN, and the offer to set one already answered: how most tests want the app. */

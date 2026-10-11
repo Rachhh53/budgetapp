@@ -57,6 +57,7 @@ public final class IncomeRoutes {
         routes.post("/api/income-sources", this::create);
         routes.put("/api/income-sources/{id}", this::update);
         routes.delete("/api/income-sources/{id}", this::delete);
+        routes.put("/api/income-sources/{id}/primary", this::makePrimary);
         routes.delete("/api/income-sources/{id}/pay-changes/{changeId}", this::deletePayChange);
         routes.get("/api/income-sources/{id}/this-year", this::thisYear);
         routes.put("/api/income-sources/{id}/paychecks/{scheduledDate}", this::editPaycheck);
@@ -233,6 +234,15 @@ public final class IncomeRoutes {
                 inYear.stream().mapToLong(PayCalendar.Paycheck::netCents).sum(),
                 inYear.size(),
                 inYear.stream().anyMatch(paycheck -> paycheck.payDate().isAfter(today) && paycheck.estimate())));
+    }
+
+    /** "Pay periods follow" in Settings: hands the role to this source without touching anything else about it. */
+    private void makePrimary(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        if (!income.makePrimary(id)) {
+            throw ApiException.notFound();
+        }
+        ApiResponse.ok(ctx, view(id));
     }
 
     private void deletePayChange(Context ctx) {

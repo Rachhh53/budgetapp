@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Info, PartyPopper, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Info, PartyPopper, TriangleAlert } from "lucide-react";
 import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useState } from "react";
@@ -9,6 +9,7 @@ import { type Category, type Tag, useCategories, useTags } from "../api/categori
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
+import { useSettings } from "../api/settings";
 import {
   type AccountPeriod,
   type BucketPeriod,
@@ -919,6 +920,24 @@ function pastDue(bills: readonly Occurrence[]): Occurrence[] {
 }
 
 /**
+ * A bill paid by hand that is not ticked yet and falls due within `days` from today: "Due
+ * today", "Due tomorrow" or "Due in 3 days". Null for everything else, and when the setting
+ * (Settings → Warnings → Highlight unpaid bills) is off.
+ */
+function dueSoon(bill: Occurrence, days: number): string | null {
+  if (bill.paid || bill.skipped || bill.autopay || bill.kind === "budget") {
+    return null;
+  }
+  const today = todayIso();
+  for (let ahead = 0; ahead <= days; ahead++) {
+    if (addDays(today, ahead) === bill.dueDate) {
+      return ahead === 0 ? "Due today" : ahead === 1 ? "Due tomorrow" : `Due in ${ahead} days`;
+    }
+  }
+  return null;
+}
+
+/**
  * The warning at the top of the screen while anything is past due. Said in words and set apart,
  * with an icon, never by color alone: a missed bill is the first thing to see. Paying late is
  * allowed: ticking the bill records the day it was paid, and the warning goes.
@@ -1008,6 +1027,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
 
   const due = `Due ${formatDay(occurrence.dueDate)}`;
   const isPastDue = pastDue([occurrence]).length > 0;
+  const soon = dueSoon(occurrence, Number(useSettings().data?.unpaid_highlight_days ?? 0));
   // Paying late is allowed, and is kept on record: the day it was paid, against the day it was due.
   const paidLate = occurrence.paid && occurrence.paidDate !== null && occurrence.paidDate > occurrence.dueDate;
   const payBy = occurrence.payBy === occurrence.dueDate ? "" : ` · pay by ${formatDay(occurrence.payBy)}`;
@@ -1041,6 +1061,12 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
             <span className="flex items-center gap-1 font-bold text-danger">
               <TriangleAlert aria-hidden className="size-4 shrink-0" />
               Past due
+            </span>
+          )}
+          {soon !== null && (
+            <span className="flex items-center gap-1 font-semibold text-warn-ink">
+              <Clock aria-hidden className="size-4 shrink-0" />
+              {soon}
             </span>
           )}
           {carriedOver && <span className="block font-medium text-ink">Still unpaid from an earlier period</span>}

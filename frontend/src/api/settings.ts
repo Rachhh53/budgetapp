@@ -14,11 +14,22 @@ export type ProjectionHorizon = (typeof PROJECTION_HORIZONS)[number];
 export const AUTO_LOCK_MINUTES = ["1", "5", "15", "30", "60"] as const;
 export type AutoLockMinutes = (typeof AUTO_LOCK_MINUTES)[number];
 
+/** How long before a card's promotional rate ends the warnings start, in days. */
+export const PROMO_WARNING_DAYS = ["30", "45", "60", "90", "120"] as const;
+export type PromoWarningDays = (typeof PROMO_WARNING_DAYS)[number];
+
+/** How many days ahead a bill paid by hand is pointed out as due soon. "0" turns it off. */
+export const UNPAID_HIGHLIGHT_DAYS = ["0", "1", "2", "3", "5", "7", "10", "14"] as const;
+export type UnpaidHighlightDays = (typeof UNPAID_HIGHLIGHT_DAYS)[number];
+
 export interface Settings {
   theme: Theme;
   accent_color: string;
   projection_horizon_months: ProjectionHorizon;
+  promo_warning_days: PromoWarningDays;
   auto_lock_minutes: AutoLockMinutes;
+  start_amounts_hidden: "true" | "false";
+  unpaid_highlight_days: UnpaidHighlightDays;
 }
 
 export const SETTINGS_KEY = ["settings"] as const;
@@ -36,8 +47,9 @@ export function useUpdateSetting() {
     // The backend answers with the full, saved settings — use that rather than refetching.
     onSuccess: (saved, { key }) => {
       queryClient.setQueryData(SETTINGS_KEY, saved);
-      if (key === "projection_horizon_months") {
-        // Paychecks and pay periods are generated out to the horizon.
+      if (key === "projection_horizon_months" || key === "promo_warning_days") {
+        // Paychecks and pay periods are generated out to the horizon, and a card's promo
+        // warnings (on its page and on the pay periods they end in) start from the warning days.
         return queryClient.invalidateQueries({ queryKey: PAY_KEY });
       }
     },

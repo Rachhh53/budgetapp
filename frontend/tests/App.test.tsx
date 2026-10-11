@@ -64,8 +64,8 @@ describe("unlocking", () => {
     renderApp("/settings");
 
     expect(await screen.findByLabelText("Theme")).toHaveValue("system");
-    // Other cards on the screen load their own data alongside; follow the settings request only.
-    expect(calls(fetchMock).filter((call) => call !== "GET /api/holidays")).toEqual([
+    // Other cards on the screen load their own data alongside; follow the lock and the settings only.
+    expect(calls(fetchMock).filter((call) => /\/api\/(session|settings)$/.test(call))).toEqual([
       "GET /api/session",
       "GET /api/settings",
       "POST /api/session",

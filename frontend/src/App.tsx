@@ -1,10 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router";
 import { onLocked, setPinRequired } from "./api/client";
 import { forgetLoadedData, SESSION_KEY, type SessionStatus, useLock, useSession } from "./api/session";
 import { useSettings } from "./api/settings";
 import { AppShell } from "./components/AppShell";
+import { hideAmountsNow } from "./components/HideAmounts";
 import { LockScreen } from "./components/security/LockScreen";
 import { PinOffer } from "./components/security/PinOffer";
 import { useAutoLock } from "./components/security/useAutoLock";
@@ -73,6 +74,21 @@ export function App() {
       setOffering(true);
     }
   }, [offerPin]);
+
+  // "Start with amounts hidden": once each time the app opens or is unlocked, not on every
+  // change of the setting, so pressing Hide amounts to look at a number is not undone.
+  const startHidden = settings.data?.start_amounts_hidden;
+  const appliedStartHidden = useRef(false);
+  useEffect(() => {
+    if (locked) {
+      appliedStartHidden.current = false;
+    } else if (startHidden !== undefined && !appliedStartHidden.current) {
+      appliedStartHidden.current = true;
+      if (startHidden === "true") {
+        hideAmountsNow();
+      }
+    }
+  }, [locked, startHidden]);
 
   const lock = useLock();
   useAutoLock(

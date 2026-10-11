@@ -8,8 +8,8 @@ import type { Entry } from "../../src/api/entries";
 import type { PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
-import { todayIso } from "../../src/lib/dates";
-import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
+import { addDays, todayIso } from "../../src/lib/dates";
+import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
   id: 1,
@@ -1130,5 +1130,51 @@ describe("undo", () => {
     await userEvent.keyboard("{Control>}z{/Control}");
 
     expect(await screen.findByText(/Your data is safe/)).toBeInTheDocument();
+  });
+});
+
+describe("bills due soon", () => {
+  /** Electric, paid by hand, due `ahead` days from today, with the setting at `days`. */
+  function electricDueIn(ahead: number, days: string, bill: Partial<Occurrence> = {}) {
+    const due = addDays(todayIso(), ahead);
+    return withPeriod(
+      { ...OCTOBER, occurrences: [{ ...ELECTRIC, dueDate: due, payBy: due, ...bill }] },
+      { "GET /api/settings": () => ({ status: 200, data: { ...DEFAULT_SETTINGS, unpaid_highlight_days: days } }) },
+    );
+  }
+
+  it("says so in words on a bill paid by hand that falls due within the days chosen in Settings", async () => {
+    electricDueIn(2, "3");
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(await within(manual).findByText("Due in 2 days")).toBeInTheDocument();
+  });
+
+  it("says today and tomorrow by name", async () => {
+    electricDueIn(0, "3");
+    const { unmount } = renderApp();
+    expect(await within(await panel("Pay manually & one-offs")).findByText("Due today")).toBeInTheDocument();
+    unmount();
+
+    electricDueIn(1, "3");
+    renderApp();
+    expect(await within(await panel("Pay manually & one-offs")).findByText("Due tomorrow")).toBeInTheDocument();
+  });
+
+  it("leaves alone a bill further off, one already paid, and every bill when the setting is off", async () => {
+    for (const [ahead, days, bill] of [
+      [5, "3", {}],
+      [2, "3", { paid: true, paidDate: todayIso() }],
+      [2, "0", {}],
+    ] as const) {
+      electricDueIn(ahead, days, bill);
+      const { unmount } = renderApp();
+
+      const manual = await panel("Pay manually & one-offs");
+      await within(manual).findByRole("checkbox", { name: "Electric paid" });
+      expect(within(manual).queryByText(/^Due (today|tomorrow|in \d+ days)$/)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });
