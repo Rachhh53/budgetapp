@@ -666,7 +666,7 @@ Not in this phase: the control for how early promo warnings start (Phase 6, Sett
 
 ### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
 
-**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 500 server and 375 frontend tests passing.
+**Status: complete; Rachel confirmed it on 2026-10-11. Waiting to be merged.** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 500 server and 375 frontend tests passing; the installer was last built from `6c26e6c`.
 
 Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 12); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
 
