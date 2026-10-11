@@ -24,6 +24,22 @@ export function formatDate(iso: string): string {
   return MONTH_DAY_YEAR.format(toDate(iso));
 }
 
+const TIME = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+
+/**
+ * A moment on this PC's clock, as the backend writes it (`"2026-10-02T07:02:00"`, no time
+ * zone) → `"today at 7:02 AM"`, `"yesterday at 7:02 AM"` or `"Oct 2, 2026 at 7:02 AM"`.
+ */
+export function formatDateTime(local: string): string {
+  const [day = "", time = "00:00"] = local.split("T");
+  const [hour = 0, minute = 0] = time.split(":").map(Number);
+  const moment = toDate(day);
+  moment.setHours(hour, minute);
+  const today = todayIso();
+  const when = day === today ? "today" : day === addDays(today, -1) ? "yesterday" : formatDate(day);
+  return `${when} at ${TIME.format(moment)}`;
+}
+
 /** `"2026-10-30"` → `"Fri Oct 30"` */
 export function formatWeekdayDay(iso: string): string {
   const date = toDate(iso);

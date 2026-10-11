@@ -50,6 +50,17 @@ export function forgetLoadedData(queryClient: QueryClient) {
   queryClient.removeQueries({ predicate: (query) => !kept.includes(query.queryKey[0]) });
 }
 
+/**
+ * After the data has been replaced (a restore, or erasing it all): forgets everything loaded
+ * for screens that are not in view, and loads afresh what the screen in view is showing.
+ * That screen is refreshed in place rather than emptied first, so it stays put, and with it
+ * the message saying what just happened.
+ */
+export function reloadEverything(queryClient: QueryClient) {
+  queryClient.removeQueries({ type: "inactive" });
+  return queryClient.invalidateQueries();
+}
+
 /** Unlocks with the PIN. A wrong one fails with the backend's own kind message. */
 export function useUnlock() {
   const queryClient = useQueryClient();

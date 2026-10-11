@@ -22,6 +22,10 @@ export type PromoWarningDays = (typeof PROMO_WARNING_DAYS)[number];
 export const UNPAID_HIGHLIGHT_DAYS = ["0", "1", "2", "3", "5", "7", "10", "14"] as const;
 export type UnpaidHighlightDays = (typeof UNPAID_HIGHLIGHT_DAYS)[number];
 
+/** How many daily backups are kept. */
+export const BACKUP_KEEP_COUNTS = ["7", "14", "30", "60", "90"] as const;
+export type BackupKeepCount = (typeof BACKUP_KEEP_COUNTS)[number];
+
 export interface Settings {
   theme: Theme;
   accent_color: string;
@@ -30,6 +34,9 @@ export interface Settings {
   auto_lock_minutes: AutoLockMinutes;
   start_amounts_hidden: "true" | "false";
   unpaid_highlight_days: UnpaidHighlightDays;
+  /** Where backups are saved; empty until a folder is chosen. Changed only through Choose folder. */
+  backup_folder: string;
+  backup_keep_count: BackupKeepCount;
 }
 
 export const SETTINGS_KEY = ["settings"] as const;

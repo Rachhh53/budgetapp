@@ -53,7 +53,11 @@ export function Modal({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Start on the first field, so the form can be filled in straight away.
-    const first = panel.current?.querySelector<HTMLElement>("[data-autofocus], input, select, textarea");
+    // A control marked as the place to start wins wherever it sits (the safe answer to a
+    // question that asks first, say); otherwise the first field.
+    const first =
+      panel.current?.querySelector<HTMLElement>("[data-autofocus]") ??
+      panel.current?.querySelector<HTMLElement>("input, select, textarea");
     (first ?? panel.current)?.focus();
     return () => opener?.focus();
   }, []);

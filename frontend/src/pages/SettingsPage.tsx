@@ -4,6 +4,7 @@ import { useIncomeSources, useMakePrimary } from "../api/income";
 import { useSession } from "../api/session";
 import {
   AUTO_LOCK_MINUTES,
+  BACKUP_KEEP_COUNTS,
   PROJECTION_HORIZONS,
   PROMO_WARNING_DAYS,
   type Settings,
@@ -17,6 +18,7 @@ import { Card } from "../components/Card";
 import { ColorPicker } from "../components/ColorPicker";
 import { EraseAllData } from "../components/EraseAllData";
 import { SecurityCard } from "../components/security/SecurityCard";
+import { BackupsCard } from "../components/settings/BackupsCard";
 import { HolidaysCard } from "../components/settings/HolidaysCard";
 import { PAGE_TITLE } from "../components/ui";
 
@@ -162,6 +164,19 @@ export function SettingsPage() {
                   onChange={(checked) => choose("start_amounts_hidden")(checked ? "true" : "false")}
                 />
               </SecurityCard>
+            )}
+            {data && (
+              <BackupsCard>
+                <SettingSelect
+                  id="backup-keep"
+                  label="Keep the last"
+                  hint="Older backups are removed as new ones are made."
+                  value={data.backup_keep_count}
+                  disabled={update.isPending}
+                  onChange={choose("backup_keep_count")}
+                  options={BACKUP_KEEP_COUNTS.map((count) => ({ value: count, label: `${count} backups` }))}
+                />
+              </BackupsCard>
             )}
             <HolidaysCard />
           </div>

@@ -16,6 +16,18 @@ export const DEFAULT_SETTINGS = {
   start_amounts_hidden: "false",
   // Off, so no test depends on how near today is to a fixture's due date; tests of it turn it on.
   unpaid_highlight_days: "0",
+  backup_folder: "",
+  backup_keep_count: "30",
+};
+
+/** Backups before any has been made, kept in the app's own folder. */
+export const NO_BACKUPS = {
+  folder: "C:\\Users\\Amara\\AppData\\Roaming\\Budget\\backups",
+  usingDefaultFolder: true,
+  keepCount: 30,
+  backups: [],
+  lastBackupAt: null,
+  lastDailyBackupFailed: false,
 };
 
 /** Open, with no PIN, and the offer to set one already answered: how most tests want the app. */
@@ -37,6 +49,7 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/assets": () => ({ status: 200, data: [] }),
   "GET /api/net-worth": () => ({ status: 200, data: NOTHING_OWNED }),
   "GET /api/cards": () => ({ status: 200, data: [] }),
+  "GET /api/backups": () => ({ status: 200, data: NO_BACKUPS }),
 };
 
 /** Net worth before anything is entered. */
