@@ -33,6 +33,14 @@ function setHidden(next: boolean) {
   listeners.forEach((listener) => listener());
 }
 
+/**
+ * "Start with amounts hidden" (Settings): hides them as the app opens or is unlocked, whatever
+ * was chosen last time. The button shows them again as usual.
+ */
+export function hideAmountsNow() {
+  setHidden(true);
+}
+
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => {

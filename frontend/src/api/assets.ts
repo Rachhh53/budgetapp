@@ -18,7 +18,7 @@ export interface Asset {
   name: string;
   kind: AssetKind;
   color: string;
-  /** The yearly rate it is assumed to grow by, in basis points; `null` to hold its value. */
+  /** The yearly rate its value is assumed to change by, in basis points: above zero it gains, below zero it loses; `null` to hold its value. */
   appreciationBp: number | null;
   /** The loan against it, for equity; `null` when it is owned outright. */
   linkedLoanAccountId: number | null;
@@ -27,7 +27,7 @@ export interface Asset {
   latestValue: AssetValue | null;
   /** What it is taken to be worth today; `null` until a value is entered. */
   valueCents: number | null;
-  /** True when today's value was grown from the latest entry by the assumed rate. */
+  /** True when today's value was worked out from the latest entry by the assumed rate, up or down. */
   estimate: boolean;
   /** What is still owed on the loan against it; `null` without a loan. */
   owedCents: number | null;

@@ -128,6 +128,13 @@ describe("accounts screen", () => {
     // Labels suggested for an investment account, and a bank that already exists.
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Label (optional)" }), "401{Enter}");
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Bank or institution (optional)" }), "coast{Enter}");
+    // The form comes a screen at a time, so it never needs scrolling.
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 2");
+    expect(within(dialog).queryByRole("button", { name: /Color/ })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 2 of 2");
+    // The keyboard goes to the screen that opened.
+    expect(within(dialog).getByRole("button", { name: /Color/ })).toHaveFocus();
     await userEvent.click(within(dialog).getByRole("button", { name: /Color/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Plum" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
@@ -170,6 +177,7 @@ describe("accounts screen", () => {
     const dialog = screen.getByRole("dialog", { name: "Add an account" });
     await userEvent.type(within(dialog).getByLabelText("Name"), "Rainy Day Savings");
     await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Savings");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.type(within(dialog).getByLabelText("Interest rate, APY % (optional)"), "4.1");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
 
@@ -184,9 +192,47 @@ describe("accounts screen", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
     const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Everyday Card");
     await userEvent.selectOptions(within(dialog).getByLabelText("Kind of account"), "Credit card");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
 
+    expect(within(dialog).getByRole("button", { name: /Color/ })).toBeInTheDocument();
     expect(within(dialog).queryByLabelText("Interest rate, APY % (optional)")).not.toBeInTheDocument();
+  });
+
+  it("goes back a screen with what was typed still there, and saves nothing on the way", async () => {
+    const fetchMock = fakeBackend();
+    renderApp("/accounts");
+    await screen.findByText("No accounts yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Rainy Day Savings");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.type(within(dialog).getByLabelText("Interest rate, APY % (optional)"), "4.1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Rainy Day Savings");
+    expect(within(dialog).getByLabelText("Name")).toHaveFocus();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByLabelText("Interest rate, APY % (optional)")).toHaveValue("4.1");
+    expect(calls(fetchMock)).not.toContain("POST /api/accounts");
+  });
+
+  it("says what is wrong with a rate on the screen that asks for it", async () => {
+    const fetchMock = fakeBackend();
+    renderApp("/accounts");
+    await screen.findByText("No accounts yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an account" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Rainy Day Savings");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.type(within(dialog).getByLabelText("Interest rate, APY % (optional)"), "lots");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter a rate like 4.10.");
+    expect(calls(fetchMock)).not.toContain("POST /api/accounts");
   });
 
   it("shows each account as a row that opens: a link with the hand cursor set outright", async () => {
@@ -214,6 +260,8 @@ describe("accounts screen", () => {
     await screen.findByRole("link", { name: /Everyday Checking/ });
 
     await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Rainy Day Savings");
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
 
     // Teal is taken by Everyday Checking, so the next preset is offered.
     expect(screen.getByRole("button", { name: /Color/ })).toHaveAccessibleName("Color Raspberry");
@@ -227,6 +275,7 @@ describe("accounts screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add account" }));
     const dialog = screen.getByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Name"), " ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add account" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Please add a name for the account.");

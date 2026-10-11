@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account } from "../../src/api/accounts";
@@ -8,8 +8,8 @@ import type { Entry } from "../../src/api/entries";
 import type { PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
-import { todayIso } from "../../src/lib/dates";
-import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
+import { addDays, todayIso } from "../../src/lib/dates";
+import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
   id: 1,
@@ -763,13 +763,55 @@ describe("pay period screen", () => {
     );
   });
 
-  it("opens a recurring item from its name for a this-and-all-future change", async () => {
-    withPeriod();
+  it("opens a short form for that one time from a row's name, with the item itself a link away", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, paid: true }, changed: true }),
+    });
     renderApp();
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
 
-    expect(screen.getByRole("dialog", { name: "Edit Electric" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    expect(dialog).toHaveTextContent("Just this one, due Oct 16. The others stay as they are.");
+    // Nothing about the item as a whole is asked here, so the form stays short.
+    expect(within(dialog).queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Change Electric itself" })).toHaveAttribute("href", "/recurring/2");
+    // The day it was paid can be chosen, which the row's tick cannot do.
+    expect(within(dialog).getByLabelText("Paid on")).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Paid" }));
+    fireEvent.change(within(dialog).getByLabelText("Paid on"), { target: { value: "2026-10-09" } });
+    await userEvent.type(within(dialog).getByLabelText("Confirmation code"), "EL-4471");
+    // This one can be moved to another day, and have a note of its own.
+    expect(within(dialog).getByLabelText("Due on")).toHaveValue("2026-10-16");
+    fireEvent.change(within(dialog).getByLabelText("Due on"), { target: { value: "2026-10-19" } });
+    await userEvent.type(within(dialog).getByLabelText("Note (optional)"), "Budget billing starts");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // Only what was changed is sent: the amount was left alone.
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([
+      { dueDate: "2026-10-19", note: "Budget billing starts", paid: true, paidDate: "2026-10-09", confirmationCode: "EL-4471" },
+    ]);
+  });
+
+  it("asks for an amount that reads as one in that form, and sends nothing when nothing changed", async () => {
+    const fetchMock = withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    const amount = within(dialog).getByRole("textbox", { name: "Amount this time" });
+    const before = (amount as HTMLInputElement).value;
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "about ninety");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter an amount like 1,250.00.");
+
+    await userEvent.clear(amount);
+    await userEvent.type(amount, before);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls(fetchMock).some((call) => call.startsWith("PUT /api/items"))).toBe(false);
   });
 
   it("blurs every amount while Hide amounts is on", async () => {
@@ -865,6 +907,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}i{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "1,500");
@@ -908,6 +952,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}e{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     // Setting aside is for money arriving; money leaving says where it comes from instead.
@@ -938,6 +984,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}e{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
@@ -955,6 +1003,8 @@ describe("+ Add item", () => {
     });
     renderApp();
 
+    // The shortcut belongs to the loaded screen: wait for it, as someone at the keyboard would.
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
     await userEvent.keyboard("{Control>}i{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     expect(within(dialog).getByRole("radio", { name: "Money in" })).toBeChecked();
@@ -1122,5 +1172,51 @@ describe("undo", () => {
     await userEvent.keyboard("{Control>}z{/Control}");
 
     expect(await screen.findByText(/Your data is safe/)).toBeInTheDocument();
+  });
+});
+
+describe("bills due soon", () => {
+  /** Electric, paid by hand, due `ahead` days from today, with the setting at `days`. */
+  function electricDueIn(ahead: number, days: string, bill: Partial<Occurrence> = {}) {
+    const due = addDays(todayIso(), ahead);
+    return withPeriod(
+      { ...OCTOBER, occurrences: [{ ...ELECTRIC, dueDate: due, payBy: due, ...bill }] },
+      { "GET /api/settings": () => ({ status: 200, data: { ...DEFAULT_SETTINGS, unpaid_highlight_days: days } }) },
+    );
+  }
+
+  it("says so in words on a bill paid by hand that falls due within the days chosen in Settings", async () => {
+    electricDueIn(2, "3");
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(await within(manual).findByText("Due in 2 days")).toBeInTheDocument();
+  });
+
+  it("says today and tomorrow by name", async () => {
+    electricDueIn(0, "3");
+    const { unmount } = renderApp();
+    expect(await within(await panel("Pay manually & one-offs")).findByText("Due today")).toBeInTheDocument();
+    unmount();
+
+    electricDueIn(1, "3");
+    renderApp();
+    expect(await within(await panel("Pay manually & one-offs")).findByText("Due tomorrow")).toBeInTheDocument();
+  });
+
+  it("leaves alone a bill further off, one already paid, and every bill when the setting is off", async () => {
+    for (const [ahead, days, bill] of [
+      [5, "3", {}],
+      [2, "3", { paid: true, paidDate: todayIso() }],
+      [2, "0", {}],
+    ] as const) {
+      electricDueIn(ahead, days, bill);
+      const { unmount } = renderApp();
+
+      const manual = await panel("Pay manually & one-offs");
+      await within(manual).findByRole("checkbox", { name: "Electric paid" });
+      expect(within(manual).queryByText(/^Due (today|tomorrow|in \d+ days)$/)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });

@@ -53,7 +53,11 @@ export function Modal({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Start on the first field, so the form can be filled in straight away.
-    const first = panel.current?.querySelector<HTMLElement>("[data-autofocus], input, select, textarea");
+    // A control marked as the place to start wins wherever it sits (the safe answer to a
+    // question that asks first, say); otherwise the first field.
+    const first =
+      panel.current?.querySelector<HTMLElement>("[data-autofocus]") ??
+      panel.current?.querySelector<HTMLElement>("input, select, textarea");
     (first ?? panel.current)?.focus();
     return () => opener?.focus();
   }, []);
@@ -137,7 +141,8 @@ export function Modal({
         }}
         onClickCapture={noteChoice}
         // Never the full height: a strip of the page stays in view above and below, so it reads as a dialog over the page.
-        className="max-h-[calc(100dvh-2rem)] w-full overflow-y-auto sm:max-h-[calc(100dvh-6rem)] rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
+        // The strip is kept thin, because a form has to fit a 768px-high laptop screen without scrolling.
+        className="max-h-[calc(100dvh-2rem)] w-full overflow-y-auto sm:max-h-[calc(100dvh-3rem)] rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
       >
         <div
           // Reaches the panel's edges through its padding; a light tint, so the title keeps its contrast.

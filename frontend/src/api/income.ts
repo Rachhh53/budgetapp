@@ -222,6 +222,15 @@ export function useSaveIncomeSource(id?: number) {
   });
 }
 
+/** "Pay periods follow": makes one source the primary one, leaving everything else about it alone. */
+export function useMakePrimary() {
+  const refresh = useRefreshIncome();
+  return useMutation({
+    mutationFn: (id: number) => api.put<IncomeSource>(`/api/income-sources/${id}/primary`, {}),
+    onSuccess: refresh,
+  });
+}
+
 export function useDeleteIncomeSource(id: number) {
   const refresh = useRefreshIncome();
   return useMutation({

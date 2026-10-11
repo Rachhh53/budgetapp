@@ -396,6 +396,30 @@ public final class IncomeRepository {
                 .orElse(null);
     }
 
+    /**
+     * Makes one source the primary one, so its schedule defines the pay periods, and nothing
+     * else about any source changes.
+     *
+     * @return false when there is no such source
+     */
+    public boolean makePrimary(long id) {
+        return jdbi.inTransaction(handle -> {
+            boolean exists = handle.createQuery("SELECT EXISTS (SELECT 1 FROM income_sources WHERE id = :id)")
+                    .bind("id", id)
+                    .mapTo(Boolean.class)
+                    .one();
+            if (!exists) {
+                return false;
+            }
+            // The old one first: there is never a moment with two.
+            handle.createUpdate("UPDATE income_sources SET is_primary = 0 WHERE is_primary = 1 AND id <> :id")
+                    .bind("id", id)
+                    .execute();
+            handle.createUpdate("UPDATE income_sources SET is_primary = 1 WHERE id = :id").bind("id", id).execute();
+            return true;
+        });
+    }
+
     /** Everything about a source that is not an amount: its name, account, schedule and whether it is the primary one. */
     private static void updateSource(Handle handle, long id, Fields fields) {
         if (fields.primary()) {

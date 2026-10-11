@@ -55,6 +55,7 @@ class IncomeApiTest extends ApiTestBase {
             assertThat(server.post("/api/income-sources", secondJob(), null).status()).isEqualTo(401);
             assertThat(server.put("/api/income-sources/" + id, salary("Changed", true), null).status()).isEqualTo(401);
             assertThat(server.delete("/api/income-sources/" + id, null).status()).isEqualTo(401);
+            assertThat(server.put("/api/income-sources/" + id + "/primary", "{}", null).status()).isEqualTo(401);
             assertThat(server.put("/api/income-sources/" + id + "/paychecks/2026-10-15", "{\"netCents\":1}", null).status())
                     .isEqualTo(401);
             assertThat(server.get("/api/paychecks", null).status()).isEqualTo(401);
@@ -178,6 +179,38 @@ class IncomeApiTest extends ApiTestBase {
 
             assertThat(reply.status()).isEqualTo(400);
             assertThat(reply.error()).contains("pay periods");
+            assertThat(server.get("/api/income-sources", cookie).data().get(0).get("primary").asBoolean()).isTrue();
+        }
+
+        @Test
+        void payPeriodsCanBeHandedToAnotherSourceWithoutSendingItAllAgain() throws Exception {
+            long acme = create(salary("Acme Corp", true));
+            long bakery = create(secondJob());
+
+            Reply reply = server.put("/api/income-sources/" + bakery + "/primary", "{}", cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.changed()).isTrue();
+            assertThat(reply.data().get("primary").asBoolean()).isTrue();
+            // Nothing else about either source moved.
+            assertThat(reply.data().get("netCents").asLong()).isEqualTo(31840);
+            JsonNode sources = server.get("/api/income-sources", cookie).data();
+            assertThat(sources.get(0).get("id").asLong()).isEqualTo(bakery);
+            assertThat(sources.get(1).get("id").asLong()).isEqualTo(acme);
+            assertThat(sources.get(1).get("primary").asBoolean()).isFalse();
+            assertThat(server.get("/api/pay-periods", cookie).data().get("primarySourceId").asLong()).isEqualTo(bakery);
+
+            server.post("/api/undo", null, cookie);
+
+            assertThat(server.get("/api/pay-periods", cookie).data().get("primarySourceId").asLong()).isEqualTo(acme);
+        }
+
+        @Test
+        void handingPayPeriodsToASourceThatIsNotThereIsNotFound() throws Exception {
+            create(salary("Acme Corp", true));
+
+            assertThat(server.put("/api/income-sources/999/primary", "{}", cookie).status()).isEqualTo(404);
+            assertThat(server.put("/api/income-sources/abc/primary", "{}", cookie).status()).isEqualTo(404);
             assertThat(server.get("/api/income-sources", cookie).data().get(0).get("primary").asBoolean()).isTrue();
         }
 

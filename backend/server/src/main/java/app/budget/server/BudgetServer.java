@@ -10,8 +10,13 @@ import app.budget.server.api.LowerCaseEnumSerializer;
 import app.budget.server.assets.AssetsRepository;
 import app.budget.server.assets.AssetsRoutes;
 import app.budget.server.assets.NetWorthCalculator;
+import app.budget.server.auth.AuthRepository;
+import app.budget.server.auth.PinService;
 import app.budget.server.auth.SessionRoutes;
 import app.budget.server.auth.SessionStore;
+import app.budget.server.backups.BackupRoutes;
+import app.budget.server.backups.BackupService;
+import app.budget.server.backups.FolderBrowser;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRoutes;
 import app.budget.server.cards.CardsRepository;
@@ -39,6 +44,7 @@ import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
 import app.budget.server.schedule.HolidaysRepository;
 import app.budget.server.schedule.HolidaysRoutes;
+import app.budget.server.settings.SettingKey;
 import app.budget.server.settings.SettingsRepository;
 import app.budget.server.settings.SettingsRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -54,7 +60,9 @@ import io.javalin.router.Endpoint;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,12 +98,20 @@ public final class BudgetServer {
 
     private final Config config;
     private final Javalin app;
+    private final BackupService backups;
 
-    public BudgetServer(Config config, Database database, SessionStore sessions, Clock clock, Runnable onShutdown) {
+    public BudgetServer(Config config, Database database, Clock clock, Runnable onShutdown) {
         this.config = config;
         byte[] indexHtml = readIndexHtml();
 
         SettingsRepository settings = new SettingsRepository(database.jdbi(), clock);
+        // Auto-lock follows the setting as it is now, not as it was when the app started.
+        SessionStore sessions = new SessionStore(clock,
+                () -> Duration.ofMinutes(Long.parseLong(settings.get(SettingKey.AUTO_LOCK_MINUTES))));
+        AuthRepository auth = new AuthRepository(database.jdbi());
+        PinService pins = new PinService(auth, clock);
+        backups = new BackupService(database, settings, auth, clock);
+        FolderBrowser folders = new FolderBrowser(Path.of(System.getProperty("user.home")));
         AccountsRepository accounts = new AccountsRepository(database.jdbi(), clock);
         HolidaysRepository holidays = new HolidaysRepository(database.jdbi());
         IncomeRepository income = new IncomeRepository(database.jdbi(), clock);
@@ -129,7 +145,7 @@ public final class BudgetServer {
             routes.before(BudgetServer::addSecurityHeaders);
 
             // Registers the session gate first, so it runs ahead of every route added below.
-            new SessionRoutes(sessions).register(routes);
+            new SessionRoutes(sessions, pins).register(routes);
             // Straight after the gate: everything a signed-in request changes from here on can be undone.
             new ChangeRoutes(new ChangeLog(database.jdbi(), clock)).register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
@@ -146,6 +162,7 @@ public final class BudgetServer {
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
             new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
             new DataRoutes(database, sessions).register(routes);
+            new BackupRoutes(backups, folders, settings, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
 
             routes.exception(ApiException.class, (e, ctx) -> ApiResponse.fail(ctx, e.status(), e.getMessage()));
@@ -171,6 +188,11 @@ public final class BudgetServer {
 
     public void stop() {
         app.stop();
+    }
+
+    /** The backup service, for the daily timer (started by {@code Main}, not by tests). */
+    public BackupService backups() {
+        return backups;
     }
 
     private static ObjectMapper jsonMapper() {

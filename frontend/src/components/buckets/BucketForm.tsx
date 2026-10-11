@@ -8,13 +8,13 @@ import { formatDate, todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { DaySelect } from "../DaySelect";
+import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
-import { describeItemSchedule } from "../items/labels";
 import { PauseItem } from "../items/PauseItem";
 import { BucketHistory } from "./BucketHistory";
-import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { BUTTON_DANGER_OUTLINE, BUTTON_LINK, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /** What the history calls the amount a new bucket was given, when that is dated earlier than today. */
 const STARTING_NOTE = "Starting amount";
@@ -32,14 +32,25 @@ interface BucketFormProps {
   bucket?: Bucket;
   /** Every bucket, for the recently used colors. */
   buckets: readonly Bucket[];
+  /** Opened from the bucket's recurring amount (on the Recurring items screen): start on how much goes in each time. */
+  forAmount?: boolean;
   onClose: () => void;
 }
+
+/** The parts of the form. Each is a screen of its own: on a phone none of them leaves room for another. */
+type BucketPart = "what" | "goal" | "each" | "held" | "dates" | "history" | "pause" | "away";
+
+/** When adding, the first three are the questions everyone is asked; the rest wait behind "More options". */
+const QUESTIONS = 3;
 
 /**
  * Add or change a bucket: money set aside inside one checking or savings account. This is the
  * one place a savings goal is set up, in three questions: what it is for, how much by when,
  * and how much goes in each time. The recurring amount belongs to the bucket: it is added,
  * changed and stopped here, not on the Recurring items screen.
+ *
+ * The form is shown a screen at a time (see `useFormParts`), so it never needs scrolling.
+ * Whatever else puts money in the bucket is listed on its row of the Buckets card, not here.
  */
 export function BucketForm(props: BucketFormProps) {
   const { account, bucket, onClose } = props;
@@ -57,12 +68,14 @@ export function BucketForm(props: BucketFormProps) {
   );
 }
 
-function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormProps & { items: readonly Item[] }) {
+function BucketFields({ account, bucket, buckets, items, forAmount, onClose }: BucketFormProps & { items: readonly Item[] }) {
   const id = useId();
   const save = useSaveBucket(bucket?.id);
+  // Archiving has its own button beside Delete; saving the form leaves it as it is.
+  const archived = bucket?.archived ?? false;
 
   // Everything recurring that puts money in this bucket. Its own amount is the first bucket move
-  // still running on a cadence this form offers; anything else is listed, and changed where it lives.
+  // still running on a cadence this form offers; anything else is changed where it lives.
   const feeding = bucket
     ? items.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))
     : [];
@@ -73,7 +86,6 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
       (item.schedule.frequency === "every_pay_period" || item.schedule.frequency === "monthly") &&
       (item.schedule.endDate === null || item.schedule.endDate > todayIso()),
   );
-  const others = feeding.filter((item) => item !== own);
 
   // Newest buckets first, so the colors offered first are the ones used most recently.
   const usedColors = [...buckets].reverse().map((existing) => existing.color);
@@ -98,10 +110,19 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
   const addMove = useSaveItem();
   const changeMove = useSaveItem(own?.id);
   const [note, setNote] = useState(bucket?.note ?? "");
-  // Archiving has its own button beside Delete; saving the form leaves it as it is.
-  const archived = bucket?.archived ?? false;
   const [chosenOpenedOn, setChosenOpenedOn] = useState<string | null>(bucket?.openedOn ?? null);
-  const [problem, setProblem] = useState<string>();
+
+  // An archived bucket sets nothing aside, so it is not asked how much or what it holds; only a running amount can be paused.
+  const groups: FormGroup<BucketPart>[] = [
+    { label: "Name, color and note", parts: ["what"] },
+    { label: "Goal", parts: ["goal"] },
+    ...(archived ? [] : ([{ label: "How much each time", parts: ["each"] }, { label: "What it holds", parts: ["held"] }] as const)),
+    { label: "Dates", parts: ["dates"] },
+    ...(bucket ? [{ label: "Changed by hand", parts: ["history"] } as const] : []),
+    ...(bucket && !archived && own ? [{ label: "Pause", parts: ["pause"] } as const] : []),
+    ...(bucket ? [{ label: archived ? "Bring back or delete" : "Archive or delete", parts: ["away"] } as const] : []),
+  ];
+  const parts = useFormParts<BucketPart>({ groups, adding: !bucket, required: QUESTIONS, startAt: forAmount ? "each" : undefined });
   // Set once a new bucket has been added, so trying again after a later step failed does not add it twice.
   const [createdId, setCreatedId] = useState<number>();
 
@@ -133,19 +154,44 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
     setCadence(wanted);
     setAmount(centsToInput(alreadyEach(wanted) + moreCents));
   };
+  // What the goal takes is on top of anything already going in.
+  const more = feeding.length > 0 ? "more " : "";
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  /** The first thing that cannot be saved as it is, and the screen it is on. */
+  const check = (): PartProblem<BucketPart> | null => {
+    const wrong = (
+      [
+        ["goal", goal],
+        ["each", archived ? "" : amount],
+        ["held", bucket ? held : starting],
+      ] as const
+    ).find(([, text]) => optionalCents(text) === "invalid");
+    if (wrong) {
+      return { part: wrong[0], problem: AMOUNT_HELP };
+    }
+    // The dates start out filled in, and are on screens of their own, so the browser cannot ask for them.
+    if (!archived && heldOn === "") {
+      return { part: "held", problem: "Please choose the day that amount is as of." };
+    }
+    if (!archived && amount.trim() !== "" && startsOn === "") {
+      return { part: "dates", problem: "Please choose the day setting aside starts." };
+    }
+    if (openedOn === "") {
+      return { part: "dates", problem: "Please choose the day this bucket counts from." };
+    }
+    return null;
+  };
+
+  const send = async () => {
     const goalCents = optionalCents(goal);
     const startingCents = optionalCents(starting);
     // An empty "In this bucket" reads as nothing in it.
     const heldCents = bucket ? (optionalCents(held) ?? 0) : null;
     const moveCents = optionalCents(amount);
     if (goalCents === "invalid" || startingCents === "invalid" || heldCents === "invalid" || moveCents === "invalid") {
-      setProblem(AMOUNT_HELP);
+      // `check` has already turned these away; this is for the compiler.
       return;
     }
-    setProblem(undefined);
     const goalSet = goalCents !== null && goalCents > 0;
     try {
       let bucketId = bucket?.id ?? createdId;
@@ -241,11 +287,13 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
 
   const saving = save.isPending || adjust.isPending || addMove.isPending || changeMove.isPending;
   const failure =
-    problem ?? save.error?.message ?? adjust.error?.message ?? addMove.error?.message ?? changeMove.error?.message;
+    parts.problem ?? save.error?.message ?? adjust.error?.message ?? addMove.error?.message ?? changeMove.error?.message;
 
   return (
-    <>
-      <form onSubmit={submit} className="space-y-4">
+    <form ref={parts.ref} onSubmit={(event: FormEvent) => parts.submit(event, check, () => void send())} className="space-y-4">
+      {parts.header()}
+
+      {parts.shows("what") && (
         <FormSection title="What are you saving for?">
           <div>
             <label htmlFor={`${id}-name`} className={LABEL}>
@@ -263,8 +311,16 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
             />
           </div>
           <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
+          <div>
+            <label htmlFor={`${id}-note`} className={LABEL}>
+              Note (optional)
+            </label>
+            <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={200} autoComplete="off" className={INPUT} />
+          </div>
         </FormSection>
+      )}
 
+      {parts.shows("goal") && (
         <FormSection title="How much, by when?">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <MoneyField label="Goal (optional)" value={goal} onChange={setGoal} />
@@ -272,222 +328,156 @@ function BucketFields({ account, bucket, buckets, items, onClose }: BucketFormPr
               <label htmlFor={`${id}-goal-date`} className={LABEL}>
                 Goal date (optional)
               </label>
-              <input
-                id={`${id}-goal-date`}
-                type="date"
-                value={goalDate}
-                onChange={(event) => setGoalDate(event.target.value)}
-                className={INPUT}
-              />
+              <input id={`${id}-goal-date`} type="date" value={goalDate} onChange={(event) => setGoalDate(event.target.value)} className={INPUT} />
             </div>
           </div>
           <p className={HINT}>With both, the app works out how much to set aside each time.</p>
-        </FormSection>
-
-        {!archived && (
-          <FormSection title="How much each time?">
-            {/* The answer to "how much do I need to save?", as soon as there is a goal and a date. */}
-            {pace && hasGoal && (
-              <div role="status" className="rounded-lg border-l-4 border-accent bg-surface px-4 py-3">
-                {pace.shortCents === 0 ? (
-                  <p>
-                    <span className="font-semibold">On track.</span> What it holds and what is already going in reach{" "}
-                    <span data-amount>{formatCents(goalInMind)}</span> by {formatDate(goalDate)}.
-                  </p>
-                ) : (
-                  <>
-                    <p>
-                      To have <span data-amount>{formatCents(goalInMind)}</span> by {formatDate(goalDate)}, set aside{" "}
-                      {pace.morePerPaycheckCents !== null && (
-                        <>
-                          <span data-amount className="font-semibold tabular-nums">
-                            {formatCents(pace.morePerPaycheckCents)}
-                          </span>{" "}
-                          every paycheck ({pace.paydaysLeft} {pace.paydaysLeft === 1 ? "paycheck" : "paychecks"} left), or{" "}
-                        </>
-                      )}
-                      <span data-amount className="font-semibold tabular-nums">
-                        {formatCents(pace.morePerMonthCents ?? pace.shortCents)}
-                      </span>{" "}
-                      a month{feeding.length > 0 ? ", on top of what already goes in" : ""}.
-                    </p>
-                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                      {pace.morePerPaycheckCents !== null && (
-                        <button type="button" onClick={() => use("every_pay_period", pace.morePerPaycheckCents ?? 0)} className={BUTTON_SECONDARY}>
-                          Use <span data-amount>{formatCents(alreadyEach("every_pay_period") + pace.morePerPaycheckCents)}</span> every paycheck
-                        </button>
-                      )}
-                      {pace.morePerMonthCents !== null && (
-                        <button type="button" onClick={() => use("monthly", pace.morePerMonthCents ?? 0)} className={BUTTON_SECONDARY}>
-                          Use <span data-amount>{formatCents(alreadyEach("monthly") + pace.morePerMonthCents)}</span> a month
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <MoneyField label="Set aside (optional)" value={amount} onChange={setAmount} />
-              <div>
-                <label htmlFor={`${id}-cadence`} className={LABEL}>
-                  How often
-                </label>
-                <select id={`${id}-cadence`} value={cadence} onChange={(event) => setCadence(event.target.value as Cadence)} className={INPUT}>
-                  <option value="every_pay_period">Every paycheck</option>
-                  <option value="monthly">Every month</option>
-                </select>
-              </div>
-              {cadence === "monthly" && <DaySelect id={`${id}-day`} label="Day of the month" value={monthDay} onChange={setMonthDay} />}
-              <div>
-                <label htmlFor={`${id}-starts`} className={LABEL}>
-                  Starting
-                </label>
-                <input
-                  id={`${id}-starts`}
-                  type="date"
-                  value={startsOn}
-                  onChange={(event) => setStartsOn(event.target.value)}
-                  required={amount.trim() !== ""}
-                  className={INPUT}
-                />
-              </div>
-            </div>
-            <p className={HINT}>
-              {own
-                ? "Change the amount to save more or less from now on. Empty it to stop."
-                : "The money stays in this account; it is set aside, so less shows as available."}{" "}
-              Choose an earlier starting day to build up what it would already have set aside since then.
-            </p>
-
-            {hasGoal && (
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={stopAtGoal}
-                  onChange={(event) => setStopAtGoal(event.target.checked)}
-                  className="size-5 accent-(--accent)"
-                />
-                <span>Stop when the goal is reached</span>
-              </label>
-            )}
-
-            {others.length > 0 && (
-              <div>
-                <p className={LABEL}>Also going into this bucket</p>
-                <ul aria-label="Also going into this bucket" className="text-muted">
-                  {others.map((item) => (
-                    <li key={item.id}>
-                      {item.name} ·{" "}
-                      {item.saveUpBucketId === bucket?.id ? (
-                        "saved up for every paycheck"
-                      ) : (
-                        <>
-                          <span data-amount className="tabular-nums">
-                            {formatCents(item.perOccurrenceCents)}
-                          </span>{" "}
-                          {describeItemSchedule(item.schedule).toLowerCase()}
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                <p className={HINT}>These are changed under Recurring items.</p>
-              </div>
-            )}
-          </FormSection>
-        )}
-        {/* The bucket's own recurring amount can be stopped for a while without ending it. */}
-        {!archived && own && <PauseItem item={own} />}
-
-        {/* Everything a savings goal does not need to ask, kept out of the way until wanted. */}
-        <details className="rounded-lg border border-line px-4 py-1">
-          <summary className="min-h-11 cursor-pointer content-center font-medium">More options</summary>
-          <div className="space-y-4 pb-3">
-            {!bucket && (
-              <MoneyField
-                label="Already set aside (optional)"
-                value={starting}
-                onChange={setStarting}
-                hint="What this bucket already holds."
-              />
-            )}
-            {bucket && !bucket.archived && (
-              <MoneyField
-                label="In this bucket"
-                value={held}
-                onChange={setHeld}
-                hint="What it holds today. Change it to set a new amount; the difference is recorded as an adjustment."
-              />
-            )}
-            {!bucket?.archived && (
-              <div>
-                <label htmlFor={`${id}-held-on`} className={LABEL}>
-                  As of
-                </label>
-                <input
-                  id={`${id}-held-on`}
-                  type="date"
-                  value={heldOn}
-                  onChange={(event) => setHeldOn(event.target.value)}
-                  required
-                  className={INPUT}
-                />
-                <p className={HINT}>
-                  The day that amount {bucket ? "changes" : "went in"}. Today unless you choose an earlier day, to build the balance up from then.
-                </p>
-              </div>
-            )}
-
-            <div>
-              <label htmlFor={`${id}-opened`} className={LABEL}>
-                Counts from
-              </label>
+          {hasGoal && (
+            <label className="flex min-h-11 items-center gap-3">
               <input
-                id={`${id}-opened`}
-                type="date"
-                value={openedOn}
-                max={todayIso()}
-                onChange={(event) => setChosenOpenedOn(event.target.value)}
-                required
-                className={INPUT}
+                type="checkbox"
+                checked={stopAtGoal}
+                onChange={(event) => setStopAtGoal(event.target.checked)}
+                className="size-5 accent-(--accent)"
               />
-              <p className={HINT}>
-                Recurring amounts, save-ups and interest reach this bucket from this day on. Choose an earlier day to bring in ones
-                dated before it.
-              </p>
-            </div>
+              <span>Stop when the goal is reached</span>
+            </label>
+          )}
+        </FormSection>
+      )}
 
-            <div>
-              <label htmlFor={`${id}-note`} className={LABEL}>
-                Note (optional)
+      {!archived && parts.shows("each") && (
+        <FormSection title="How much each time?">
+          {/* The answer to "how much do I need to save?", as soon as there is a goal and a date. Kept short: it shares the screen with the fields it fills in. */}
+          {pace && hasGoal && (
+            <div role="status" className="rounded-lg border-l-4 border-accent bg-surface px-4 py-2">
+              {pace.shortCents === 0 ? (
+                <p>
+                  <span className="font-semibold">On track</span> for <span data-amount>{formatCents(goalInMind)}</span> by {formatDate(goalDate)}.
+                </p>
+              ) : (
+                <>
+                  <p>
+                    <span data-amount>{formatCents(goalInMind)}</span> by {formatDate(goalDate)} takes{" "}
+                    {pace.morePerPaycheckCents !== null && (
+                      <>
+                        <span data-amount className="font-semibold tabular-nums">
+                          {formatCents(pace.morePerPaycheckCents)}
+                        </span>{" "}
+                        {more}every paycheck ({pace.paydaysLeft} left), or{" "}
+                      </>
+                    )}
+                    <span data-amount className="font-semibold tabular-nums">
+                      {formatCents(pace.morePerMonthCents ?? pace.shortCents)}
+                    </span>{" "}
+                    {more}a month.
+                  </p>
+                  <div className="-mx-2 flex flex-wrap gap-x-2">
+                    {pace.morePerPaycheckCents !== null && (
+                      <button type="button" onClick={() => use("every_pay_period", pace.morePerPaycheckCents ?? 0)} className={BUTTON_LINK}>
+                        Use <span data-amount>{formatCents(alreadyEach("every_pay_period") + pace.morePerPaycheckCents)}</span> every paycheck
+                      </button>
+                    )}
+                    {pace.morePerMonthCents !== null && (
+                      <button type="button" onClick={() => use("monthly", pace.morePerMonthCents ?? 0)} className={BUTTON_LINK}>
+                        Use <span data-amount>{formatCents(alreadyEach("monthly") + pace.morePerMonthCents)}</span> a month
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <MoneyField
+            label="Set aside (optional)"
+            value={amount}
+            onChange={setAmount}
+            hint={own ? "Change it to save more or less from now on. Empty it to stop." : "It stays in this account, set aside, so less shows as available."}
+          />
+          {/* Side by side on a phone too: two short lists, and the screen has no height to spare. */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className={cadence === "monthly" ? undefined : "col-span-2"}>
+              <label htmlFor={`${id}-cadence`} className={LABEL}>
+                How often
               </label>
-              <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={200} autoComplete="off" className={INPUT} />
+              <select id={`${id}-cadence`} value={cadence} onChange={(event) => setCadence(event.target.value as Cadence)} className={INPUT}>
+                <option value="every_pay_period">Every paycheck</option>
+                <option value="monthly">Every month</option>
+              </select>
             </div>
-
+            {cadence === "monthly" && <DaySelect id={`${id}-day`} label="Day of the month" value={monthDay} onChange={setMonthDay} />}
           </div>
-        </details>
+        </FormSection>
+      )}
 
-        {failure && (
-          <p role="alert" className="text-danger">
-            {failure}
-          </p>
-        )}
+      {!archived && parts.shows("held") && (
+        <FormSection title={bucket ? "What it holds" : "What it already holds"}>
+          {bucket ? (
+            <MoneyField
+              label="In this bucket"
+              value={held}
+              onChange={setHeld}
+              hint="What it holds today. Change it to set a new amount; the difference is recorded as an adjustment."
+            />
+          ) : (
+            <MoneyField label="Already set aside (optional)" value={starting} onChange={setStarting} hint="What this bucket already holds." />
+          )}
+          <div>
+            <label htmlFor={`${id}-held-on`} className={LABEL}>
+              As of
+            </label>
+            <input id={`${id}-held-on`} type="date" value={heldOn} onChange={(event) => setHeldOn(event.target.value)} className={INPUT} />
+            <p className={HINT}>
+              The day that amount {bucket ? "changes" : "went in"}. Today unless you choose an earlier day, to build the balance up from then.
+            </p>
+          </div>
+        </FormSection>
+      )}
 
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
-            Cancel
-          </button>
-          <button type="submit" disabled={saving} className={BUTTON_PRIMARY}>
-            {saving ? "Saving…" : bucket ? "Save changes" : "Add bucket"}
-          </button>
-        </div>
-      </form>
+      {parts.shows("dates") && (
+        <FormSection title="Dates">
+          {!archived && (
+            <div>
+              <label htmlFor={`${id}-starts`} className={LABEL}>
+                Setting aside starts
+              </label>
+              <input id={`${id}-starts`} type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} className={INPUT} />
+              <p className={HINT}>For the amount set aside each time. An earlier day builds up what it would have set aside since then.</p>
+            </div>
+          )}
+          <div>
+            <label htmlFor={`${id}-opened`} className={LABEL}>
+              Counts from
+            </label>
+            <input
+              id={`${id}-opened`}
+              type="date"
+              value={openedOn}
+              max={todayIso()}
+              onChange={(event) => setChosenOpenedOn(event.target.value)}
+              className={INPUT}
+            />
+            <p className={HINT}>
+              Recurring amounts, save-ups and interest reach this bucket from this day on. Choose an earlier day to bring in ones dated before it.
+            </p>
+          </div>
+        </FormSection>
+      )}
 
-      {bucket && <BucketHistory bucket={bucket} />}
-      {bucket && <ArchiveOrDelete bucket={bucket} onDone={onClose} />}
-    </>
+      {/* These three act straight away, on their own: nothing else typed in the form is saved by them. */}
+      {bucket && parts.shows("history") && <BucketHistory bucket={bucket} />}
+      {!archived && own && parts.shows("pause") && <PauseItem item={own} />}
+      {bucket && parts.shows("away") && <ArchiveOrDelete bucket={bucket} onDone={onClose} />}
+
+      {failure && (
+        <p role="alert" className="text-danger">
+          {failure}
+        </p>
+      )}
+
+      {parts.buttons({ onClose, pending: saving, saveLabel: bucket ? "Save changes" : "Add bucket" })}
+    </form>
   );
 }
 
@@ -501,7 +491,7 @@ function ArchiveOrDelete({ bucket, onDone }: { bucket: Bucket; onDone: () => voi
   const busy = remove.isPending || save.isPending;
   const failure = remove.error?.message ?? save.error?.message;
   return (
-    <div className="mt-6 border-t border-line pt-4">
+    <FormSection title={bucket.archived ? "Bring back or delete" : "Archive or delete"}>
       <div className="flex flex-col gap-2 sm:flex-row">
         <button
           type="button"
@@ -536,10 +526,10 @@ function ArchiveOrDelete({ bucket, onDone }: { bucket: Bucket; onDone: () => voi
         Either way the money stays in the account.
       </p>
       {failure && (
-        <p role="alert" className="mt-2 text-danger">
+        <p role="alert" className="text-danger">
           {failure}
         </p>
       )}
-    </div>
+    </FormSection>
   );
 }

@@ -52,9 +52,10 @@ class ChangeLogTest {
 
         assertThat(tracked).contains("accounts", "balance_entries", "items", "item_versions", "occurrence_overrides",
                 "entries", "entry_tags", "categories", "tags", "settings", "income_sources", "paycheck_overrides");
-        // Whatever is not tracked is the log itself or the migration history: nothing of the user's.
+        // Whatever is not tracked is the log itself, the migration history, or the app lock
+        // (Undo must never bring back an old PIN): nothing of the user's money.
         assertThat(all).filteredOn(table -> !tracked.contains(table))
-                .containsExactlyInAnyOrder("change_groups", "change_log", "change_recording", "flyway_schema_history");
+                .containsExactlyInAnyOrder("change_groups", "change_log", "change_recording", "flyway_schema_history", "auth");
     }
 
     @Test

@@ -99,14 +99,23 @@ separate apps: every install is "Budget" to Windows, and every install uses the 
 
 ## API
 
-Every response is `{ data, error, status }`. Every route needs a session cookie except the three marked open.
+Every response is `{ data, error, status }`. Every route needs a session cookie except those marked open.
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/health` | open |
-| POST | `/api/session` | open; unlock. From this PC only until the PIN arrives (Phase 6) |
-| GET | `/api/session` | session status |
+| POST | `/api/session` | open; unlock with `{ pin }`. With no PIN set, an empty body unlocks from this PC only. A wrong PIN is 401; too many are 429 with how long to wait |
+| GET | `/api/session` | open; `{ unlocked, pinSet, retryAfterSeconds, offerPin }` |
 | DELETE | `/api/session` | lock |
+| PUT | `/api/pin` | set or change the PIN `{ newPin, currentPin? }` (4 to 8 digits; `currentPin` once one is set). Setting the first one answers with the recovery code, shown once. Every other session ends |
+| DELETE | `/api/pin` | remove the PIN `{ currentPin }` |
+| DELETE | `/api/pin/offer` | "not now" to the first-launch offer of a PIN, so it is not offered again |
+| POST | `/api/pin/recovery` | open; forgot the PIN: `{ recoveryCode, newPin }` sets the new PIN, unlocks, and answers with a new recovery code. Wrong codes count with wrong PINs |
+| POST | `/api/pin/recovery-code` | a new recovery code `{ currentPin }`; the old one stops working |
+| GET, POST | `/api/backups` | the backups in the chosen folder, newest first, with the folder and how many are kept; POST backs up now |
+| PUT | `/api/backups/folder` | this PC only; choose where backups go `{ path }`, or `null` for the app's own folder |
+| POST | `/api/backups/restore` | this PC only; replace everything with a backup `{ name, confirm: "restore-backup" }`. The current data is saved first; the PIN and backup folder are kept; every session ends |
+| GET, POST | `/api/folders` | this PC only; for the folder chooser: the drives, or the folders inside `?path=`; POST adds one `{ parent, name }` |
 | GET | `/api/settings` | all settings with effective values |
 | PUT | `/api/settings/{key}` | body `{ "value": "…" }`; validated against fixed choices |
 | GET, POST | `/api/accounts` | list; add `{ name, type, color, institution?, subtypeLabel?, lowBalanceThresholdCents? }` (the threshold is for checking and savings) |
@@ -116,12 +125,12 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | GET | `/api/accounts/{id}/transactions` | what moved the account, newest first: paychecks, recurring items, one-off entries, transfers arriving, estimated interest and balances entered, each `{ date, label, kind, amountCents, unpaid }`; optional `from`, `to` (default: this year so far through the next month) |
 | PUT | `/api/account-balances` | enter balances for several accounts on one day `{ date, balances: [{ accountId, amountCents }] }`, as one change that Undo takes back together; `{ saved }` |
 | GET | `/api/accounts/{id}/performance` | `thisYear` `{ since, startCents, nowCents, changeCents, depositsCents, growthCents }` and, for each balance entered, its change since the one before, what was put in between them and the rest (growth) |
-| GET, POST | `/api/assets` | a home, vehicle or anything else owned, with today's value, what is owed on its linked loan and equity; add `{ name, kind, color, appreciationBp?, linkedLoanAccountId?, valueCents?, valueDate? }`. `kind` is `home`, `vehicle` or `other`; `appreciationBp` is an assumed yearly growth, zero or more |
+| GET, POST | `/api/assets` | a home, vehicle or anything else owned, with today's value, what is owed on its linked loan and equity; add `{ name, kind, color, appreciationBp?, linkedLoanAccountId?, valueCents?, valueDate? }`. `kind` is `home`, `vehicle` or `other`; `appreciationBp` is an assumed annual change in its value: above zero it gains (up to 100000), below zero it loses (down to -9900, a loss of 99% a year) |
 | GET, PUT, DELETE | `/api/assets/{id}` | one asset with every value entered; change or archive; delete |
 | POST | `/api/assets/{id}/values` | enter a value `{ date, valueCents }`; the same day again replaces it |
 | DELETE | `/api/assets/{id}/values/{valueId}` | remove one value |
 | GET | `/api/net-worth` | today: `{ date, netWorthCents, assetsCents, liabilitiesCents, cashCents, investmentsCents, propertyCents, cardsCents, loansCents }`, every part a positive amount |
-| GET | `/api/accounts/{id}/projection` | the balance, and what is available after buckets, at each pay period's end; optional `from`, `to` |
+| GET | `/api/accounts/{id}/projection` | the balance, and what is available after buckets, at each pay period's end; optional `from`, `to` (any dates up to ten years apart, between 2000 and 2100: the past as worked out, or past the look-ahead) |
 | PUT | `/api/accounts/{id}/interest` | when interest is credited and where it goes `{ creditDay, destination, destinationBucketId? }`; `creditDay` 31 means the last day; `destination` is `unassigned`, `bucket` or `proportional` |
 | POST | `/api/accounts/{id}/rates` | a rate from a date on `{ rateBp, effectiveDate }` (4.10% is 410); the same date again replaces it |
 | DELETE | `/api/accounts/{id}/rates/{rateId}` | remove one rate |
@@ -144,6 +153,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/accounts/{id}/balances/{entryId}` | remove one entry |
 | GET, POST | `/api/income-sources` | list; add `{ name, depositAccountId, netCents, grossCents?, netIsEstimate?, primary?, schedule, deductions?, match? }`. `match` is the employer match, paid into an investment account: `{ toAccountId, mode: "fixed", fixedCents }` or `{ toAccountId, mode: "formula", matchBp, capBpOfGross }` (50% up to 6% of gross is 5000 and 600; without `grossCents` it also needs `contributionWithinCap: true`, the user's confirmation that what they put in is within that share, and all of it is then matched). Each deduction is `{ name, toAccountId?, amountCents }` or `{ name, toAccountId?, percentBp }`, a share of gross pay (6% is 600; needs `grossCents`) that comes back with the `amountCents` it works out to. Each source comes back with `matchFigures` `{ perPaycheckCents, mostPossibleCents, contributeMoreCents }` |
 | PUT, DELETE | `/api/income-sources/{id}` | change; delete (the primary one only when it is the last). The amounts sent (`grossCents`, `netCents`, `netIsEstimate`, `deductions`, `match`) correct the ones in force today, unless the body says otherwise: `effectiveFrom` (a date) makes them a change of pay from that day on — a raise — with earlier paychecks keeping theirs, and `originalAmounts: true` corrects the amounts the source started with. Each source comes back with the amounts in force today and `payHistory`, every set oldest first: `{ id, effectiveDate, grossCents, netCents, netIsEstimate, deductions, match, matchFigures, current }` (`id` and `effectiveDate` are null for the amounts it started with) |
+| PUT | `/api/income-sources/{id}/primary` | make this the income whose paydays set the pay periods |
 | DELETE | `/api/income-sources/{id}/pay-changes/{changeId}` | remove one change of pay, so the amounts before it carry on; returns the source |
 | GET | `/api/income-sources/{id}/this-year` | what the source brings home this calendar year: `{ year, soFarCents, paychecksSoFar, wholeYearCents, paychecksInYear, estimate }` — paychecks that have arrived (today's included) and every paycheck of the year, each counted in the year it arrives |
 | PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
@@ -176,7 +186,10 @@ Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Ite
 `budget` and `card_payment`; item schedules are `every_pay_period`, `weekly`, `biweekly`, `semi_monthly`, `monthly`,
 `every_n_months`, `yearly` and `one_time`. A balance you enter stands for the start of that day (see `spec.md` §5.3). Settings keys: `theme`,
 `accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36), `promo_warning_days` (30, 45, 60, 90 or 120: how long
-before a card's promotional rate ends the warnings start).
+before a card's promotional rate ends the warnings start), `unpaid_highlight_days` (0, 1, 2, 3, 5, 7, 10 or 14: how soon
+before it is due a bill you pay by hand is pointed out; 0 is never), `auto_lock_minutes` (1, 5, 15, 30 or 60),
+`start_amounts_hidden` (`true` or `false`) and `backup_keep_count` (7, 14, 30, 60 or 90). `backup_folder` is read here
+but set with `PUT /api/backups/folder`.
 
 ## CI and dependency checks
 
@@ -217,6 +230,43 @@ until the entry is deleted. A finding that genuinely cannot apply (code that is 
 build) goes in `desktop/src-tauri/osv-scanner.toml` with the reason; anything temporary there
 carries an `ignoreUntil` date.
 
+## PIN and locking
+
+A PIN is optional. Budget offers one the first time it opens, and it can be set, changed or removed under
+**Settings → Security**. With a PIN set, the app asks for it when it opens, after **Lock now**, and after it has sat
+idle for the time chosen there. It is an app lock, not encryption: for protection at rest, turn on Windows BitLocker.
+
+When the PIN is first set, Budget shows a **recovery code** once. Keep it somewhere safe, away from the PC.
+After two wrong tries the app makes you wait before the next, longer each time (30 seconds up to an hour).
+
+### If you forget your PIN
+
+1. On the lock screen choose **I forgot my PIN** and enter the recovery code. You pick a new PIN and get a new code.
+2. If the code is lost as well, your data is still safe. Close Budget, then in PowerShell run the app's own
+   backend with `--reset-pin` (it is in the folder Budget was installed to, by default under
+   `%LOCALAPPDATA%\Budget`):
+
+   ```powershell
+   & "$env:LOCALAPPDATA\Budget\backend\budget-backend.exe" --reset-pin
+   ```
+
+   It removes the PIN, touches nothing else, and says so. Open Budget again and set a new PIN in Settings.
+   This works only on the PC itself, with the app closed; there is no way to do it over the network.
+
+In development: `java -jar server\target\app\budget-server.jar --reset-pin` from `backend`, with the same
+`BUDGET_DATA_DIR` as the app.
+
+## Backups
+
+While it is open, Budget makes one backup a day: a zip holding the database and the `files/` folder. Under
+**Settings → Backups** you choose the folder (another drive is best), how many to keep, back up now, and restore.
+Until a folder is chosen they go in `backups\` inside the data folder.
+
+- **The zips are not encrypted.** Anyone who can open the folder can read them, so choose it with that in mind.
+- **Restore** replaces everything with the backup you pick. What is there now is saved first, as
+  `budget-before-restore-….zip` in the data folder's `backups\`. Your current PIN and backup folder are kept.
+- A backup made by a newer version of Budget is refused, with a message saying so.
+
 ## Data and privacy
 
 - Data folder: `%APPDATA%\Budget` — `budget.db`, `logs/`, `backups/`, `files/`. Uninstalling keeps
@@ -227,4 +277,5 @@ carries an `ignoreUntil` date.
 - The session token lives in an HttpOnly, SameSite=Strict cookie and in memory only.
 - A strict Content-Security-Policy blocks every external origin; requests with an unrecognised
   `Host` header are refused (protection against DNS rebinding).
+- The PIN is kept only as an Argon2id hash, and the recovery code likewise; neither is written to a log or to a backup's name.
 - For protection at rest, turn on Windows BitLocker.

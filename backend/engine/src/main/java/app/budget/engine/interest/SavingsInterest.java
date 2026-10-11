@@ -32,11 +32,26 @@ public final class SavingsInterest {
     /** Newton's method settles in a handful of steps; this only stops a rate that never would. */
     private static final int MAX_STEPS = 60;
 
+    /** 100%, in basis points. */
+    private static final int WHOLE_BP = 10_000;
+
     private SavingsInterest() {}
 
     /** One month's rate for a yearly APY: {@code (1 + APY)^(1/12) − 1}. */
     public static BigDecimal monthlyRate(BasisPoints apy) {
+        requireNotNegative(apy);
         return partOfAYearRate(apy, MONTHS_IN_YEAR);
+    }
+
+    /**
+     * One month's share of a annual change that may be a loss: {@code (1 + rate)^(1/12) − 1},
+     * which is below zero for a negative rate. For something whose worth can fall, such as a
+     * car; interest is never negative, so {@link #monthlyRate} refuses one.
+     *
+     * @throws IllegalArgumentException for a loss of 100% a year or more, which has no monthly share
+     */
+    public static BigDecimal monthlyChange(BasisPoints yearly) {
+        return partOfAYearRate(yearly, MONTHS_IN_YEAR);
     }
 
     /**
@@ -45,13 +60,20 @@ public final class SavingsInterest {
      * adds one more, which an assumption can bear.
      */
     public static BigDecimal dailyRate(BasisPoints apy) {
+        requireNotNegative(apy);
         return partOfAYearRate(apy, DAYS_IN_YEAR);
+    }
+
+    private static void requireNotNegative(BasisPoints apy) {
+        if (apy.value() < 0) {
+            throw new IllegalArgumentException("An APY cannot be negative");
+        }
     }
 
     /** The rate for one of {@code parts} equal parts of a year: {@code (1 + APY)^(1/parts) − 1}. */
     private static BigDecimal partOfAYearRate(BasisPoints apy, int parts) {
-        if (apy.value() < 0) {
-            throw new IllegalArgumentException("An APY cannot be negative");
+        if (apy.value() <= -WHOLE_BP) {
+            throw new IllegalArgumentException("A yearly loss must be less than 100%");
         }
         BigDecimal count = BigDecimal.valueOf(parts);
         BigDecimal target = BigDecimal.ONE.add(apy.toFraction());

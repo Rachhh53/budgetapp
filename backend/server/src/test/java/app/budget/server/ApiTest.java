@@ -55,8 +55,18 @@ class ApiTest {
     @Nested
     class Session {
         @Test
-        void statusRequiresASession() throws Exception {
+        void statusSaysLockedWithoutASession() throws Exception {
+            // Open on purpose: the lock screen has to ask whether a PIN is needed.
             Reply reply = server.get("/api/session", null);
+
+            assertThat(reply.status()).isEqualTo(200);
+            assertThat(reply.data().get("unlocked").asBoolean()).isFalse();
+            assertThat(reply.data().get("pinSet").asBoolean()).isFalse();
+        }
+
+        @Test
+        void aLockedRequestIsRefusedKindly() throws Exception {
+            Reply reply = server.get("/api/settings", null);
 
             assertThat(reply.status()).isEqualTo(401);
             assertThat(reply.error()).contains("locked");
@@ -84,12 +94,12 @@ class ApiTest {
         void aSessionCookieUnlocksProtectedRoutes() throws Exception {
             String cookie = server.unlock();
 
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(200);
         }
 
         @Test
         void aMadeUpCookieIsRejected() throws Exception {
-            assertThat(server.get("/api/session", "budget_session=not-a-real-token").status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", "budget_session=not-a-real-token").status()).isEqualTo(401);
         }
 
         @Test
@@ -97,7 +107,7 @@ class ApiTest {
             String cookie = server.unlock();
 
             assertThat(server.delete("/api/session", cookie).status()).isEqualTo(200);
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(401);
         }
 
         @Test
@@ -106,7 +116,7 @@ class ApiTest {
 
             server.clock.advance(TestServer.SESSION_IDLE.plusSeconds(1));
 
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(401);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(401);
         }
 
         @Test
@@ -114,10 +124,10 @@ class ApiTest {
             String cookie = server.unlock();
 
             server.clock.advance(Duration.ofMinutes(10));
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(200);
             server.clock.advance(Duration.ofMinutes(10));
 
-            assertThat(server.get("/api/session", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).status()).isEqualTo(200);
         }
     }
 
@@ -140,6 +150,26 @@ class ApiTest {
             assertThat(reply.status()).isEqualTo(200);
             assertThat(reply.data().get("theme").asText()).isEqualTo("system");
             assertThat(reply.data().get("accent_color").asText()).isEqualTo("#0f766e");
+            assertThat(reply.data().get("auto_lock_minutes").asText()).isEqualTo("15");
+            assertThat(reply.data().get("start_amounts_hidden").asText()).isEqualTo("false");
+            assertThat(reply.data().get("unpaid_highlight_days").asText()).isEqualTo("3");
+        }
+
+        @Test
+        void theNewerSettingsTakeOnlyTheirOwnChoices() throws Exception {
+            String cookie = server.unlock();
+
+            assertThat(server.put("/api/settings/auto_lock_minutes", "{\"value\":\"5\"}", cookie).status()).isEqualTo(200);
+            assertThat(server.put("/api/settings/auto_lock_minutes", "{\"value\":\"7\"}", cookie).status()).isEqualTo(400);
+            assertThat(server.put("/api/settings/start_amounts_hidden", "{\"value\":\"true\"}", cookie).status()).isEqualTo(200);
+            assertThat(server.put("/api/settings/start_amounts_hidden", "{\"value\":\"yes\"}", cookie).status()).isEqualTo(400);
+            assertThat(server.put("/api/settings/unpaid_highlight_days", "{\"value\":\"0\"}", cookie).status()).isEqualTo(200);
+            assertThat(server.put("/api/settings/unpaid_highlight_days", "{\"value\":\"4\"}", cookie).status()).isEqualTo(400);
+
+            Reply saved = server.get("/api/settings", cookie);
+            assertThat(saved.data().get("auto_lock_minutes").asText()).isEqualTo("5");
+            assertThat(saved.data().get("start_amounts_hidden").asText()).isEqualTo("true");
+            assertThat(saved.data().get("unpaid_highlight_days").asText()).isEqualTo("0");
         }
 
         @Test

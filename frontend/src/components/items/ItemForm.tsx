@@ -130,7 +130,7 @@ export function ItemForm(props: ItemFormProps) {
   const bucket = props.item?.kind === "bucket_move" ? buckets?.find((candidate) => candidate.id === props.item?.bucketId) : undefined;
   const account = bucket && props.accounts.find((candidate) => candidate.id === bucket.accountId);
   if (bucket && account && buckets) {
-    return <BucketForm account={account} bucket={bucket} buckets={buckets} onClose={props.onClose} />;
+    return <BucketForm account={account} bucket={bucket} buckets={buckets} forAmount onClose={props.onClose} />;
   }
   return (
     <Modal

@@ -26,10 +26,14 @@ public final class ChangeRoutes {
     private static final Set<String> NOT_DATA = Set.of("/api/session", "/api/shutdown");
 
     /**
-     * Changes that cannot be taken back: Undo itself (there is no redo), and erasing all
-     * data, which must leave nothing behind (spec §7). They still wait their turn.
+     * Changes that cannot be taken back: Undo itself (there is no redo), erasing all data,
+     * which must leave nothing behind (spec §7), and restoring a backup, which replaces the
+     * change log along with everything else. They still wait their turn.
      */
-    private static final Set<String> NOT_RECORDED = Set.of("/api/undo", "/api/data");
+    private static final Set<String> NOT_RECORDED = Set.of("/api/undo", "/api/data", "/api/backups/restore");
+
+    /** Requests that write files on this PC but none of the budget's data: nothing to record, nothing to wait for. */
+    private static final Set<String> NOT_BUDGET_DATA = Set.of("/api/backups", "/api/folders");
 
     private static final String TURN_HELD = "changes.turnHeld";
     private static final String RECORDING = "changes.recording";
@@ -61,7 +65,7 @@ public final class ChangeRoutes {
     public record Undone(boolean undone, boolean available) {}
 
     private void start(Context ctx) throws InterruptedException {
-        if (READS.contains(ctx.method().name()) || NOT_DATA.contains(ctx.path())) {
+        if (READS.contains(ctx.method().name()) || NOT_DATA.contains(ctx.path()) || NOT_BUDGET_DATA.contains(ctx.path())) {
             return;
         }
         if (!turn.tryAcquire(WAIT_SECONDS, TimeUnit.SECONDS)) {

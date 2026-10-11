@@ -14,7 +14,7 @@ describe("erase all data", () => {
     const fetchMock = fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
     renderApp("/settings");
 
-    await userEvent.click(screen.getByRole("button", { name: "Erase all data…" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Erase all data…" }));
 
     expect(screen.getByRole("alertdialog")).toHaveTextContent("This can't be undone");
     expect(calls(fetchMock)).not.toContain("DELETE /api/data");
@@ -24,7 +24,7 @@ describe("erase all data", () => {
     fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
     renderApp("/settings");
 
-    await userEvent.click(screen.getByRole("button", { name: "Erase all data…" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Erase all data…" }));
 
     expect(screen.getByRole("button", { name: "Keep my data" })).toHaveFocus();
   });
@@ -33,7 +33,7 @@ describe("erase all data", () => {
     const fetchMock = fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
     renderApp("/settings");
 
-    await userEvent.click(screen.getByRole("button", { name: "Erase all data…" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Erase all data…" }));
     await userEvent.click(screen.getByRole("button", { name: "Keep my data" }));
 
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -54,7 +54,7 @@ describe("erase all data", () => {
     renderApp("/settings");
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Erase all data…" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Erase all data…" }));
     await userEvent.click(screen.getByRole("button", { name: "Yes, erase everything" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("your data has been erased");
@@ -72,7 +72,7 @@ describe("erase all data", () => {
     });
     renderApp("/settings");
 
-    await userEvent.click(screen.getByRole("button", { name: "Erase all data…" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Erase all data…" }));
     await userEvent.click(screen.getByRole("button", { name: "Yes, erase everything" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Your data is safe");

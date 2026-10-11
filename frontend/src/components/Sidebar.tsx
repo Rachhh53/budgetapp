@@ -1,5 +1,6 @@
 import { NavLink } from "react-router";
 import { NAV_ITEMS } from "../nav";
+import { LockNowButton } from "./security/LockNow";
 
 export const PRIVACY_NOTE = "Data stored only on this PC";
 
@@ -30,6 +31,9 @@ export function Sidebar() {
         </ul>
       </nav>
 
+      <div className="px-3 pt-3">
+        <LockNowButton className="flex min-h-11 w-full items-center gap-3 rounded-lg border border-sidebar-active px-3 text-[0.95rem] hover:bg-sidebar-active/60 disabled:opacity-60" />
+      </div>
       <p className="px-6 py-5 text-sm text-sidebar-muted">{PRIVACY_NOTE}</p>
     </aside>
   );

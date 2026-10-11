@@ -14,11 +14,12 @@ import { centsToInput, parseDollars } from "../../lib/money";
 import { parseRate } from "../../lib/rates";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
+import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { TextPicker } from "../Picker";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { LABEL_SUGGESTIONS, TYPE_LABELS } from "./labels";
 
 /** The highest rate the backend takes: 1,000%, in basis points. */
@@ -34,7 +35,14 @@ interface AccountFormProps {
   onDeleted?: () => void;
 }
 
-/** Add or change an account. Everything chosen from a list is a picker, never free text. */
+/** The parts of the form: what the account is, how it looks, its warnings, and putting it away. */
+type AccountPart = "what" | "look" | "warnings" | "about";
+
+
+/**
+ * Add or change an account. Everything chosen from a list is a picker, never free text. The
+ * form is shown a screen at a time (see `useFormParts`), so it never needs scrolling.
+ */
 export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFormProps) {
   const id = useId();
   const save = useSaveAccount(account?.id);
@@ -51,7 +59,13 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
     account?.lowBalanceThresholdCents != null ? centsToInput(account.lowBalanceThresholdCents) : "",
   );
   const [apy, setApy] = useState("");
-  const [problem, setProblem] = useState<string>();
+  // Adding takes two screens; changing has a third, for archiving and deleting. Only checking and savings have warnings.
+  const groups: FormGroup<AccountPart>[] = [
+    { label: "Details", parts: ["what"] },
+    { label: holdsCash(type) ? "Color and warnings" : "Color", parts: ["look", "warnings"] },
+    ...(account ? [{ label: "Archive or delete", parts: ["about"] } as const] : []),
+  ];
+  const parts = useFormParts<AccountPart>({ groups, adding: !account });
   const saveRate = useSaveRateFor();
   // Set once a new account is in but its rate was refused: adding again would make a second account.
   const [addedWithoutRate, setAddedWithoutRate] = useState(false);
@@ -62,21 +76,22 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
     ...accounts.filter((existing) => existing.type === type).map((existing) => existing.subtypeLabel),
   ]);
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    // Only checking and savings can have the warning; an empty field means no warning.
-    const threshold = holdsCash(type) && lowBalance.trim() !== "" ? parseDollars(lowBalance) : null;
+  // Only checking and savings can have the warning; an empty field means no warning.
+  const threshold = holdsCash(type) && lowBalance.trim() !== "" ? parseDollars(lowBalance) : null;
+  // The rate can be given while adding; afterwards it has a history, kept on the account's page.
+  const rateBp = !account && holdsCash(type) && apy.trim() !== "" ? parseRate(apy) : null;
+
+  const check = (): PartProblem<AccountPart> | null => {
     if (holdsCash(type) && lowBalance.trim() !== "" && (threshold === null || threshold < 0)) {
-      setProblem(AMOUNT_HELP);
-      return;
+      return { part: "warnings", problem: AMOUNT_HELP };
     }
-    // The rate can be given while adding; afterwards it has a history, kept on the account's page.
-    const rateBp = !account && holdsCash(type) && apy.trim() !== "" ? parseRate(apy) : null;
     if (!account && holdsCash(type) && apy.trim() !== "" && (rateBp === null || rateBp > MAX_RATE_BP)) {
-      setProblem("Please enter a rate like 4.10.");
-      return;
+      return { part: "warnings", problem: "Please enter a rate like 4.10." };
     }
-    setProblem(undefined);
+    return null;
+  };
+
+  const send = () => {
     save.mutate(
       {
         name,
@@ -103,72 +118,77 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
   };
 
   const failure =
-    problem ??
+    parts.problem ??
     save.error?.message ??
     (addedWithoutRate ? "The account was added, but its interest rate could not be saved. You can add the rate on the account's page." : undefined);
 
   return (
     <Modal title={account ? "Edit account" : "Add an account"} icon={Landmark} tone={account?.color} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-4">
-        <FormSection title="What it is">
-          <div>
-            <label htmlFor={`${id}-name`} className={LABEL}>
-              Name
-            </label>
-            <input
-              id={`${id}-name`}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={80}
-              required
-              autoComplete="off"
-              className={INPUT}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <form ref={parts.ref} onSubmit={(event: FormEvent) => parts.submit(event, check, send)} className="space-y-4">
+        {parts.header()}
+        {parts.shows("what") && (
+          <FormSection title="What it is">
             <div>
-              <label htmlFor={`${id}-type`} className={LABEL}>
-                Kind of account
+              <label htmlFor={`${id}-name`} className={LABEL}>
+                Name
               </label>
-              <select
-                id={`${id}-type`}
-                value={type}
-                onChange={(event) => setType(event.target.value as AccountType)}
+              <input
+                id={`${id}-name`}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                maxLength={80}
+                required
+                autoComplete="off"
                 className={INPUT}
-              >
-                {ACCOUNT_TYPES.map((option) => (
-                  <option key={option} value={option}>
-                    {TYPE_LABELS[option]}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor={`${id}-type`} className={LABEL}>
+                  Kind of account
+                </label>
+                <select
+                  id={`${id}-type`}
+                  value={type}
+                  onChange={(event) => setType(event.target.value as AccountType)}
+                  className={INPUT}
+                >
+                  {ACCOUNT_TYPES.map((option) => (
+                    <option key={option} value={option}>
+                      {TYPE_LABELS[option]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <TextPicker
+                label="Label (optional)"
+                noun="label"
+                placeholder="e.g. 401(k), Mortgage"
+                suggestions={labels}
+                value={subtypeLabel}
+                onChange={setSubtypeLabel}
+              />
+            </div>
+
             <TextPicker
-              label="Label (optional)"
-              noun="label"
-              placeholder="e.g. 401(k), Mortgage"
-              suggestions={labels}
-              value={subtypeLabel}
-              onChange={setSubtypeLabel}
+              label="Bank or institution (optional)"
+              noun="bank"
+              placeholder="Choose or type a bank"
+              suggestions={institutions}
+              value={institution}
+              onChange={setInstitution}
             />
-          </div>
+          </FormSection>
+        )}
 
-          <TextPicker
-            label="Bank or institution (optional)"
-            noun="bank"
-            placeholder="Choose or type a bank"
-            suggestions={institutions}
-            value={institution}
-            onChange={setInstitution}
-          />
-        </FormSection>
+        {parts.shows("look") && (
+          <FormSection title="How it looks">
+            <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
+          </FormSection>
+        )}
 
-        <FormSection title="How it looks">
-          <ColorPicker label="Color" value={color} onChange={setColor} recent={usedColors} />
-        </FormSection>
-
-        {holdsCash(type) && (
+        {parts.shows("warnings") && holdsCash(type) && (
           <FormSection title="Warnings and interest">
             <MoneyField
               label="Warn me when the balance dips below (optional)"
@@ -177,12 +197,8 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
               hint="Pay periods where it is projected to go lower are flagged. Leave empty for no warning."
             />
 
-            {account ? (
-              <p className={HINT}>
-                Interest rate: add or change it under <span className="font-semibold">Interest</span> on this account's page, where its
-                history is kept.
-              </p>
-            ) : (
+            {/* Afterwards the rate has a history, and is changed in the Interest card on the account's page. */}
+            {!account && (
               <div>
                 <label htmlFor={`${id}-apy`} className={LABEL}>
                   Interest rate, APY % (optional)
@@ -196,15 +212,13 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
                   placeholder="e.g. 4.10"
                   className={INPUT}
                 />
-                <p className={HINT}>
-                  With a rate, each month's interest is projected as an estimate. You can change it later on the account's page.
-                </p>
+                <p className={HINT}>Each month's interest is then projected, as an estimate.</p>
               </div>
             )}
           </FormSection>
         )}
 
-        {account && (
+        {account && parts.shows("about") && (
           <FormSection title="About this account">
             <div>
               <label className="flex min-h-11 items-center gap-3">
@@ -227,19 +241,22 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
           </p>
         )}
 
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
-            {addedWithoutRate ? "Close" : "Cancel"}
-          </button>
-          {!addedWithoutRate && (
-            <button type="submit" disabled={save.isPending || saveRate.isPending} className={BUTTON_PRIMARY}>
-              {save.isPending || saveRate.isPending ? "Saving…" : account ? "Save changes" : "Add account"}
+        {addedWithoutRate ? (
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+              Close
             </button>
-          )}
-        </div>
+          </div>
+        ) : (
+          parts.buttons({
+            onClose,
+            pending: save.isPending || saveRate.isPending,
+            saveLabel: account ? "Save changes" : "Add account",
+          })
+        )}
       </form>
 
-      {account && (
+      {account && parts.shows("about") && (
         <div className="mt-6 border-t border-line pt-4">
           <DeleteAccount
             account={account}

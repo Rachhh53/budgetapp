@@ -10,6 +10,8 @@ interface MoneyFieldProps {
   value: string;
   onChange: (text: string) => void;
   hint?: string;
+  /** A short note beside the label instead of a hint beneath the field, where height is short: "$2,845.12 · Oct 2, 2026". */
+  aside?: string;
   /** Shown under the field when what was typed is not an amount. */
   error?: string;
   required?: boolean;
@@ -28,7 +30,7 @@ export const AMOUNT_HELP = "Please enter an amount like 1,250.00.";
  * button beside it opens a calculator for anything more, and for a phone, whose number pad
  * has no plus key.
  */
-export function MoneyField({ label, value, onChange, hint, error, required, autoFocus, hero }: MoneyFieldProps) {
+export function MoneyField({ label, value, onChange, hint, aside, error, required, autoFocus, hero }: MoneyFieldProps) {
   const id = useId();
   const [calculating, setCalculating] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
@@ -57,9 +59,21 @@ export function MoneyField({ label, value, onChange, hint, error, required, auto
 
   return (
     <div>
-      <label htmlFor={id} className={LABEL}>
-        {label}
-      </label>
+      {aside ? (
+        // Side by side while they fit; a long name pushes the note onto a line of its own.
+        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3">
+          <label htmlFor={id} className="font-medium">
+            {label}
+          </label>
+          <span id={`${id}-aside`} className="text-sm text-muted tabular-nums">
+            {aside}
+          </span>
+        </div>
+      ) : (
+        <label htmlFor={id} className={LABEL}>
+          {label}
+        </label>
+      )}
       <div className="flex gap-2">
         <div className="relative min-w-0 flex-1">
           <span aria-hidden className={`pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted ${hero ? "text-2xl" : ""}`}>
@@ -77,7 +91,7 @@ export function MoneyField({ label, value, onChange, hint, error, required, auto
             autoFocus={autoFocus}
             data-autofocus={autoFocus ? true : undefined}
             aria-invalid={error ? true : undefined}
-            aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
+            aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : aside ? `${id}-aside` : undefined}
             className={`${INPUT} text-right tabular-nums ${hero ? "min-h-14 pl-9 text-2xl font-semibold" : "pl-7"}`}
           />
         </div>

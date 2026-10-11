@@ -55,9 +55,17 @@ public final class LedgerRoutes {
     }
 
     /** One account at the end of each pay period, from the current one through the horizon: its chart. */
+    /**
+     * One account at the end of each pay period overlapping {@code from}–{@code to}; by default the
+     * current one through the horizon. Earlier dates give what the account held then, as worked out
+     * from the balances entered and everything that moved; later ones run on past the horizon.
+     */
     private void accountProjection(Context ctx) {
         Account account = accounts.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound);
-        ApiResponse.ok(ctx, ledger.accountSeries(account, calendar.today(), calendar.horizonEnd()));
+        LocalDate from = Inputs.dateParam(ctx, "from", calendar.today());
+        LocalDate to = Inputs.dateParam(ctx, "to", calendar.horizonEnd());
+        Inputs.requireSensibleRange(from, to);
+        ApiResponse.ok(ctx, ledger.accountSeries(account, from, to));
     }
 
     /** Pay periods overlapping {@code from}–{@code to}; by default the current one through the horizon. */

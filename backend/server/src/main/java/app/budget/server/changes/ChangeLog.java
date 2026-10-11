@@ -29,9 +29,12 @@ public final class ChangeLog {
     /** How many changes can be undone, newest first. Older ones are forgotten. */
     static final int CHANGES_KEPT = 100;
 
-    /** Tables that are not the user's data: the log itself and the migration history. */
+    /**
+     * Tables Undo leaves alone: the log itself, the migration history, and the app lock.
+     * Undo must never bring back an old PIN, and its hashes are kept out of the log.
+     */
     private static final Set<String> NOT_TRACKED =
-            Set.of("change_groups", "change_log", "change_recording", "flyway_schema_history");
+            Set.of("change_groups", "change_log", "change_recording", "flyway_schema_history", "auth");
 
     private static final String TRIGGER_PREFIX = "track_";
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -68,6 +71,18 @@ public final class ChangeLog {
                 createTrigger(handle, table, "update", "UPDATE", oldRow, newRow);
                 createTrigger(handle, table, "delete", "DELETE", oldRow, "NULL");
             }
+        });
+    }
+
+    /**
+     * Tidies a change log that was copied while a change was still being recorded (a backup
+     * taken mid-request, now restored): nothing is being recorded any more, and a change
+     * that never wrote a row is not one Undo should offer.
+     */
+    public static void forgetUnfinished(Jdbi jdbi) {
+        jdbi.useTransaction(handle -> {
+            handle.execute("UPDATE change_recording SET group_id = NULL WHERE id = 1");
+            handle.execute("DELETE FROM change_groups WHERE id NOT IN (SELECT group_id FROM change_log)");
         });
     }
 

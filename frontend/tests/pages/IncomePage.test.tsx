@@ -109,6 +109,10 @@ function withIncome(overrides: Parameters<typeof fakeBackend>[0] = {}) {
   });
 }
 
+/** Brings up one screen of the income form, which shows a group of fields at a time so it never scrolls. */
+const show = (dialog: HTMLElement, group: string) =>
+  userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), group);
+
 describe("income screen", () => {
   it("asks for an account before any income can be added", async () => {
     fakeBackend();
@@ -280,17 +284,29 @@ describe("income screen", () => {
     const dialog = screen.getByRole("dialog", { name: "Add an income source" });
     await userEvent.type(within(dialog).getByLabelText("Name"), "Northwind Health");
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Deposited to" }), "every{Enter}");
-    await userEvent.selectOptions(within(dialog).getByLabelText("How often"), "Twice a month");
-    await userEvent.selectOptions(within(dialog).getByLabelText("Second payday of the month"), "Last day");
-    await userEvent.type(within(dialog).getByLabelText("Take-home per paycheck"), "2,486.20");
-    await userEvent.type(within(dialog).getByLabelText("Gross per paycheck (optional)"), "3600");
-    await userEvent.click(within(dialog).getByRole("button", { name: "+ Add a deduction" }));
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Deduction 1" }), "401{Enter}");
-    await userEvent.type(within(dialog).getByLabelText("Amount"), "150");
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Goes into (optional)" }), "retire{Enter}");
     const primary = within(dialog).getByLabelText("This paycheck sets my pay periods");
     expect(primary).toBeChecked();
     expect(primary).toBeDisabled();
+    // Three steps, a screen each: who pays, when, how much.
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 3");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole("group", { name: "When you're paid" })).toBeInTheDocument();
+    await userEvent.selectOptions(within(dialog).getByLabelText("How often"), "Twice a month");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Second payday of the month"), "Last day");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.type(within(dialog).getByLabelText("Take-home per paycheck"), "2,486.20");
+    await userEvent.type(within(dialog).getByLabelText("Gross per paycheck (optional)"), "3600");
+    // It could be added here; deductions and a match are for those who have them.
+    expect(within(dialog).getByRole("button", { name: "Add income source" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Deductions and match" }));
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Deductions and match · 1 of 2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "+ Add a deduction" }));
+    expect(within(dialog).getByText("Deduction 1 of 1")).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByRole("combobox", { name: "Name" }), "401{Enter}");
+    await userEvent.type(within(dialog).getByLabelText("Amount"), "150");
+    await userEvent.type(within(dialog).getByRole("combobox", { name: "Goes into (optional)" }), "retire{Enter}");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByLabelText("Does your employer add anything?")).toHaveValue("none");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add income source" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -327,11 +343,13 @@ describe("income screen", () => {
     const dialog = screen.getByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Name"), "Riverside Bakery");
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Deposited to" }), "every{Enter}");
-    await userEvent.selectOptions(within(dialog).getByLabelText("On a weekend or holiday"), "No change");
-    await userEvent.type(within(dialog).getByLabelText("Take-home per paycheck"), "318.40");
-    await userEvent.click(within(dialog).getByLabelText("Estimate, not final yet"));
     // A later source is not primary unless asked, and may be.
     expect(within(dialog).getByLabelText("This paycheck sets my pay periods")).toBeEnabled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.selectOptions(within(dialog).getByLabelText("On a weekend or holiday"), "No change");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.type(within(dialog).getByLabelText("Take-home per paycheck"), "318.40");
+    await userEvent.click(within(dialog).getByLabelText("Estimate, not final yet"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add income source" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -354,14 +372,17 @@ describe("income screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add income source" }));
     const dialog = screen.getByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Name"), "Side work");
-    await userEvent.type(within(dialog).getByLabelText("Take-home per paycheck"), "100");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add income source" }));
+    // Each step is checked before the next opens, so what is missing is on the screen in view.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the account this pay is deposited to.");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 3");
 
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Deposited to" }), "every{Enter}");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.selectOptions(within(dialog).getByLabelText("How often"), "On dates I pick");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add income source" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please add at least two paydays");
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 2 of 3");
 
     expect(calls(fetchMock)).not.toContain("POST /api/income-sources");
   });
@@ -372,9 +393,21 @@ describe("income screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
     const dialog = screen.getByRole("dialog", { name: "Edit income source" });
-    expect(within(dialog).getByLabelText("Take-home per paycheck")).toHaveValue("2486.20");
+    // One screen at a time, chosen at the top; Save sends all of them.
+    const change = within(dialog).getByRole("combobox", { name: "What to change" });
+    expect(within(change).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Name and account",
+      "Paydays",
+      "Pay",
+      "Deductions",
+      "Employer match",
+      "Delete",
+    ]);
     expect(within(dialog).getByRole("combobox", { name: "Deposited to" })).toHaveValue("Everyday Checking");
     expect(within(dialog).getByLabelText("This paycheck sets my pay periods")).toBeDisabled();
+    await show(dialog, "Pay");
+    expect(within(dialog).getByLabelText("Take-home per paycheck")).toHaveValue("2486.20");
+    await show(dialog, "Paydays");
     await userEvent.selectOptions(within(dialog).getByLabelText("First payday of the month"), "5th");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
@@ -393,6 +426,7 @@ describe("income screen", () => {
     renderApp("/income/1");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit income source" }));
+    await show(screen.getByRole("dialog", { name: "Edit income source" }), "Delete");
     await userEvent.click(screen.getByRole("button", { name: "Delete income source…" }));
     expect(screen.getByRole("button", { name: "Keep it" })).toHaveFocus();
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));
