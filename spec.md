@@ -628,7 +628,7 @@ Not in this phase: loan amortization and loan payments (Phase 5) — a loan here
 
 ### Phase 5 — Credit cards and loans (`milestone/5-cards-loans`)
 
-**Status: complete. Rachel moved on to Phase 6 on 2026-10-11**, with the pull request being merged. Branched from `main` after Phase 4 was merged (PR #9). Verified with 193 engine, 438 server and 316 frontend tests passing.
+**Status: complete. Merged on 2026-10-11 (PR #10).** Branched from `main` after Phase 4 was merged (PR #9). Verified with 193 engine, 438 server and 316 frontend tests passing.
 
 Decided with Rachel before building (2026-10-10): Phase 5 only, in one branch and one pull request (the pop-up forms that are still too long stay carried forward); Credit cards is an overview with a page per card, like Accounts and Income, not the mockup's side-by-side (later the same day folded into Accounts, below); a card whose charges are not itemized takes one estimate per statement month (§11).
 
@@ -666,7 +666,7 @@ Not in this phase: the control for how early promo warnings start (Phase 6, Sett
 
 ### Phase 6 — Lock, settings, backups (`milestone/6-lock-settings-backups`)
 
-**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged; to be rebased onto `main` once it lands. Verified with 195 engine, 498 server and 374 frontend tests passing.
+**Status: built, waiting for Rachel to try it and confirm.** Branched from `milestone/5-cards-loans` while that was being merged, and moved onto `main` once it had (PR #10). Verified with 195 engine, 498 server and 374 frontend tests passing.
 
 Decided with Rachel before building (2026-10-11): the PIN is optional — offered on first launch and skippable, required later for phone access (Phase 12); the backup folder is chosen in an in-app folder browser, not typed and not a Windows dialog; Settings shows only options that do something yet (below); density stays automatic; the pop-up forms that were still too long are fixed in this branch.
 
