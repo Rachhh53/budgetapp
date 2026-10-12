@@ -761,7 +761,7 @@ Not in this phase: a paperclip on pay period rows that have a receipt (the count
 
 ### Phase 8 — Pay stubs (`milestone/8-pay-stubs`)
 
-**Status: built; being merged (Rachel, 2026-10-12), with Phase 9 branched from it meanwhile.** Branched from `milestone/7-expenses-reports` while that was being merged (Rachel, 2026-10-12); Phase 7 reached `main` the same day (PR #12) and `main` was merged back in.
+**Status: complete; merged to `main` on 2026-10-12 (PR #13).** Branched from `milestone/7-expenses-reports` while that was being merged (Rachel, 2026-10-12); Phase 7 reached `main` the same day (PR #12) and `main` was merged back in.
 
 Decided with Rachel before building (2026-10-12): made-up stubs only (§11); no OCR; after review she chooses each time what the stub changes (§4.3); the default date fills every form that adds something (§6).
 
@@ -803,7 +803,7 @@ Not in this phase: OCR for scans; reading a stub of more than 6 pages; hours and
 
 ### Phase 9 — Dashboard and annual costs (`milestone/9-dashboard-annual`)
 
-**Status: built; waiting for Rachel to confirm.** Branched from `milestone/8-pay-stubs` while that was being merged (Rachel, 2026-10-12).
+**Status: complete; confirmed by Rachel on 2026-10-12 after trying the installer.** Branched from `milestone/8-pay-stubs` while that was being merged; Phase 8 reached `main` the same day (PR #13) and `main` was merged back in.
 
 Decided with Rachel before building (2026-10-12): Reports and Annual costs are tabs of the Dashboard, not sidebar entries; an item's month-by-month history is on the item's own page, not in a side panel; a budget's actual is the amount typed over it; Projected vs. Actual is a third kind of report (§4.11, §5.8, §8).
 
@@ -820,7 +820,11 @@ Also in this branch:
 - **The dashboard reads through one open database connection.** Measured in the browser check: the first version took about 3.5 seconds to answer, all of it opening the database file again for each of several hundred reads; holding one open for the request brought it to about 0.2 seconds. Nothing else was changed for it. The same cost is in every screen that projects balances (net worth about 0.3 s, pay periods about 0.4 s on the same made-up data) and has been since Phase 2; left as it is, noted for Rachel.
 - `Ledger.balancesOn(days)` and `Ledger.allSeries` work every account out in one pass, for the net worth line and the lowest balance ahead.
 
-Tests: 249 engine, 663 server, 484 frontend. Checked in a real browser (Edge, against an empty throwaway data folder and made-up data) at 1440×900, 1366×768, 1280×800 and 375×812: no sideways scrolling on the three tabs or the recurring item's page; the tabs, the figures, the donut's list, the annual table and both comparison tables reflow, and both charts draw. No new dialog in this phase.
+**After Rachel's first try of the installer (2026-10-12):**
+
+- **A page opened from a Dashboard tab leads back to that tab.** A recurring item opened from Annual costs had "Recurring items" as its breadcrumb, which is not where she came from. The link now carries the tab it was followed from (`lib/cameFrom`), and the breadcrumb of the page it opens names that tab and leads back to it: a recurring item from Annual costs, from a report's lines or from the Overview's list; an expense from a report's lines; an account or card from the Overview's list. Opened any other way, the breadcrumb is what it was. A pay period and a pay stub opened from the Overview's list are unchanged (a pay period is a screen of its own; a stub's page leads to its income source).
+
+Tests: 249 engine, 663 server, 486 frontend. Checked in a real browser (Edge, against an empty throwaway data folder and made-up data) at 1440×900, 1366×768, 1280×800 and 375×812: no sideways scrolling on the three tabs or the recurring item's page; the tabs, the figures, the donut's list, the annual table and both comparison tables reflow, and both charts draw. No new dialog in this phase.
 
 Not in this phase: anything about next year's plan on the dashboard (the plan reminder, a suggestion in the too-low line, "Plan next year →") — Phase 10; a chart in a Projected vs. actual report; one-off spending in that report (nothing was projected for it).
 
@@ -834,4 +838,6 @@ Still open from Phase 0: the uninstall check has never been run by hand, and the
 | Phone access, in Settings | Phase 12, which also makes the PIN required for anything that is not this PC. |
 | Say what a Budget is, in the recurring item form | **Done in Phase 8** (asked by Rachel, 2026-10-12). Under the Type choice, every type now says what it is and when to pick it; a Budget is money you plan to spend a little at a time, with no single payment to tick off (groceries, gas, eating out). |
 | A default date for the app | **Done in Phase 8** (asked by Rachel, 2026-10-12; she chose "everything new"). Settings → "New things start on"; see §6 for what follows it and what stays on the real day. |
+| **The app is slower to come up after install** | **For the next branch to look into** (Rachel, 2026-10-12): it used to appear at once and now takes a couple of seconds, and it has got slower as phases were added. Not measured yet. Where to look first: what the backend does before it says READY (migrations, the start-up tidy of files, bank holidays), and what the first screen asks for — every read opens the database file afresh, which is what made the dashboard take 3.5 s before it was given one connection (Phase 9); net worth (about 0.3 s) and pay periods (about 0.4 s, the home screen) still pay that cost on every request. Measure the start in the installed app before changing anything. |
+| **The CI installer build takes over an hour** | **For the next branch** (Rachel, 2026-10-12): the Windows installer job compiles the whole Rust dependency tree from clean every time (§7). At the very least, build the installer when a branch is pushed and run nothing on the merge to `main` — today it is the other way round, so the long build repeats work the branch already passed. Then see what can be cut: keeping the compiled dependencies between runs (only the app's own crate needs compiling from clean), and whether the tests need to run a second time inside `build-installer.ps1` when the same push already ran them. §7 says the installer is always compiled from clean; that sentence changes with whatever is decided. |
 | Reading scanned pay stubs (OCR, Tess4J) | Not scheduled. Left out of Phase 8 by Rachel (2026-10-12): a scan is refused with a message saying a PDF downloaded from the payroll site will work. It would add Tesseract and its language data to the installer. |

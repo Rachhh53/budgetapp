@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link } from "react-router";
+import { cameFrom } from "../lib/cameFrom";
 import { type Attention, DASHBOARD_RANGE_LABELS, DASHBOARD_RANGES, type Dashboard, type DashboardRange, useDashboard } from "../api/dashboard";
 import { Card } from "../components/Card";
 import { DashboardTabs } from "../components/dashboard/DashboardTabs";
@@ -261,7 +262,7 @@ function AttentionList({ items, today }: { items: readonly Attention[]; today: s
         return (
           // Two bills can share a name and a day; nothing but its place tells them apart.
           <li key={index}>
-            <Link to={line.to} className="-mx-2 flex min-h-11 cursor-pointer items-start gap-3 rounded-lg px-2 py-3 hover:bg-bg/60">
+            <Link to={line.to} state={cameFrom("overview")} className="-mx-2 flex min-h-11 cursor-pointer items-start gap-3 rounded-lg px-2 py-3 hover:bg-bg/60">
               <span className="flex w-28 shrink-0 items-center gap-1.5 rounded-md bg-bg px-2 py-1 text-xs font-semibold tracking-wide uppercase">
                 <line.icon aria-hidden className="size-4 shrink-0" />
                 {line.tag}

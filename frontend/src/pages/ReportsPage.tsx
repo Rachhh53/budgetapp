@@ -1,6 +1,7 @@
 import { FileChartColumn, Paperclip, X } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { Link } from "react-router";
+import { cameFrom } from "../lib/cameFrom";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { savedMessage } from "../api/client";
@@ -1145,6 +1146,7 @@ function Lines({ rows, lists }: { rows: readonly ReportRow[]; lists: Lists }) {
             <li key={row.entryId !== null ? `entry-${row.entryId}` : `item-${row.itemId}-${row.scheduledDate}`}>
               <Link
                 to={row.entryId !== null ? `/expenses/${row.entryId}` : `/recurring/${row.itemId}`}
+                state={cameFrom("reports")}
                 className="-mx-2 flex min-h-11 cursor-pointer flex-col gap-1 rounded-lg px-2 py-2 hover:bg-bg/60 sm:flex-row sm:items-center sm:gap-3"
               >
                 <span className="shrink-0 text-muted sm:w-28">{formatDate(row.date)}</span>

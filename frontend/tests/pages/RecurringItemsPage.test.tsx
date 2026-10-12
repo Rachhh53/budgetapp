@@ -1037,3 +1037,49 @@ describe("A recurring item's year by month", () => {
     expect(await within(card).findByRole("alert")).toHaveTextContent("Something went wrong on our side. Please try again.");
   });
 });
+
+describe("Where a recurring item's breadcrumb leads", () => {
+  const COSTS = {
+    basis: "calendar",
+    windows: [
+      { from: "2024-01-01", to: "2024-12-31", label: "2024" },
+      { from: "2025-01-01", to: "2025-12-31", label: "2025" },
+      { from: "2026-01-01", to: "2026-12-31", label: "2026" },
+    ],
+    rows: [
+      { itemId: 2, name: "Electric", kind: "bill", categoryId: null, categoryName: null, color: null, totalsCents: [0, 159600, 174200], changeBp: 915, perMonthCents: 14517 },
+    ],
+    totalsCents: [0, 159600, 174200],
+    changeBp: 915,
+    perMonthCents: 14517,
+    biggestIncrease: null,
+    budgetedFrom: "2026-11-01",
+  };
+
+  it("goes back to Annual costs when the item was opened from there", async () => {
+    withItems([ELECTRIC], { "GET /api/annual-costs": () => ({ status: 200, data: COSTS }) });
+    renderApp("/dashboard/annual");
+
+    const table = await screen.findByRole("region", { name: "Bills and budgets" });
+    await userEvent.click(within(table).getByRole("link", { name: /Electric/ }));
+
+    await screen.findByRole("heading", { level: 1, name: "Electric" });
+    const back = screen.getByRole("link", { name: "Annual costs" });
+    expect(back).toHaveAttribute("href", "/dashboard/annual");
+    // In its place, not beside it: the header has one way back.
+    expect(within(back.parentElement!).queryByRole("link", { name: "Recurring items" })).not.toBeInTheDocument();
+
+    await userEvent.click(back);
+    expect(await screen.findByRole("heading", { level: 1, name: "Annual costs" })).toBeInTheDocument();
+  });
+
+  it("goes to Recurring items when the item was opened any other way", async () => {
+    withItems([ELECTRIC]);
+    renderApp("/recurring/2");
+
+    await screen.findByRole("heading", { level: 1, name: "Electric" });
+    const header = screen.getByRole("heading", { level: 1, name: "Electric" }).parentElement!;
+    expect(within(header).getByRole("link", { name: "Recurring items" })).toHaveAttribute("href", "/recurring");
+    expect(within(header).queryByRole("link", { name: "Annual costs" })).not.toBeInTheDocument();
+  });
+});

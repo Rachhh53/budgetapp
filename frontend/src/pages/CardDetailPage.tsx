@@ -1,6 +1,7 @@
 import { Clock, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { useCameFrom } from "../lib/cameFrom";
 import { type Account, type AccountDetail, useAccountPerformance, useAccountProjection, useAccounts } from "../api/accounts";
 import { useAttachmentCounts } from "../api/attachments";
 import { useCategories, useTags } from "../api/categories";
@@ -58,6 +59,7 @@ type Open =
  * so a card has one page, with the chart and entered balances every account has.
  */
 export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail }) {
+  const back = useCameFrom({ to: "/accounts", label: "Accounts" });
   const id = asAccount.account.id;
   const navigate = useNavigate();
   const detail = useCard(id);
@@ -111,8 +113,8 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
       <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/accounts" className="text-accent-ink underline">
-              Accounts
+            <Link to={back.to} className="text-accent-ink underline">
+              {back.label}
             </Link>{" "}
             / Credit card
           </p>

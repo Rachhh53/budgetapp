@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { useCameFrom } from "../lib/cameFrom";
 import { useAccounts } from "../api/accounts";
 import { useBuckets } from "../api/buckets";
 import { useCategories, useTags } from "../api/categories";
@@ -32,6 +33,7 @@ import { formatCents } from "../lib/money";
 export function RecurringItemDetailPage() {
   const id = Number(useParams().id);
   const navigate = useNavigate();
+  const back = useCameFrom({ to: "/recurring", label: "Recurring items" });
   const items = useItems();
   const accounts = useAccounts();
   const categories = useCategories();
@@ -80,8 +82,8 @@ export function RecurringItemDetailPage() {
       <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/recurring" className="text-accent-ink underline">
-              Recurring items
+            <Link to={back.to} className="text-accent-ink underline">
+              {back.label}
             </Link>{" "}
             / {KIND_LABELS[item.kind]}
           </p>

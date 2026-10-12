@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { cameFrom } from "../../lib/cameFrom";
 import type { Account } from "../../api/accounts";
 import { COMPARE_GROUP_LABELS, type ProjectedReport, type ProjectedRow, type ProjectedSide } from "../../api/reports";
 import { formatDate } from "../../lib/dates";
@@ -199,6 +200,7 @@ function Lines({ rows, accounts }: { rows: readonly ProjectedRow[]; accounts: re
               {row.itemId !== null ? (
                 <Link
                   to={`/recurring/${row.itemId}`}
+                  state={cameFrom("reports")}
                   className="-mx-2 flex min-h-11 cursor-pointer flex-col gap-1 rounded-lg px-2 py-2 hover:bg-bg/60 sm:flex-row sm:items-center sm:gap-3"
                 >
                   {body}

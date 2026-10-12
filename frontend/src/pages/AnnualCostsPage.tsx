@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactNode, useId, useState } from "react";
 import { Link } from "react-router";
+import { cameFrom } from "../lib/cameFrom";
 import { ANNUAL_BASES, ANNUAL_BASIS_LABELS, type AnnualBasis, type AnnualCosts, useAnnualCosts, useExportAnnualCosts } from "../api/annual";
 import { savedMessage } from "../api/client";
 import { Card } from "../components/Card";
@@ -194,7 +195,7 @@ function CostsTable({ costs }: { costs: AnnualCosts }) {
           <ul className="divide-y divide-line">
             {costs.rows.map((row) => (
               <li key={row.itemId}>
-                <Link to={`/recurring/${row.itemId}`} className={ROW}>
+                <Link to={`/recurring/${row.itemId}`} state={cameFrom("annual")} className={ROW}>
                   <span className="col-span-2 min-w-0 md:col-span-1">
                     <span className="block font-semibold wrap-break-word">{row.name}</span>
                     <span className="block text-sm text-muted wrap-break-word">
