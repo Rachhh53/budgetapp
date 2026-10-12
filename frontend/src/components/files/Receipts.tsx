@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Download, FileText, Image, Paperclip, Trash2, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, FileText, Image, Paperclip, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
 import { type DragEvent, useId, useState } from "react";
 import {
   ACCEPTED_FILES,
@@ -233,6 +233,9 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
 /** How tall a preview may grow: short in a dialog, most of the window on a page, or the whole height of a column it has to itself. */
 const PREVIEW_HEIGHTS = { compact: "max-h-[24dvh]", full: "max-h-[60dvh]", column: "max-h-[75dvh]" } as const;
 
+/** How far a preview can be enlarged, as a share of the width it has. The first is "fit": the whole page in view. */
+const ZOOMS = [100, 150, 200, 300, 400] as const;
+
 /**
  * A kept file, drawn: a picture as it is, a PDF one page at a time. The backend draws each page,
  * so nothing inside the file is ever run by the window.
@@ -253,7 +256,11 @@ export function FilePreview({
 }) {
   const [page, setPage] = useState(1);
   const [failed, setFailed] = useState(false);
+  // Small print on a pay stub or a receipt cannot be read at the size the whole page fits in
+  // (Rachel, 2026-10-12): it is enlarged in place, and scrolled inside its frame.
+  const [zoom, setZoom] = useState(0);
   const pages = pageCount ?? 1;
+  const percent = ZOOMS[zoom] ?? 100;
 
   return (
     <figure className="rounded-lg border border-line bg-bg/60 p-2">
@@ -262,13 +269,52 @@ export function FilePreview({
           We couldn't show {name} here, but the file itself is safe. Save a copy to open it.
         </p>
       ) : (
-        <img
-          src={src(page)}
-          alt={pages > 1 ? `${name}, page ${page} of ${pages}` : name}
-          onError={() => setFailed(true)}
-          // Shown whole, never cropped: a receipt's total is as likely at the bottom as the top.
-          className={`mx-auto w-auto max-w-full rounded-md object-contain ${PREVIEW_HEIGHTS[size]}`}
-        />
+        // Enlarged, the frame keeps its height and the page scrolls inside it, both ways.
+        <div className={zoom > 0 ? `overflow-auto rounded-md ${PREVIEW_HEIGHTS[size]}` : undefined} tabIndex={zoom > 0 ? 0 : undefined}>
+          <img
+            src={src(page)}
+            alt={pages > 1 ? `${name}, page ${page} of ${pages}` : name}
+            onError={() => setFailed(true)}
+            // Shown whole until it is enlarged, never cropped: a receipt's total is as likely at the bottom as the top.
+            className={zoom > 0 ? "max-w-none rounded-md" : `mx-auto w-auto max-w-full rounded-md object-contain ${PREVIEW_HEIGHTS[size]}`}
+            style={zoom > 0 ? { width: `${percent}%` } : undefined}
+          />
+        </div>
+      )}
+      {/* Not in a dialog, where the preview is small on purpose and one more row would make the form scroll. */}
+      {!failed && size !== "compact" && (
+        <div role="group" aria-label="Zoom" className="mt-2 flex items-center justify-center gap-1">
+          <button
+            type="button"
+            onClick={() => setZoom(zoom - 1)}
+            disabled={zoom === 0}
+            aria-label="Zoom out"
+            title="Zoom out"
+            className={`${BUTTON_LINK} inline-flex items-center disabled:opacity-40`}
+          >
+            <ZoomOut aria-hidden className="size-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setZoom(0)}
+            disabled={zoom === 0}
+            aria-label={zoom === 0 ? "Whole page shown" : `Zoomed to ${percent}%. Show the whole page`}
+            title="Show the whole page"
+            className="min-h-11 min-w-16 rounded-lg px-2 text-sm text-muted tabular-nums"
+          >
+            {zoom === 0 ? "Fit" : `${percent}%`}
+          </button>
+          <button
+            type="button"
+            onClick={() => setZoom(zoom + 1)}
+            disabled={zoom === ZOOMS.length - 1}
+            aria-label="Zoom in"
+            title="Zoom in"
+            className={`${BUTTON_LINK} inline-flex items-center disabled:opacity-40`}
+          >
+            <ZoomIn aria-hidden className="size-5" />
+          </button>
+        </div>
       )}
       {pages > 1 && (
         <figcaption className="mt-2 flex items-center justify-center gap-2">

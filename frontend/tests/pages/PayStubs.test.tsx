@@ -120,78 +120,182 @@ describe("pay stub page", () => {
     expect(banner).toHaveTextContent("$3,600.00 − $1,113.80 = $2,486.20");
     expect(banner).toHaveTextContent("One line was hard to read, so please check it.");
 
+    // Plain rows, as on the stub: nothing is a box until a line is opened.
+    expect(screen.queryByRole("textbox", { name: "401(k) this stub" })).not.toBeInTheDocument();
+    const earnings = screen.getByRole("region", { name: "Earnings" });
+    expect(within(earnings).getByText("Earnings · part of gross pay")).toBeInTheDocument();
     const beforeTax = screen.getByRole("region", { name: "Before tax" });
     expect(within(beforeTax).getByText("Contribution → Retirement")).toBeInTheDocument();
     expect(within(beforeTax).getByText("Benefit or fee")).toBeInTheDocument();
+    expect(within(beforeTax).getByText("$180.00")).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Taxes" })).getAllByRole("listitem")).toHaveLength(2);
     expect(within(screen.getByRole("region", { name: "Paid to you" })).getByText("Paycheck → Everyday Checking")).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "From employer" })).getByText("Match → Retirement")).toBeInTheDocument();
-    // The one line the reader was unsure of says so in words.
+    // The one line the reader was unsure of says so, and says why and what to do about it.
     const parking = within(screen.getByRole("region", { name: "After tax" })).getByRole("listitem");
     expect(parking).toHaveTextContent("Check");
+    expect(parking).toHaveTextContent("Budget couldn't tell from the stub what this line is, so it made its best guess.");
+    expect(within(parking).getByRole("button", { name: "Parking looks right" })).toBeInTheDocument();
     expect(within(beforeTax).queryByText("Check")).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: /northwind-2026-10-01\.pdf/ })).toHaveAttribute("src", "/api/pay-stubs/7/preview?page=1");
   });
 
-  it("says what is left unexplained when the lines do not come to the net pay", async () => {
+  it("says in a plain sum what is off when too much is counted as taken out", async () => {
+    // The net pay read a second time, as a deduction: everything is "taken out" and nothing is left.
+    withStub({ ...STUB, totals: { ...STUB.totals, deductionsCents: 360000, differenceCents: -248620, balanced: false } });
+    renderApp("/income/1/stubs/7");
+
+    const banner = (await screen.findByText("These lines don't add up to your net pay yet.")).closest("div");
+    expect(banner).toHaveTextContent("Gross pay $3,600.00 minus $3,600.00 taken out (before tax, taxes and after tax) leaves $0.00, but the stub says you were paid $2,486.20.");
+    expect(banner).toHaveTextContent("So $2,486.20 too much is counted as taken out. Look for a line below that isn't really a deduction");
+  });
+
+  it("says when something is missing from what is taken out", async () => {
     withStub({ ...STUB, totals: { ...STUB.totals, deductionsCents: 102700, differenceCents: 8680, balanced: false } });
     renderApp("/income/1/stubs/7");
 
-    const banner = (await screen.findByText("Doesn't add up yet:")).closest("p");
-    expect(banner).toHaveTextContent("That leaves $86.80 unexplained");
+    const banner = (await screen.findByText("These lines don't add up to your net pay yet.")).closest("div");
+    expect(banner).toHaveTextContent("So $86.80 is missing from what is taken out.");
   });
 
-  it("opens a line to put it right, and sends every line back", async () => {
+  it("enlarges the stub's preview in place", async () => {
+    withStub();
+    renderApp("/income/1/stubs/7");
+
+    const page = await screen.findByRole("img", { name: /northwind-2026-10-01\.pdf/ });
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(page).toHaveStyle({ width: "200%" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Zoomed to 200%. Show the whole page" }));
+    expect(page).not.toHaveStyle({ width: "200%" });
+  });
+
+  it("opens a line where it stands to change it, and sends every line back", async () => {
     const fetchMock = withStub(STUB, { "PUT /api/pay-stubs/7": () => ({ status: 200, data: STUB }) });
     renderApp("/income/1/stubs/7");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit Parking" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit Parking" });
-    expect(within(dialog).getByLabelText("Tracks as")).toHaveValue("after_tax:benefit");
-    await userEvent.clear(within(dialog).getByLabelText("This stub"));
-    await userEvent.type(within(dialog).getByLabelText("This stub"), "88.80");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save line" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const amount = screen.getByRole("textbox", { name: "Parking this stub" });
+    expect(amount).toHaveValue("86.80");
+    // Only the one line is open.
+    expect(screen.queryByRole("textbox", { name: "Medical this stub" })).not.toBeInTheDocument();
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "88.80{Enter}");
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7")).toHaveLength(1));
     const [sent] = bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7") as [{ payDate: string; lines: StubLine[] }];
     expect(sent.payDate).toBe("2026-10-01");
     expect(sent.lines).toHaveLength(8);
-    // Saving a line says it has been looked at; lines go back without their ids.
+    // Changing a line says it has been looked at; lines go back without their ids.
     expect(sent.lines[5]).toEqual({ section: "after_tax", tracksAs: "benefit", label: "Parking", amountCents: 8880, ytdCents: 164920, accountId: null, sure: true });
+
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("textbox", { name: "Parking this stub" })).not.toBeInTheDocument();
   });
 
-  it("adds a line the reader missed, into an account, and removes one", async () => {
+  it("renames a line, changes what it tracks as and where it goes, and says a hard-to-read one looks right", async () => {
     const fetchMock = withStub(STUB, { "PUT /api/pay-stubs/7": () => ({ status: 200, data: STUB }) });
     renderApp("/income/1/stubs/7");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Add a line" }));
-    const dialog = screen.getByRole("dialog", { name: "Add a line" });
-    await userEvent.type(within(dialog).getByLabelText("Line on the stub"), "HSA");
-    await userEvent.type(within(dialog).getByLabelText("This stub"), "50");
-    await userEvent.selectOptions(within(dialog).getByLabelText("Tracks as"), "pre_tax:contribution");
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Goes to" }), "retire{Enter}");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add line" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Medical" }));
+    const name = screen.getByRole("textbox", { name: "Name of Medical" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "Medical and dental");
+    await userEvent.tab();
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "What Medical tracks as" }), "pre_tax:contribution");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Edit Medical" }));
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove line" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Edit 401(k)" }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Account 401(k) goes to" }), "");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
 
-    const [added, removed] = bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7") as { lines: StubLine[] }[];
-    expect(added?.lines[8]).toEqual({ section: "pre_tax", tracksAs: "contribution", label: "HSA", amountCents: 5000, ytdCents: null, accountId: 2, sure: true });
-    expect(removed?.lines.map((each) => each.label)).not.toContain("Medical");
-    expect(removed?.lines).toHaveLength(7);
+    await userEvent.click(screen.getByRole("button", { name: "Parking looks right" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7")).toHaveLength(4));
+    const [renamed, retracked, unfiled, checked] = bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7") as { lines: StubLine[] }[];
+    expect(renamed?.lines[2]).toMatchObject({ label: "Medical and dental", amountCents: 9500 });
+    expect(retracked?.lines[2]).toMatchObject({ section: "pre_tax", tracksAs: "contribution", accountId: null });
+    expect(unfiled?.lines[1]).toMatchObject({ label: "401(k)", accountId: null });
+    expect(checked?.lines[5]).toMatchObject({ label: "Parking", amountCents: 8680, sure: true });
   });
 
-  it("keeps the form open and says so kindly when a line cannot be saved", async () => {
-    withStub(STUB, { "PUT /api/pay-stubs/7": () => ({ status: 400, error: "Please give the line a name." }) });
+  it("only offers investment accounts for an employer's match", async () => {
+    withStub();
+    renderApp("/income/1/stubs/7");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit 401(k) match" }));
+    const paidInto = screen.getByRole("combobox", { name: "Account 401(k) match is paid into" });
+    expect(within(paidInto).getAllByRole("option").map((option) => option.textContent)).toEqual(["No account (only listed)", "Retirement"]);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    // A tax or a benefit goes to no account of hers, so there is nothing to choose.
+    await userEvent.click(screen.getByRole("button", { name: "Edit Medical" }));
+    expect(screen.queryByRole("combobox", { name: /Account Medical/ })).not.toBeInTheDocument();
+  });
+
+  it("takes a line off the stub from its row, and adds one the reader missed, without a pop-up", async () => {
+    const fetchMock = withStub(STUB, { "PUT /api/pay-stubs/7": () => ({ status: 200, data: STUB }) });
+    renderApp("/income/1/stubs/7");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Remove Medical" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7")).toHaveLength(1));
+    // The bin is its own button: it did not also open the row.
+    expect(screen.queryByRole("textbox", { name: "Medical this stub" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a line" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const added = screen.getByRole("group", { name: "New line" });
+    await userEvent.click(within(added).getByRole("button", { name: "Add line" }));
+    expect(within(added).getByRole("alert")).toHaveTextContent("Please give the line a name, as it reads on the stub.");
+    await userEvent.type(within(added).getByLabelText("Line on the stub"), "HSA");
+    await userEvent.type(within(added).getByLabelText("This stub"), "50");
+    await userEvent.selectOptions(within(added).getByRole("combobox", { name: "What the new line tracks as" }), "pre_tax:contribution");
+    await userEvent.selectOptions(within(added).getByRole("combobox", { name: "Account the new line goes to" }), "Retirement");
+    await userEvent.click(within(added).getByRole("button", { name: "Add line" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7")).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "New line" })).not.toBeInTheDocument());
+    const [removed, withNew] = bodiesSentTo(fetchMock, "PUT /api/pay-stubs/7") as { lines: StubLine[] }[];
+    expect(removed?.lines.map((each) => each.label)).not.toContain("Medical");
+    expect(removed?.lines).toHaveLength(7);
+    expect(withNew?.lines.at(-1)).toEqual({ section: "pre_tax", tracksAs: "contribution", label: "HSA", amountCents: 5000, ytdCents: null, accountId: 2, sure: true });
+  });
+
+  it("says so beside the box when what was typed is not an amount or a name, and sends nothing", async () => {
+    const fetchMock = withStub();
     renderApp("/income/1/stubs/7");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit Medical" }));
-    const dialog = screen.getByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save line" }));
+    const amount = screen.getByRole("textbox", { name: "Medical this stub" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "ninety{Enter}");
+    expect(screen.getByRole("alert")).toHaveTextContent("Please enter an amount like 1,250.00.");
+    // Escape puts back what was there, and leaves the line open.
+    await userEvent.type(amount, "{Escape}");
+    expect(amount).toHaveValue("95.00");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Please give the line a name.");
+    const name = screen.getByRole("textbox", { name: "Name of Medical" });
+    await userEvent.clear(name);
+    await userEvent.tab();
+    expect(screen.getByRole("alert")).toHaveTextContent("A line needs a name.");
+    expect(calls(fetchMock).some((call) => call.startsWith("PUT "))).toBe(false);
+  });
+
+  it("puts a line back and says so kindly when a change cannot be saved", async () => {
+    withStub(STUB, { "PUT /api/pay-stubs/7": () => ({ status: 400, error: "That amount is more than a stub can hold." }) });
+    renderApp("/income/1/stubs/7");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Medical" }));
+    const amount = screen.getByRole("textbox", { name: "Medical this stub" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "99{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("That amount is more than a stub can hold.");
+    expect(amount).toHaveValue("95.00");
   });
 
   it("asks what saving should change, choosing nothing for you", async () => {
@@ -264,8 +368,13 @@ describe("pay stub page", () => {
     expect(await screen.findByRole("heading", { name: /^Pay stub/ })).toBeInTheDocument();
     expect(screen.getByText(/Saved · corrected the amounts\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove stub" })).toBeInTheDocument();
+    // As plain text, with what each line was tracked as.
+    expect(within(screen.getByRole("region", { name: "Before tax" })).getByText("Contribution → Retirement")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Paid to you" })).getByText("Paycheck → Everyday Checking")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "From employer" })).getByText("Match → Retirement")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save stub…" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit Parking" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove Parking" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add a line" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Paid on")).not.toBeInTheDocument();
   });

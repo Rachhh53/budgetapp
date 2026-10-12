@@ -164,6 +164,22 @@ class PayStubsApiTest extends ApiTestBase {
         }
 
         @Test
+        void readsOnlyThePayFromAStatementWithMoreOnItThanPay() throws Exception {
+            JsonNode statement = uploaded(new FilePart("statement.pdf", SampleStubs.statement()));
+
+            // Not the information column, not the account the net pay went to, not the taxable wages.
+            assertThat(statement.get("lines")).extracting(each -> each.get("label").asText()).containsExactly(
+                    "Regular", "401(k)", "Medical",
+                    "Federal Income Tax", "Social Security Tax", "Medicare Tax", "CA State Income Tax", "Net pay");
+            assertThat(statement.get("payDate").asText()).isEqualTo("2026-10-01");
+            assertThat(statement.get("totals").get("grossCents").asLong()).isEqualTo(360_000);
+            assertThat(statement.get("totals").get("netCents").asLong()).isEqualTo(248_620);
+            assertThat(statement.get("totals").get("balanced").asBoolean()).isTrue();
+            assertThat(line(statement, "401(k)").get("amountCents").asLong()).isEqualTo(15_000);
+            assertThat(line(statement, "401(k)").get("section").asText()).isEqualTo("pre_tax");
+        }
+
+        @Test
         void listsASourcesStubsNewestFirst() throws Exception {
             uploaded(OCTOBER_1);
             uploaded(OCTOBER_15);

@@ -39,13 +39,24 @@ public final class StubReader {
     private static final double COLUMN_REACH = 60;
     /** How far left of a group's title a label may start and still belong to that group. */
     private static final double TITLE_REACH = 30;
-    /** A row with more words than this is a sentence, not a row of titles. */
-    private static final int MOST_WORDS_IN_TITLES = 14;
+    /**
+     * A row with more words than this is a sentence, not a row of titles. Two groups side by side,
+     * each with its column headings, come to sixteen ("Earnings rate hours this period year to
+     * date Other Benefits and Information this period total to date").
+     */
+    private static final int MOST_WORDS_IN_TITLES = 20;
+    /** A label with more words than this is a sentence that happens to hold an amount. */
+    private static final int MOST_WORDS_IN_A_LABEL = 8;
+    /** How far right of the net pay a group must start to be a separate column, untouched by it. */
+    private static final double COLUMN_APART = 100;
     /** How far below "Pay date" its date may be, in rows, when the stub prints it underneath. */
     private static final int ROWS_BELOW_A_DATE_LABEL = 2;
 
-    /** 1,234.56 with an optional $, and a minus sign in front, behind, or as brackets. */
-    private static final Pattern MONEY = Pattern.compile("\\(?-?\\$?(\\d{1,3}(?:,\\d{3})+|\\d+)\\.(\\d{2})\\)?-?");
+    /**
+     * 1,234.56 with an optional $, a minus sign in front, behind, or as brackets, a plus sign in
+     * front, and a footnote's asterisk behind ("-150.00*": taken out before tax).
+     */
+    private static final Pattern MONEY = Pattern.compile("\\(?[-+]?\\$?(\\d{1,3}(?:,\\d{3})+|\\d+)\\.(\\d{2})\\)?-?\\*?");
     /**
      * Any other number with a decimal point or a percent sign: hours, a rate with four decimals. A
      * whole number is left as a word, because labels carry them ("Misc 12", "Box 14") and columns rarely do.
@@ -92,6 +103,11 @@ public final class StubReader {
             title(Section.EMPLOYER, "employer", "contributions"),
             title(Section.EMPLOYER, "company", "contributions"),
             title(Section.EMPLOYER, "employer", "benefits"),
+            // Beside the pay on some statements: leave balances, taxable wages, imputed income. None of it is pay.
+            skipped("other", "benefits", "and", "information"),
+            skipped("other", "benefits"),
+            skipped("important", "notes"),
+            skipped("additional", "information"),
             skipped("net", "pay", "distribution"),
             skipped("direct", "deposit"),
             skipped("payment", "information"),
@@ -127,6 +143,15 @@ public final class StubReader {
     private static final Pattern NET_TOTAL = Pattern.compile(
             "(total )?net( pay| check| amount)?( this period)?|take home( pay)?");
     private static final Pattern OTHER_TOTAL = Pattern.compile("(total|totals|sub ?total)\\b.*");
+    /** A figure the stub reports about the pay, which is no line of it: "Your federal taxable wages this period are". */
+    private static final Pattern REPORTED = word("taxable wages|taxable gross|taxable earnings|excluded from|total to date");
+    /**
+     * Where the net pay went, which some statements list among what is taken out, above a "Net
+     * Pay" of nothing: "Checking 1", "Savings", "Direct Deposit". It is the pay, not a deduction.
+     */
+    private static final Pattern DEPOSIT = word("checking|chequing|savings|direct deposit|dir dep|deposit|deposited|net check");
+    /** A title that is a single word alone on its row, too common a word to be looked for anywhere else. */
+    private static final Pattern LONE_TITLE = Pattern.compile("other|voluntary");
 
     private static final Pattern EMPLOYER_WORDS = word("employer|company|match|er");
     private static final Pattern CONTRIBUTION_WORDS = word(
@@ -162,6 +187,7 @@ public final class StubReader {
         Money statedNet = null;
         Money statedGrossYtd = null;
         Money statedNetYtd = null;
+        Money deposited = Money.ZERO;
 
         for (Row row : rows) {
             List<Word> words = row.words().stream().filter(word -> !word.text().equals("$")).toList();
@@ -190,7 +216,20 @@ public final class StubReader {
                     if (statedNet == null) {
                         statedNet = figures.current();
                         statedNetYtd = figures.ytd();
+                        // The net pay ends the pay. What is printed after it in the same column is where
+                        // it went and what it is made of (the account it was paid into, "Net Check",
+                        // taxable wages, the tear-off advice), until another title says otherwise.
+                        double netX = piece.x();
+                        titles.removeIf(title -> title.x() <= netX + COLUMN_APART);
+                        titles.add(new Title(Double.NEGATIVE_INFINITY, null, true));
                     }
+                    continue;
+                }
+                if (known == null && DEPOSIT.matcher(plain).find() && !CONTRIBUTION_WORDS.matcher(plain).find()) {
+                    deposited = deposited.plus(abs(figures.current()));
+                    continue;
+                }
+                if (known == null && (REPORTED.matcher(plain).find() || plain.split(" ").length > MOST_WORDS_IN_A_LABEL)) {
                     continue;
                 }
                 if (known == null && OTHER_TOTAL.matcher(plain).matches()) {
@@ -217,6 +256,11 @@ public final class StubReader {
             }
         }
 
+        // "Net Pay 0.00" under the accounts the pay went into: what was deposited is the net pay.
+        if ((statedNet == null || statedNet.isZero()) && !deposited.isZero()) {
+            statedNet = deposited;
+            statedNetYtd = null;
+        }
         // A stub that prints only its gross pay, with no earnings lines, still has a gross.
         if (statedGross != null && lines.stream().noneMatch(line -> line.section() == Section.EARNINGS)) {
             lines.add(0, new Line(Section.EARNINGS, "Gross pay", statedGross, statedGrossYtd, Tracking.GROSS, true));
@@ -224,8 +268,44 @@ public final class StubReader {
         if (statedNet != null && lines.stream().noneMatch(line -> line.section() == Section.NET)) {
             lines.add(new Line(Section.NET, "Net pay", abs(statedNet), statedNetYtd, Tracking.NET, true));
         }
+        dropTheNetPayReadAsTakenOut(lines);
         lines.sort((a, b) -> a.section().compareTo(b.section()));
         return new Read(payDate(rows), List.copyOf(lines), statedGross, statedNet);
+    }
+
+    /**
+     * Whatever a statement calls the line that shows the net pay leaving for the bank, it gives
+     * itself away by its amount: it is exactly the net pay, and without it the stub adds up.
+     * Such a line is the pay itself counted a second time, so it is taken out — however it was
+     * filed, including by hand on an earlier stub.
+     */
+    private static void dropTheNetPayReadAsTakenOut(List<Line> lines) {
+        Money net = Money.ZERO;
+        Money gross = Money.ZERO;
+        Money takenOut = Money.ZERO;
+        for (Line line : lines) {
+            switch (line.section()) {
+                case NET -> net = net.plus(line.amount());
+                case EARNINGS -> gross = gross.plus(line.amount());
+                case PRE_TAX, TAX, AFTER_TAX -> takenOut = takenOut.plus(line.amount());
+                case EMPLOYER -> { }
+            }
+        }
+        if (net.isZero() || gross.isZero()) {
+            return;
+        }
+        // Off by exactly the net pay: gross less everything taken out comes to nothing.
+        if (!gross.minus(takenOut).isZero()) {
+            return;
+        }
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            Line line = lines.get(i);
+            boolean takes = line.section() == Section.PRE_TAX || line.section() == Section.TAX || line.section() == Section.AFTER_TAX;
+            if (takes && line.amount().equals(net)) {
+                lines.remove(i);
+                return;
+            }
+        }
     }
 
     /** Files a line nobody has filed before, by the title it sits under and the words in its label; null to leave it out. */
@@ -253,7 +333,9 @@ public final class StubReader {
             return line(piece, figures, under, tracking, contribution || benefit);
         }
         // Under plain "Deductions", or under no title at all, the label has to say what the line is.
-        boolean afterTax = AFTER_TAX_WORDS.matcher(plain).find();
+        // An asterisk on the amount is the stub's own mark for "excluded from taxable wages": before tax.
+        boolean marked = piece.amounts().stream().anyMatch(amount -> amount.text().endsWith("*"));
+        boolean afterTax = !marked && AFTER_TAX_WORDS.matcher(plain).find();
         if (contribution) {
             return line(piece, figures, afterTax ? Section.AFTER_TAX : Section.PRE_TAX, Tracking.CONTRIBUTION, true);
         }
@@ -369,6 +451,11 @@ public final class StubReader {
 
     private static List<Title> titles(List<Word> words) {
         List<Title> found = new ArrayList<>();
+        if (words.size() == 1 && LONE_TITLE.matcher(plain(words.get(0).text())).matches()) {
+            // "Other", under "Statutory": what is taken out that is not tax. The label says what each line is.
+            found.add(new Title(words.get(0).x(), null, false));
+            return found;
+        }
         for (int i = 0; i < words.size(); i++) {
             for (Phrase<Title> phrase : TITLES) {
                 if (startsAt(words, i, phrase.words())) {
@@ -382,15 +469,19 @@ public final class StubReader {
     }
 
     /**
-     * Takes new titles into the ones in force. A row of several replaces them all (groups side
-     * by side start together); a single one replaces whatever was at or to the right of it.
+     * Takes new titles into the ones in force. A single one replaces whatever was at or to the
+     * right of it. A row of several (groups side by side start together) replaces what lies
+     * across them, and leaves a column further right alone: "Deductions" and "Statutory" at the
+     * left do not end an information column at the right of the page.
      */
     private static void place(List<Title> inForce, List<Title> found) {
         if (found.isEmpty()) {
             return;
         }
         if (found.size() > 1) {
-            inForce.clear();
+            double from = found.stream().mapToDouble(Title::x).min().orElseThrow() - TITLE_REACH;
+            double to = found.stream().mapToDouble(Title::x).max().orElseThrow() + TITLE_REACH;
+            inForce.removeIf(title -> title.x() >= from && title.x() <= to);
         } else {
             double x = found.get(0).x();
             inForce.removeIf(title -> title.x() >= x - TITLE_REACH);
@@ -515,6 +606,7 @@ public final class StubReader {
             throw new IllegalArgumentException("Not an amount of money");
         }
         boolean negative = text.contains("-") || text.startsWith("(");
+        // A plus sign and a footnote's asterisk say nothing about the amount itself.
         Money amount = Money.fromDecimal(new BigDecimal(matcher.group(1).replace(",", "") + "." + matcher.group(2)));
         return negative ? amount.negate() : amount;
     }

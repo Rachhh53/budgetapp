@@ -16,7 +16,7 @@ export const SECTION_LABELS: Record<StubSection, string> = {
  * together, because only some pairs make sense (a tax is never a contribution).
  */
 export const LINE_KINDS = [
-  { value: "earnings:gross", label: "Earnings (part of gross pay)" },
+  { value: "earnings:gross", label: "Earnings · adds to your gross pay" },
   { value: "pre_tax:contribution", label: "Before tax · into one of your accounts" },
   { value: "pre_tax:benefit", label: "Before tax · a benefit or fee" },
   { value: "tax:tax", label: "Tax" },
@@ -47,7 +47,8 @@ export function tracksAsText(line: StubLine, accounts: readonly Account[], depos
   const account = accounts.find((candidate) => candidate.id === line.accountId)?.name;
   switch (line.tracksAs) {
     case "gross":
-      return "Gross pay";
+      // Each earnings line ("Regular", "Overtime") is a part of the gross, not the whole of it.
+      return "Earnings · part of gross pay";
     case "contribution":
       return account ? `Contribution → ${account}` : "Contribution · no account chosen";
     case "benefit":

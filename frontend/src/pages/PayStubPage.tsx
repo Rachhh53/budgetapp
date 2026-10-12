@@ -9,7 +9,6 @@ import {
   STUB_APPLIES,
   STUB_SECTIONS,
   type StubApply,
-  type StubLine,
   type StubLineInput,
   stubPreviewUrl,
   useChangeStub,
@@ -18,26 +17,22 @@ import {
   useSaveStubCopy,
 } from "../api/payStubs";
 import { Card } from "../components/Card";
-import { EditName } from "../components/EditButton";
 import { FilePreview } from "../components/files/Receipts";
-import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { APPLIED_LABELS, SECTION_LABELS, tracksAsText } from "../components/stubs/labels";
 import { SaveStubDialog } from "../components/stubs/SaveStubDialog";
-import { StubLineForm } from "../components/stubs/StubLineForm";
+import { LINE_COLUMNS, NewStubLine, StubLineRow } from "../components/stubs/StubLineEditor";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
-
-/** Which line the form is open on: one of the stub's (by its place in the list), or a new one. */
-type Editing = { index: number } | "new" | null;
 
 /**
  * One pay stub (design/pay-stub.png): the PDF beside every line read from it, this stub and
  * the year to date, grouped as a stub groups them, with what each is tracked as and whether
  * gross less everything taken out comes to the net pay.
  *
- * A stub in review changes nothing until it is saved. Each line opens to be put right, and
- * how it is filed is remembered for the income source, so the next stub fills in by itself.
+ * A stub in review changes nothing until it is saved. Each line is put right where it stands
+ * (its name, its amounts, what it tracks as) or taken off, and how it is filed is remembered
+ * for the income source, so the next stub fills in by itself.
  */
 export function PayStubPage() {
   const params = useParams();
@@ -50,8 +45,11 @@ export function PayStubPage() {
   const sources = useIncomeSources().data ?? [];
   const change = useChangeStub(stubId);
   const remove = useDeleteStub();
-  const [editing, setEditing] = useState<Editing>(null);
+  const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
+  // The lines as they were just sent, shown until the answer comes back, so a row never flickers
+  // back to what it said before while its change is on the way.
+  const [sent, setSent] = useState<StubLineInput[]>();
 
   if (stub.isPending) {
     return <p className="text-muted">Loading the stub…</p>;
@@ -74,7 +72,7 @@ export function PayStubPage() {
     );
   }
 
-  const data = stub.data;
+  const data: PayStub = sent ? { ...stub.data, lines: sent.map((line, index) => ({ ...line, id: stub.data.lines[index]?.id ?? null })) } : stub.data;
   const inReview = data.status === "review";
   const back = `/income/${data.incomeSourceId}`;
   const depositAccountId = sources.find((source) => source.id === data.incomeSourceId)?.depositAccountId;
@@ -83,17 +81,13 @@ export function PayStubPage() {
   const asked = STUB_APPLIES.find((apply) => apply === search.get("apply")) as StubApply | undefined;
 
   /** Sends the stub back with its lines changed. A line is known by its place: lines have no id until they are saved. */
-  const send = (lines: StubLineInput[], payDate = data.payDate) => change.mutate({ payDate, lines }, { onSuccess: () => setEditing(null) });
-  const asInputs = (): StubLineInput[] => data.lines.map(({ id: _id, ...line }) => line);
-  const saveLine = (line: StubLineInput) => {
-    const lines = asInputs();
-    if (editing === "new") {
-      lines.push(line);
-    } else if (editing) {
-      lines[editing.index] = line;
-    }
-    send(lines);
+  const send = (lines: StubLineInput[], payDate = data.payDate, done?: () => void) => {
+    setSent(lines);
+    change.mutate({ payDate, lines }, { onSuccess: done, onSettled: () => setSent(undefined) });
   };
+  const asInputs = (): StubLineInput[] => data.lines.map(({ id: _id, ...line }) => line);
+  const changeLine = (index: number, line: StubLineInput) => send(asInputs().map((each, at) => (at === index ? line : each)));
+  const removeLine = (index: number) => send(asInputs().filter((_line, at) => at !== index));
 
   return (
     <>
@@ -137,28 +131,40 @@ export function PayStubPage() {
 
       <div className="space-y-4">
         <CheckBanner stub={data} />
-        {(remove.isError || (change.isError && editing === null)) && (
+        {(remove.isError || change.isError) && (
           <p role="alert" className="text-danger">
             {remove.error?.message ?? change.error?.message}
           </p>
         )}
 
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <StubFile stub={data} />
+          {/* Stays beside the lines as they are gone through, so each can be checked against the stub. */}
+          <div className="lg:sticky lg:top-24">
+            <StubFile stub={data} />
+          </div>
           <Card title="Lines on the stub">
             <PaidOn stub={data} editable={inReview} pending={change.isPending} onChange={(payDate) => send(asInputs(), payDate)} />
             <Lines
               stub={data}
               accounts={accounts}
               depositAccount={depositAccount}
-              onEdit={inReview ? (index) => setEditing({ index }) : undefined}
+              onChange={inReview ? changeLine : undefined}
+              onRemove={removeLine}
             />
-            {inReview && (
-              <button type="button" onClick={() => setEditing("new")} className={`${BUTTON_LINK} mt-2 inline-flex items-center gap-1`}>
-                <Plus aria-hidden className="size-4" />
-                Add a line
-              </button>
-            )}
+            {inReview &&
+              (adding ? (
+                <NewStubLine
+                  accounts={accounts}
+                  pending={change.isPending}
+                  onAdd={(line) => send([...asInputs(), line], data.payDate, () => setAdding(false))}
+                  onCancel={() => setAdding(false)}
+                />
+              ) : (
+                <button type="button" onClick={() => setAdding(true)} className={`${BUTTON_LINK} mt-2 inline-flex items-center gap-1`}>
+                  <Plus aria-hidden className="size-4" />
+                  Add a line
+                </button>
+              ))}
             <p className={HINT}>
               Budget remembers how each line is filed for {data.sourceName}, so the next stub from them fills in by itself. Taxes are kept
               with the stub; what comes out before and after tax becomes the deductions on {data.sourceName}.
@@ -167,20 +173,6 @@ export function PayStubPage() {
         </div>
       </div>
 
-      {editing !== null && (
-        <StubLineForm
-          line={editing === "new" ? undefined : data.lines[editing.index]}
-          accounts={accounts}
-          pending={change.isPending}
-          error={change.error?.message}
-          onSave={saveLine}
-          onRemove={editing === "new" ? undefined : () => send(asInputs().filter((_line, index) => index !== editing.index))}
-          onClose={() => {
-            change.reset();
-            setEditing(null);
-          }}
-        />
-      )}
       {saving && <SaveStubDialog stub={data} startOn={asked} onSaved={() => navigate(back)} onClose={() => setSaving(false)} />}
     </>
   );
@@ -220,20 +212,49 @@ function CheckBanner({ stub }: { stub: PayStub }) {
       </span>
     </p>
   ) : (
-    <p role="status" className="flex items-start gap-2 rounded-lg border border-warn-line bg-warn p-3 text-warn-ink">
+    <Unbalanced stub={stub} check={check} />
+  );
+}
+
+/**
+ * The lines do not come to the net pay. Said as a sum anyone can follow, with what to look for:
+ * too much taken out usually means a line that is not a deduction was read as one, too little
+ * that a line is missing. (The first wording, "leaves $X unexplained", did not say which.)
+ */
+function Unbalanced({ stub, check }: { stub: PayStub; check: string }) {
+  const { totals } = stub;
+  const left = totals.grossCents - totals.deductionsCents;
+  const over = totals.netCents - left;
+  const money = (cents: number) => (
+    <span data-amount className="font-semibold tabular-nums">
+      {formatCents(cents)}
+    </span>
+  );
+  return (
+    <div role="status" className="flex items-start gap-2 rounded-lg border border-warn-line bg-warn p-3 text-warn-ink">
       <TriangleAlert aria-hidden className="mt-0.5 size-5 shrink-0" />
-      <span>
-        <span className="font-semibold">Doesn't add up yet:</span> gross − everything taken out is {sum}, and the net pay line says{" "}
-        <span data-amount className="tabular-nums">
-          {formatCents(totals.netCents)}
-        </span>
-        . That leaves{" "}
-        <span data-amount className="font-semibold tabular-nums">
-          {formatCents(Math.abs(totals.differenceCents))}
-        </span>{" "}
-        unexplained: a line may be missing, or an amount misread.{check}
-      </span>
-    </p>
+      <div className="space-y-1">
+        <p className="font-semibold">These lines don't add up to your net pay yet.</p>
+        <p>
+          Gross pay {money(totals.grossCents)} minus {money(totals.deductionsCents)} taken out (before tax, taxes and after tax) leaves{" "}
+          {money(left)}, but the stub says you were paid {money(totals.netCents)}.
+        </p>
+        <p>
+          {over > 0 ? (
+            <>
+              So {money(over)} too much is counted as taken out. Look for a line below that isn't really a deduction, or an amount
+              that is too large, and fix or remove it.
+            </>
+          ) : (
+            <>
+              So {money(-over)} is missing from what is taken out. Look for a line on the stub that isn't in the list below, or an
+              amount that is too small, and add or fix it.
+            </>
+          )}
+          {check}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -300,30 +321,37 @@ function PaidOn({ stub, editable, pending, onChange }: { stub: PayStub; editable
 
 /**
  * Every line, under the heading of its part of the stub. A table from `md` up; below that each
- * line is a small card, since four columns do not fit a phone.
+ * line is a small card, since four columns do not fit a phone. In review each line is a row of
+ * boxes to type in; a saved stub's lines are plain text.
  */
 function Lines({
   stub,
   accounts,
   depositAccount,
-  onEdit,
+  onChange,
+  onRemove,
 }: {
   stub: PayStub;
   accounts: readonly Account[];
   depositAccount: string | undefined;
-  onEdit?: (index: number) => void;
+  /** Given for a stub in review: a line, by its place, as it should now be. */
+  onChange?: (index: number, line: StubLineInput) => void;
+  onRemove: (index: number) => void;
 }) {
+  // Which line is open for changing, by its place; one at a time, so the list stays a list.
+  const [editing, setEditing] = useState<number>();
   if (stub.lines.length === 0) {
     return <p className="text-muted">No lines yet.</p>;
   }
   const indexed = stub.lines.map((line, index) => ({ line, index }));
   return (
     <div>
-      <div aria-hidden className="hidden grid-cols-[minmax(0,3fr)_7rem_7rem_minmax(0,3fr)] gap-3 border-b border-line pb-2 text-sm font-semibold text-muted md:grid">
+      <div aria-hidden className={`hidden gap-x-3 border-b border-line pb-2 text-sm font-semibold text-muted md:grid ${LINE_COLUMNS}`}>
         <span>Line on the stub</span>
         <span className="text-right">This stub</span>
         <span className="text-right">Year to date</span>
         <span>Tracks as</span>
+        <span />
       </div>
       {STUB_SECTIONS.map((section) => {
         const inSection = indexed.filter(({ line }) => line.section === section);
@@ -335,11 +363,19 @@ function Lines({
             <h3 className="pt-3 pb-1 text-sm font-semibold tracking-wide text-accent-ink uppercase">{SECTION_LABELS[section]}</h3>
             <ul className="divide-y divide-line">
               {inSection.map(({ line, index }) => (
-                <LineRow
+                <StubLineRow
                   key={index}
                   line={line}
                   tracksAs={tracksAsText(line, accounts, depositAccount)}
-                  onEdit={onEdit ? () => onEdit(index) : undefined}
+                  accounts={accounts}
+                  editing={editing === index}
+                  onEdit={onChange ? () => setEditing(index) : undefined}
+                  onDone={() => setEditing(undefined)}
+                  onChange={(changed) => onChange?.(index, changed)}
+                  onRemove={() => {
+                    setEditing(undefined);
+                    onRemove(index);
+                  }}
                 />
               ))}
             </ul>
@@ -347,40 +383,5 @@ function Lines({
         );
       })}
     </div>
-  );
-}
-
-function LineRow({ line, tracksAs, onEdit }: { line: StubLine; tracksAs: string; onEdit?: () => void }) {
-  return (
-    <li
-      onClick={clickRowToEdit}
-      className={`-mx-2 grid grid-cols-2 gap-x-3 gap-y-0.5 rounded-lg px-2 py-2 md:grid-cols-[minmax(0,3fr)_7rem_7rem_minmax(0,3fr)] md:items-center ${ROW_OPENS} ${
-        line.sure ? "" : "bg-warn/60"
-      }`}
-    >
-      <span className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 md:col-span-1">
-        {onEdit ? <EditName name={line.label} onClick={onEdit} /> : <span className="font-medium wrap-break-word">{line.label}</span>}
-        {/* In words with an icon: the highlight alone would not say what to do. */}
-        {!line.sure && (
-          <span className="inline-flex items-center gap-1 rounded-md border border-warn-line bg-warn px-1.5 text-xs font-semibold text-warn-ink uppercase">
-            <TriangleAlert aria-hidden className="size-3" />
-            Check
-          </span>
-        )}
-      </span>
-      <span data-amount className="font-semibold tabular-nums md:text-right">
-        <span className="text-sm font-normal text-muted md:hidden">This stub </span>
-        {formatCents(line.amountCents)}
-      </span>
-      <span data-amount className="text-right text-muted tabular-nums">
-        {line.ytdCents !== null && (
-          <>
-            <span className="text-sm md:hidden">Year to date </span>
-            {formatCents(line.ytdCents)}
-          </>
-        )}
-      </span>
-      <span className="col-span-2 min-w-0 text-sm text-muted md:col-span-1 md:text-base">{tracksAs}</span>
-    </li>
   );
 }

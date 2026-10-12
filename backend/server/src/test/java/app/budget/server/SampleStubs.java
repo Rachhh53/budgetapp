@@ -138,6 +138,41 @@ final class SampleStubs {
         }
     }
 
+    /**
+     * A statement with an information column beside the pay, what is taken out indented under
+     * "Statutory" and "Other" with minus signs and a footnote's asterisk, and, after the net pay,
+     * the account it went to, the taxable wages in a sentence, and a tear-off advice.
+     */
+    static byte[] statement() {
+        try (Sheet sheet = new Sheet()) {
+            sheet.at(300, "Pay Date: 10/01/2026").next().next();
+            sheet.at(LEFT, "Earnings").ending(170, "rate").ending(215, "hours").ending(290, "this period").ending(370, "year to date")
+                    .at(390, "Other Benefits and Information").ending(520, "this period").ending(590, "total to date").next();
+            sheet.at(LEFT, "Regular").ending(170, "45.0000").ending(215, "80.00").ending(290, "3,600.00").ending(370, "68,400.00")
+                    .at(390, "Group Term Life").ending(520, "0.51").ending(590, "9.69").next();
+            sheet.at(150, "Gross Pay").ending(290, "$3,600.00").ending(370, "68,400.00").at(390, "Vac Hrs").ending(590, "40.00").next();
+            sheet.at(LEFT, "Deductions").at(90, "Statutory").next();
+            sheet.at(90, "Federal Income Tax").ending(290, "-391.78").ending(370, "7,443.82").at(390, "Important Notes").next();
+            sheet.at(90, "Social Security Tax").ending(290, "-213.98").ending(370, "4,065.62")
+                    .at(390, "Loan Amt Paid").ending(590, "840.00").next();
+            sheet.at(90, "Medicare Tax").ending(290, "-50.04").ending(370, "950.76").next();
+            sheet.at(90, "CA State Income Tax").ending(290, "-159.30").ending(370, "3,026.70").next();
+            sheet.at(90, "Other").next();
+            sheet.at(90, "401(k)").ending(290, "-150.00*").ending(370, "2,850.00").next();
+            sheet.at(90, "Medical").ending(290, "-148.70*").ending(370, "2,825.30").next();
+            sheet.at(90, "Net Pay").ending(290, "$2,486.20").next();
+            sheet.at(90, "Checking 1").ending(290, "-2,486.20").next();
+            sheet.at(90, "Net Check").ending(290, "$0.00").next().next();
+            sheet.at(90, "* Excluded from federal taxable wages").next();
+            sheet.at(90, "Your federal taxable wages this period are $3,301.30").next().next().next();
+            sheet.at(LEFT, "Deposited to the account of").at(300, "account number").at(400, "transit ABA").at(500, "amount").next();
+            sheet.at(LEFT, "Amara Okafor").at(300, "xxxxxx1234").at(400, "xxxx xxxx").ending(540, "$2,486.20");
+            return sheet.bytes();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     /** A plain list with no headings, what is taken out shown with minus signs, and one line nothing explains. */
     static byte[] plainList() {
         try (Sheet sheet = new Sheet()) {
