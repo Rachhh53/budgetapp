@@ -8,6 +8,7 @@ import { EditButton, EditPageButton } from "../components/EditButton";
 import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule, WEEKEND_LABELS } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
+import { PayStubsCard, TaxesAndBenefitsCard } from "../components/stubs/StubCards";
 import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
@@ -19,7 +20,8 @@ type FormState = { terms?: PayTerms; payChange?: boolean } | null;
 /**
  * One income source, laid out like an account's page: the big figures first (what a paycheck
  * brings home, and what the year adds up to), then a card per topic — schedule, what comes out
- * of every paycheck, the employer's match, pay history — beside the paychecks coming up.
+ * of every paycheck, the employer's match, taxes and benefits from the newest stub, pay history —
+ * beside the paychecks coming up and the pay stubs.
  * The Income screen is the overview; this is where the detail lives.
  */
 export function IncomeDetailPage() {
@@ -94,9 +96,13 @@ export function IncomeDetailPage() {
             </Card>
             <DeductionsCard source={source} accountName={accountName} />
             <MatchCard source={source} accountName={accountName} />
+            <TaxesAndBenefitsCard source={source} />
             <PayHistory source={source} onEditTerms={(terms) => setForm({ terms })} />
           </div>
-          <UpcomingPaychecks sourceId={source.id} />
+          <div className="space-y-4">
+            <UpcomingPaychecks sourceId={source.id} />
+            <PayStubsCard source={source} />
+          </div>
         </div>
       </div>
 

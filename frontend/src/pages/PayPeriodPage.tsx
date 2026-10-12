@@ -27,6 +27,7 @@ import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { ItemForm } from "../components/items/ItemForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
+import { PaycheckForm } from "../components/period/PaycheckForm";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { INPUT } from "../components/ui";
@@ -795,6 +796,11 @@ function IncomePanel({
   interest: readonly InterestLine[];
   context: RowContext;
 }) {
+  // Which paycheck's own form is open, by the date its schedule names.
+  const [open, setOpen] = useState<{ incomeSourceId: number; scheduledDate: string }>();
+  const opened = paychecks.find(
+    (paycheck) => paycheck.incomeSourceId === open?.incomeSourceId && paycheck.scheduledDate === open.scheduledDate,
+  );
   return (
     <Panel title="Income">
       {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 ? (
@@ -804,8 +810,13 @@ function IncomePanel({
           {paychecks.map((paycheck) => (
             <Row
               key={`${paycheck.incomeSourceId}-${paycheck.scheduledDate}`}
-              title={`${paycheck.sourceName} paycheck`}
-              detail={`${formatDay(paycheck.payDate)} → ${context.accountName(paycheck.depositAccountId)}`}
+              title={
+                <EditName
+                  name={`${paycheck.sourceName} paycheck`}
+                  onClick={() => setOpen({ incomeSourceId: paycheck.incomeSourceId, scheduledDate: paycheck.scheduledDate })}
+                />
+              }
+              detail={paycheckDetail(paycheck, context)}
               amount={<PaycheckAmount paycheck={paycheck} />}
             />
           ))}
@@ -828,8 +839,19 @@ function IncomePanel({
           ))}
         </ul>
       )}
+      {opened && <PaycheckForm paycheck={opened} accountName={context.accountName} onClose={() => setOpen(undefined)} />}
     </Panel>
   );
+}
+
+/**
+ * Under a paycheck: the day it arrives and where, and what goes straight to other accounts with
+ * it (a 401(k), the employer's match), which never shows in the take-home.
+ */
+function paycheckDetail(paycheck: Paycheck, context: RowContext): string {
+  const arrives = `${formatDay(paycheck.payDate)} → ${context.accountName(paycheck.depositAccountId)}`;
+  const elsewhere = paycheck.contributions.reduce((sum, contribution) => sum + contribution.amountCents, 0);
+  return elsewhere === 0 ? arrives : `${arrives} · ${formatCents(elsewhere)} more to your accounts`;
 }
 
 /**

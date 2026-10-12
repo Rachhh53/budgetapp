@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { todayIso } from "../lib/dates";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
 
@@ -37,6 +38,8 @@ export interface Settings {
   /** Where backups are saved; empty until a folder is chosen. Changed only through Choose folder. */
   backup_folder: string;
   backup_keep_count: BackupKeepCount;
+  /** The day forms for something new open on, as `YYYY-MM-DD`; empty means today. */
+  default_date: string;
 }
 
 export const SETTINGS_KEY = ["settings"] as const;
@@ -44,6 +47,20 @@ export const SETTINGS_KEY = ["settings"] as const;
 /** `enabled` is false while the app is locked: settings sit behind the lock like everything else. */
 export function useSettings(enabled = true) {
   return useQuery({ queryKey: SETTINGS_KEY, queryFn: () => api.get<Settings>("/api/settings"), enabled });
+}
+
+/**
+ * The day a form for something new opens on: the one chosen in Settings, or today. `fromSetting`
+ * says which, so a form can say why it did not open on today.
+ *
+ * Only for what a form starts with. Anything that asks what is past, due or still to come uses
+ * `todayIso()`: the setting never moves the real day.
+ */
+export function useDefaultDate(): { date: string; fromSetting: boolean } {
+  const chosen = useSettings().data?.default_date ?? "";
+  const today = todayIso();
+  // A day after today cannot be saved; one that somehow is (the PC's clock was turned back) is not followed.
+  return chosen !== "" && chosen <= today ? { date: chosen, fromSetting: true } : { date: today, fromSetting: false };
 }
 
 export function useUpdateSetting() {

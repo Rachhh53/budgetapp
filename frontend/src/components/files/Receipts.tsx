@@ -2,7 +2,6 @@ import { ChevronLeft, ChevronRight, Download, FileText, Image, Paperclip, Trash2
 import { type DragEvent, useId, useState } from "react";
 import {
   ACCEPTED_FILES,
-  type Attachment,
   type AttachmentOwner,
   DEFAULT_MAX_BYTES,
   formatSize,
@@ -91,7 +90,15 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
         </p>
       )}
 
-      {chosen && <Preview key={chosen.id} attachment={chosen} compact={compact} />}
+      {chosen && (
+        <FilePreview
+          key={chosen.id}
+          name={chosen.name}
+          pages={chosen.pages}
+          src={(page) => previewUrl(chosen, page)}
+          size={compact ? "compact" : "full"}
+        />
+      )}
 
       {files.length > 0 && (
         <ul className="space-y-2">
@@ -223,25 +230,44 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
   );
 }
 
-/** The chosen file, drawn: a picture as it is, a PDF one page at a time. */
-function Preview({ attachment, compact }: { attachment: Attachment; compact: boolean }) {
+/** How tall a preview may grow: short in a dialog, most of the window on a page, or the whole height of a column it has to itself. */
+const PREVIEW_HEIGHTS = { compact: "max-h-[24dvh]", full: "max-h-[60dvh]", column: "max-h-[75dvh]" } as const;
+
+/**
+ * A kept file, drawn: a picture as it is, a PDF one page at a time. The backend draws each page,
+ * so nothing inside the file is ever run by the window.
+ *
+ * @param pages how many pages a PDF has; `null` for a picture
+ * @param src   where the picture of a page is
+ */
+export function FilePreview({
+  name,
+  pages: pageCount,
+  src,
+  size,
+}: {
+  name: string;
+  pages: number | null;
+  src: (page: number) => string;
+  size: keyof typeof PREVIEW_HEIGHTS;
+}) {
   const [page, setPage] = useState(1);
   const [failed, setFailed] = useState(false);
-  const pages = attachment.pages ?? 1;
+  const pages = pageCount ?? 1;
 
   return (
     <figure className="rounded-lg border border-line bg-bg/60 p-2">
       {failed ? (
         <p role="status" className="p-4 text-center text-muted">
-          We couldn't show {attachment.name} here, but the file itself is safe. Save a copy to open it.
+          We couldn't show {name} here, but the file itself is safe. Save a copy to open it.
         </p>
       ) : (
         <img
-          src={previewUrl(attachment, page)}
-          alt={pages > 1 ? `${attachment.name}, page ${page} of ${pages}` : attachment.name}
+          src={src(page)}
+          alt={pages > 1 ? `${name}, page ${page} of ${pages}` : name}
           onError={() => setFailed(true)}
           // Shown whole, never cropped: a receipt's total is as likely at the bottom as the top.
-          className={`mx-auto w-auto max-w-full rounded-md object-contain ${compact ? "max-h-[24dvh]" : "max-h-[60dvh]"}`}
+          className={`mx-auto w-auto max-w-full rounded-md object-contain ${PREVIEW_HEIGHTS[size]}`}
         />
       )}
       {pages > 1 && (

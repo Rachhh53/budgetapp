@@ -15,12 +15,14 @@ import {
 } from "../../api/entries";
 import type { PeriodDetail } from "../../api/periods";
 import { addDays, formatDay, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { FormSection } from "../FormSection";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker, TextPicker } from "../Picker";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_DANGER_OUTLINE, BUTTON_LINK, BUTTON_PRIMARY, HINT, INPUT, LABEL } from "../ui";
 
 /** Accounts whose balance is what is owed: spending raises it and money in pays it down. */
@@ -75,7 +77,8 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
     entry?.description ?? (paysBack ? `Reimbursement: ${paysBack.payee ?? paysBack.description}` : ""),
   );
   const [payee, setPayee] = useState(entry?.payee ?? "");
-  const [date, setDate] = useState(entry?.date ?? firstDate(period));
+  const opensOn = useDefaultDate();
+  const [date, setDate] = useState(entry?.date ?? firstDate(period, opensOn.date));
   const [accountId, setAccountId] = useState<string | null>(
     entry ? String(entry.accountId) : startOn !== undefined ? String(startOn) : period?.primaryAccountId != null ? String(period.primaryAccountId) : null,
   );
@@ -377,6 +380,7 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
                   required
                   className={INPUT}
                 />
+                {!entry && <DefaultDateHint value={date} />}
               </div>
               <Picker
                 label={ACCOUNT_LABELS[kind]}
@@ -617,10 +621,14 @@ const PLACEHOLDERS: Record<EntryKind, string> = {
   transfer: "e.g. Top up savings",
 };
 
-/** Today when it falls in the period on screen; otherwise that period's first day. */
-function firstDate(period: PeriodDetail | undefined): string {
+/**
+ * The day a new entry opens on. Looking at another pay period, that period's first day: the entry is
+ * meant for the period on screen. Otherwise the day new things start on, which is today unless
+ * Settings says another.
+ */
+function firstDate(period: PeriodDetail | undefined, startOn: string): string {
   const today = todayIso();
-  return period === undefined || (today >= period.start && today <= period.end) ? today : period.start;
+  return period === undefined || (today >= period.start && today <= period.end) ? startOn : period.start;
 }
 
 /**

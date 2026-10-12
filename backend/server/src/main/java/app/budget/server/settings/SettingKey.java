@@ -1,5 +1,8 @@
 package app.budget.server.settings;
 
+import app.budget.server.api.Inputs;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
@@ -39,7 +42,15 @@ public enum SettingKey {
             "Please choose the backup folder with Choose folder."),
     /** How many daily backups are kept; older ones are removed. */
     BACKUP_KEEP_COUNT("backup_keep_count", "30", Set.of("7", "14", "30", "60", "90")::contains,
-            "Please choose 7, 14, 30, 60 or 90 backups.");
+            "Please choose 7, 14, 30, 60 or 90 backups."),
+    /**
+     * The day the forms for something new open on, in place of today; empty means today. For
+     * entering a year from its start: every form would otherwise have to be turned back from
+     * today by hand. It only fills in a form. What counts as past due, current or upcoming is
+     * always worked out from the real day. The route also refuses a day after today.
+     */
+    DEFAULT_DATE("default_date", "", SettingKey::emptyOrSupportedDate,
+            "Please choose a day from 2000 on, up to today, or go back to using today.");
 
     private final String key;
     private final String defaultValue;
@@ -51,6 +62,17 @@ public enum SettingKey {
         this.defaultValue = defaultValue;
         this.valid = valid;
         this.hint = hint;
+    }
+
+    private static boolean emptyOrSupportedDate(String value) {
+        if (value.isEmpty()) {
+            return true;
+        }
+        try {
+            return Inputs.inSupportedYears(LocalDate.parse(value));
+        } catch (DateTimeParseException e) {
+            return false;
+        }
     }
 
     public static Optional<SettingKey> find(String key) {

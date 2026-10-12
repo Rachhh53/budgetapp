@@ -2,48 +2,13 @@
 # vulnerability in code that Budget ships or builds with never belongs here.
 #
 # Cargo.lock records the dependencies of every platform Tauri supports, but Budget is only
-# built for Windows. The two crates in the "Permanent" section belong to Tauri's Linux (GTK)
+# built for Windows. The two crates listed below belong to Tauri's Linux (GTK)
 # backend and are not in the Windows build at all. To check:
 #   cargo tree --locked --target x86_64-pc-windows-msvc -e normal,build -i <crate>
 # prints "nothing to print" for each of them.
 #
 # Review this list whenever tauri is upgraded, and delete an entry once the crate is gone
 # from Cargo.lock.
-
-# --- Temporary: "unmaintained" notices, not vulnerabilities -------------------------------
-#
-# The five unic-* crates are in the Windows build (tauri-utils 2.9.3 -> urlpattern 0.3 ->
-# unic-ucd-ident). Their advisories report no flaw: they say the crates have no maintainer
-# any more. No version of them is "fixed", Tauri cannot work without tauri-utils, and the
-# first Tauri that uses a urlpattern without them is 2.12, which is not yet 14 days old.
-# Taking dozens of too-young packages early to clear a notice that reports no flaw would be
-# the worse trade, so these are ignored only until Tauri 2.12 is old enough. After that date
-# the scan fails again until Tauri is upgraded and these five entries are deleted.
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2025-0081"
-ignoreUntil = 2026-10-15T00:00:00Z
-reason = "unic-char-property: unmaintained notice, no known flaw. Goes away with Tauri 2.12 once that is 14 days old."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2025-0075"
-ignoreUntil = 2026-10-15T00:00:00Z
-reason = "unic-char-range: unmaintained notice, no known flaw. Goes away with Tauri 2.12 once that is 14 days old."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2025-0080"
-ignoreUntil = 2026-10-15T00:00:00Z
-reason = "unic-common: unmaintained notice, no known flaw. Goes away with Tauri 2.12 once that is 14 days old."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2025-0100"
-ignoreUntil = 2026-10-15T00:00:00Z
-reason = "unic-ucd-ident: unmaintained notice, no known flaw. Goes away with Tauri 2.12 once that is 14 days old."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2025-0098"
-ignoreUntil = 2026-10-15T00:00:00Z
-reason = "unic-ucd-version: unmaintained notice, no known flaw. Goes away with Tauri 2.12 once that is 14 days old."
 
 # --- Permanent: not in the Windows build ---------------------------------------------------
 

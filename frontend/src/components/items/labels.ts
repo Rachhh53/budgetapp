@@ -15,7 +15,19 @@ export const KIND_LABELS: Record<ItemKind, string> = {
   bucket_move: "Bucket move",
 };
 
-/** Plural, for the filter chips. */
+/**
+ * What each kind is and when to pick it, shown under the Type choice (Rachel, 2026-10-12: a budget
+ * and a bill look alike in the list, and the form did not say which one to choose).
+ */
+export const KIND_HELP: Record<ItemKind, string> = {
+  bill: "A bill, or regular spending nobody bills you for: a subscription, a class, a haircut.",
+  budget:
+    "Money you plan to spend a little at a time, with no single payment to tick off: groceries, gas, eating out. Pick a bill or expense instead when it is one payment on a known day.",
+  transfer: "Money moved between two of your own accounts: into savings, or a loan's payment.",
+  card_payment: "What you pay towards a credit card. It can follow the card's statement, or be an amount you set.",
+  bucket_move: "Money set aside in a bucket. It stays in its account.",
+};
+
 /** A picture for each kind, used wherever the kinds are chosen between or a form is about one. */
 export const KIND_ICONS: Record<ItemKind, LucideIcon> = {
   bill: Receipt,
@@ -25,6 +37,7 @@ export const KIND_ICONS: Record<ItemKind, LucideIcon> = {
   bucket_move: PiggyBank,
 };
 
+/** Plural, for the filter chips. */
 export const KIND_PLURALS: Record<ItemKind, string> = {
   bill: "Bills & expenses",
   transfer: "Transfers",

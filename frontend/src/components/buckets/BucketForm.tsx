@@ -5,6 +5,7 @@ import { type Bucket, useDeleteBucket, useGoalPace, useMoveMoneyInto, useSaveBuc
 import { usePayPeriods } from "../../api/income";
 import { type Item, itemAsInput, type ItemSchedule, useItems, useSaveItem } from "../../api/items";
 import { formatDate, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { DaySelect } from "../DaySelect";
@@ -14,6 +15,7 @@ import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { PauseItem } from "../items/PauseItem";
 import { BucketHistory } from "./BucketHistory";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_DANGER_OUTLINE, BUTTON_LINK, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /** What the history calls the amount a new bucket was given, when that is dated earlier than today. */
@@ -98,12 +100,15 @@ function BucketFields({ account, bucket, buckets, items, forAmount, onClose }: B
   const [amount, setAmount] = useState(own ? centsToInput(own.amountCents) : "");
   const [cadence, setCadence] = useState<Cadence>(own?.schedule.frequency === "monthly" ? "monthly" : "every_pay_period");
   const [monthDay, setMonthDay] = useState(own?.schedule.day1 ?? 1);
-  // When the recurring amount begins. Today unless told otherwise; an earlier day builds up what it would already hold.
-  const [startsOn, setStartsOn] = useState(own?.schedule.startDate ?? todayIso());
+  const startOn = useDefaultDate();
+  // When the recurring amount begins: the day new things start on (today, unless Settings says another).
+  // An earlier day builds up what it would already hold.
+  const [startsOn, setStartsOn] = useState(own?.schedule.startDate ?? startOn.date);
   const [starting, setStarting] = useState("");
   const [held, setHeld] = useState(bucket ? centsToInput(bucket.balanceCents) : "");
   // The day the amount typed here is true for: today, or earlier to build the balance up from then.
-  const [heldOn, setHeldOn] = useState(todayIso());
+  // A new bucket's first amount follows the day new things start on; a change to one that exists is made today.
+  const [heldOn, setHeldOn] = useState(bucket ? todayIso() : startOn.date);
   const adjust = useMoveMoneyInto();
   // Set once a backdated starting amount has gone in, so trying again after a later step failed does not add it twice.
   const [startingPosted, setStartingPosted] = useState(false);
@@ -128,7 +133,8 @@ function BucketFields({ account, bucket, buckets, items, forAmount, onClose }: B
 
   // A new bucket counts from this paycheck's payday unless told otherwise.
   const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
-  const openedOn = chosenOpenedOn ?? currentPeriod?.start ?? todayIso();
+  // The day chosen in Settings comes first: entering a year from its start, the bucket should count from then.
+  const openedOn = chosenOpenedOn ?? (startOn.fromSetting ? startOn.date : (currentPeriod?.start ?? todayIso()));
 
   /** An optional amount: empty is "none", anything else has to read as zero or more. */
   const optionalCents = (text: string): number | null | "invalid" => {
@@ -431,6 +437,7 @@ function BucketFields({ account, bucket, buckets, items, forAmount, onClose }: B
             <p className={HINT}>
               The day that amount {bucket ? "changes" : "went in"}. Today unless you choose an earlier day, to build the balance up from then.
             </p>
+            {!bucket && <DefaultDateHint value={heldOn} />}
           </div>
         </FormSection>
       )}
@@ -444,6 +451,7 @@ function BucketFields({ account, bucket, buckets, items, forAmount, onClose }: B
               </label>
               <input id={`${id}-starts`} type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} className={INPUT} />
               <p className={HINT}>For the amount set aside each time. An earlier day builds up what it would have set aside since then.</p>
+              {!own && <DefaultDateHint value={startsOn} />}
             </div>
           )}
           <div>
@@ -461,6 +469,7 @@ function BucketFields({ account, bucket, buckets, items, forAmount, onClose }: B
             <p className={HINT}>
               Recurring amounts, save-ups and interest reach this bucket from this day on. Choose an earlier day to bring in ones dated before it.
             </p>
+            {!bucket && <DefaultDateHint value={openedOn} />}
           </div>
         </FormSection>
       )}

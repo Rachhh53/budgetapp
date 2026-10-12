@@ -2,10 +2,12 @@ import { Percent } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { type Account, type Rate, useDeleteRate, useSaveRate } from "../../api/accounts";
 import { addDays, formatDate, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { Card } from "../Card";
 import { EditButton } from "../EditButton";
 import { Modal } from "../Modal";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 const RATE_HELP = "Please enter a rate like 6.25.";
@@ -40,6 +42,8 @@ export function RateCard({ account, rates, title, unit, about, missing, suggesti
   const useSuggestion = useSaveRate(account.id);
   const remove = useDeleteRate(account.id);
   const current = currentRate(rates);
+  // A suggested rate is taken from the day new things start on, like one typed in.
+  const suggestionFrom = useDefaultDate().date;
 
   return (
     <Card
@@ -65,7 +69,7 @@ export function RateCard({ account, rates, title, unit, about, missing, suggesti
               <button
                 type="button"
                 disabled={useSuggestion.isPending}
-                onClick={() => useSuggestion.mutate({ rateBp: suggestion.rateBp, effectiveDate: todayIso() })}
+                onClick={() => useSuggestion.mutate({ rateBp: suggestion.rateBp, effectiveDate: suggestionFrom })}
                 className={BUTTON_PRIMARY}
               >
                 {useSuggestion.isPending ? "Saving…" : `Use ${formatRate(suggestion.rateBp)} as the ${title}`}
@@ -130,7 +134,8 @@ function RateForm({ account, title, current, onClose }: { account: Account; titl
   const saveRate = useSaveRate(account.id);
   const removeRate = useDeleteRate(account.id);
   const [rate, setRate] = useState(current ? rateToInput(current.rateBp) : "");
-  const [from, setFrom] = useState(current?.effectiveDate ?? todayIso());
+  const startOn = useDefaultDate();
+  const [from, setFrom] = useState(current?.effectiveDate ?? startOn.date);
   const [problem, setProblem] = useState<string>();
 
   const submit = async (event: FormEvent) => {
@@ -192,6 +197,7 @@ function RateForm({ account, title, current, onClose }: { account: Account; titl
               required
               className={`${INPUT} min-h-14`}
             />
+            {!current && <DefaultDateHint value={from} />}
           </div>
         </div>
         <p className={HINT}>

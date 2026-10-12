@@ -2,9 +2,11 @@ import { ChevronLeft, ChevronRight, Wallet } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { type Account, useSaveBalances } from "../../api/accounts";
 import { formatDate, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { formatCents, parseDollars } from "../../lib/money";
 import { Modal } from "../Modal";
 import { MoneyField } from "../MoneyField";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT } from "../ui";
 import { ACCOUNT_GROUPS } from "./labels";
 
@@ -23,7 +25,7 @@ export function UpdateBalancesForm({ accounts, onClose }: { accounts: readonly A
   const id = useId();
   const save = useSaveBalances();
   const today = todayIso();
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(useDefaultDate().date);
   // What was typed for each account, by account id. An account left empty is left alone.
   const [typed, setTyped] = useState<Record<number, string>>({});
   const [problem, setProblem] = useState<string>();
@@ -93,6 +95,7 @@ export function UpdateBalancesForm({ accounts, onClose }: { accounts: readonly A
             />
           </div>
           <p className={HINT}>Accounts left empty keep what they had.</p>
+          <DefaultDateHint value={date} />
         </div>
 
         {/* Lighter than the panels of other forms, and what was last entered sits beside each name: three accounts fit a page. */}

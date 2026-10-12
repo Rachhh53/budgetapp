@@ -157,6 +157,12 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | DELETE | `/api/income-sources/{id}/pay-changes/{changeId}` | remove one change of pay, so the amounts before it carry on; returns the source |
 | GET | `/api/income-sources/{id}/this-year` | what the source brings home this calendar year: `{ year, soFarCents, paychecksSoFar, wholeYearCents, paychecksInYear, estimate }` — paychecks that have arrived (today's included) and every paycheck of the year, each counted in the year it arrives |
 | PUT | `/api/income-sources/{id}/paychecks/{scheduledDate}` | type over one paycheck `{ netCents }` |
+| GET, POST | `/api/income-sources/{id}/pay-stubs` | the source's pay stubs, newest first `{ id, name, payDate, status, applied, grossCents, netCents, toCheck }`; POST adds one as `multipart/form-data` (field `file`, a single PDF). It is read on this PC and waits in review, changing nothing. 415 when it is not a PDF, 422 when it has no text in it (a scan) or cannot be opened |
+| POST | `/api/pay-stubs/read` | read a stub without keeping it `{ payDate, lines, totals }`, to fill in an income source that does not exist yet |
+| GET, PUT, DELETE | `/api/pay-stubs/{id}` | one stub: its lines (`section`, `label`, `amountCents`, `ytdCents`, `tracksAs`, `accountId`, `sure`), `totals` (with `differenceCents` and `balanced`: gross less everything taken out against the net pay), `toCheck`, the `paycheck` it is for and what saving it `wouldSet`; PUT sends a stub in review back `{ payDate, lines }` (409 once saved); DELETE removes it and leaves what it changed, Undo brings it back |
+| POST | `/api/pay-stubs/{id}/save` | save a stub in review `{ apply }`: `correct` the amounts in force, `pay_change` from the paycheck it is for, `paycheck` for just that one (409 when no paycheck is within 4 days of its date) or `none`. How each line was filed is remembered for the source |
+| GET | `/api/pay-stubs/{id}/file`, `/api/pay-stubs/{id}/preview?page=` | the PDF as it was added; a page of it as a picture |
+| POST | `/api/pay-stubs/{id}/copy` | "Save a copy", as for an attachment |
 | GET | `/api/paychecks` | paychecks, today to the horizon; optional `from`, `to` |
 | GET | `/api/pay-periods` | pay periods from the primary source, each with its projected ending balance; optional `from`, `to` |
 | GET | `/api/pay-periods/{start}` | everything in the period that opens on `start`: paychecks, recurring items, one-offs, and each account's starting, in, out, ending and lowest balance, what is in its buckets, what is available after them, projected interest, and whether it dips below its low-balance threshold; `statementsPaid` says which statement each card payment that follows its card was sized from `{ itemId, scheduledDate, closeDate, entered }` |
@@ -204,7 +210,8 @@ Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Ite
 `accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36), `promo_warning_days` (30, 45, 60, 90 or 120: how long
 before a card's promotional rate ends the warnings start), `unpaid_highlight_days` (0, 1, 2, 3, 5, 7, 10 or 14: how soon
 before it is due a bill you pay by hand is pointed out; 0 is never), `auto_lock_minutes` (1, 5, 15, 30 or 60),
-`start_amounts_hidden` (`true` or `false`) and `backup_keep_count` (7, 14, 30, 60 or 90). `backup_folder` is read here
+`start_amounts_hidden` (`true` or `false`), `backup_keep_count` (7, 14, 30, 60 or 90) and `default_date` (empty for
+today, or a day that is today or earlier: the date forms for new things open on). `backup_folder` is read here
 but set with `PUT /api/backups/folder`.
 
 ## CI and dependency checks

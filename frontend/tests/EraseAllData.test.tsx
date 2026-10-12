@@ -1,9 +1,9 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { fakeBackend, renderApp } from "./helpers";
+import { DEFAULT_SETTINGS, fakeBackend, renderApp } from "./helpers";
 
-const DEFAULTS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
+const DEFAULTS = DEFAULT_SETTINGS;
 
 function calls(fetchMock: ReturnType<typeof fakeBackend>): string[] {
   return fetchMock.mock.calls.map(([path, init]) => `${init?.method ?? "GET"} ${path}`);

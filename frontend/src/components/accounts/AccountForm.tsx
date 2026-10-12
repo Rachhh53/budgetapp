@@ -9,7 +9,7 @@ import {
   useSaveAccount,
   useSaveRateFor,
 } from "../../api/accounts";
-import { todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { parseRate } from "../../lib/rates";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
@@ -46,6 +46,8 @@ type AccountPart = "what" | "look" | "warnings" | "about";
 export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFormProps) {
   const id = useId();
   const save = useSaveAccount(account?.id);
+  // A rate typed with a new account applies from the day new things start on (today, unless Settings says another).
+  const rateFrom = useDefaultDate().date;
 
   // Newest accounts first, so the colors offered first are the ones used most recently.
   const usedColors = [...accounts].reverse().map((existing) => existing.color);
@@ -109,7 +111,7 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
             return;
           }
           saveRate.mutate(
-            { accountId: saved.account.id, rateBp, effectiveDate: todayIso() },
+            { accountId: saved.account.id, rateBp, effectiveDate: rateFrom },
             { onSuccess: onClose, onError: () => setAddedWithoutRate(true) },
           );
         },

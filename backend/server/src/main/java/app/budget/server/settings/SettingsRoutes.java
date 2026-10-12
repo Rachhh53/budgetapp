@@ -4,14 +4,19 @@ import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
+import java.time.Clock;
+import java.time.LocalDate;
 
 /** {@code GET /api/settings} and {@code PUT /api/settings/{key}}. */
 public final class SettingsRoutes {
 
     private final SettingsRepository settings;
 
-    public SettingsRoutes(SettingsRepository settings) {
+    private final Clock clock;
+
+    public SettingsRoutes(SettingsRepository settings, Clock clock) {
         this.settings = settings;
+        this.clock = clock;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -32,6 +37,11 @@ public final class SettingsRoutes {
             throw ApiException.badRequest(setting.hint());
         }
         if (update == null || !setting.accepts(update.value())) {
+            throw ApiException.badRequest(setting.hint());
+        }
+        // Forms open on this day, and several of them (a balance, a bucket's first day) take no day after today.
+        if (setting == SettingKey.DEFAULT_DATE && !update.value().isEmpty()
+                && LocalDate.parse(update.value()).isAfter(LocalDate.now(clock))) {
             throw ApiException.badRequest(setting.hint());
         }
         settings.put(setting, update.value());

@@ -18,6 +18,7 @@ import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { ExpenseDetailPage } from "./pages/ExpenseDetailPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
+import { PayStubPage } from "./pages/PayStubPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodPage } from "./pages/PayPeriodPage";
 import { RecurringItemDetailPage } from "./pages/RecurringItemDetailPage";
@@ -138,6 +139,7 @@ function Screens() {
         <Route path="/cards/:id" element={<CardRedirect />} />
         <Route path="/assets/:id" element={<AssetDetailPage />} />
         <Route path="/income/:id" element={<IncomeDetailPage />} />
+        <Route path="/income/:id/stubs/:stubId" element={<PayStubPage />} />
         <Route path="/expenses/:id" element={<ExpenseDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
         <Route path="*" element={<ComingSoonPage title="We couldn't find that screen" />} />

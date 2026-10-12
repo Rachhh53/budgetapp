@@ -9,8 +9,6 @@ import app.budget.server.cards.CardsRepository;
 import app.budget.server.entries.EntriesRepository;
 import app.budget.server.files.AttachmentsRepository.Attachment;
 import app.budget.server.files.AttachmentsRepository.Owner;
-import app.budget.server.files.FileStore.Kind;
-import app.budget.server.files.FileStore.RefusedFileException;
 import app.budget.server.files.FileStore.Stored;
 import app.budget.server.items.ItemCalendar;
 import app.budget.server.items.ItemsRepository;
@@ -18,20 +16,11 @@ import app.budget.server.items.ItemsRepository.Item;
 import io.javalin.http.Context;
 import io.javalin.http.UploadedFile;
 import io.javalin.router.JavalinDefaultRoutingApi;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -39,53 +28,39 @@ import java.util.Map;
  * item came due, or to a card statement; listed, shown, saved again and removed.
  *
  * <p>A file is only ever reached through the id of an attachment, behind the session like
- * everything else. Its name on disk is never sent, and a name the user gave is never logged.
+ * everything else. Taking a file in and handing one back is {@link StoredFiles}, shared with pay stubs.
  */
 public final class AttachmentsRoutes {
 
     /** Plenty for one receipt, its invoice and the insurer's letters. */
     public static final int MAX_PER_OWNER = 20;
-    private static final int NAME_MAX = 120;
-    private static final String FILE_FIELD = "file";
-    /** Pages recently drawn, so paging back and forth through a PDF does not draw each page again. */
-    private static final int PREVIEWS_REMEMBERED = 12;
 
     private final AttachmentsRepository attachments;
-    private final FileStore store;
+    private final StoredFiles files;
     private final EntriesRepository entries;
     private final ItemsRepository items;
     private final ItemCalendar calendar;
     private final CardsRepository cards;
     private final AccountsRepository accounts;
     private final Clock clock;
-    private final SavedCopies savedCopies;
-
-    private final Map<String, byte[]> previews = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
-            return size() > PREVIEWS_REMEMBERED;
-        }
-    });
 
     public AttachmentsRoutes(
             AttachmentsRepository attachments,
-            FileStore store,
+            StoredFiles files,
             EntriesRepository entries,
             ItemsRepository items,
             ItemCalendar calendar,
             CardsRepository cards,
             AccountsRepository accounts,
-            Clock clock,
-            SavedCopies savedCopies) {
+            Clock clock) {
         this.attachments = attachments;
-        this.store = store;
+        this.files = files;
         this.entries = entries;
         this.items = items;
         this.calendar = calendar;
         this.cards = cards;
         this.accounts = accounts;
         this.clock = clock;
-        this.savedCopies = savedCopies;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -144,7 +119,7 @@ public final class AttachmentsRoutes {
     }
 
     private void attach(Context ctx, Owner owner) {
-        List<UploadedFile> uploads = uploads(ctx);
+        List<UploadedFile> uploads = files.uploads(ctx, MAX_PER_OWNER);
         if (uploads.isEmpty()) {
             throw ApiException.badRequest("Please choose a file to attach.");
         }
@@ -155,70 +130,27 @@ public final class AttachmentsRoutes {
         // Every file is checked before any is attached: one that is refused leaves nothing half done.
         List<Stored> kept = new ArrayList<>();
         for (UploadedFile upload : uploads) {
-            try (InputStream content = upload.content()) {
-                kept.add(store.save(content));
-            } catch (RefusedFileException e) {
-                throw refused(e);
-            } catch (IOException e) {
-                throw new UncheckedIOException("Could not read an uploaded file", e);
-            }
+            kept.add(files.keep(upload));
         }
         for (int i = 0; i < kept.size(); i++) {
-            attachments.add(owner, kept.get(i), name(uploads.get(i).filename(), kept.get(i).kind()));
+            attachments.add(owner, kept.get(i), StoredFiles.name(uploads.get(i).filename(), kept.get(i).kind()));
         }
         ApiResponse.send(ctx, 201, attached(owner));
     }
 
-    /** Sends the file exactly as it was attached, to be saved: never shown in place of the app. */
     private void download(Context ctx) {
         Attachment attachment = found(ctx);
-        ctx.contentType(attachment.kind().mime());
-        ctx.header("Content-Disposition", "attachment; filename*=UTF-8''" + encoded(attachment.name()));
-        ctx.header("Content-Length", String.valueOf(attachment.sizeBytes()));
-        try {
-            ctx.result(Files.newInputStream(store.path(attachment.hash())));
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not open an attached file", e);
-        }
+        files.download(ctx, attachment.name(), attachment.kind(), attachment.sizeBytes(), attachment.hash());
     }
 
-    /**
-     * "Save a copy", asked from this PC: the file goes into the Downloads folder and the answer says what
-     * it is called there. Asked from anywhere else, the answer is that nothing was saved, and the screen
-     * falls back to a download of {@code /file}.
-     */
     private void saveCopy(Context ctx) {
         Attachment attachment = found(ctx);
-        if (!savedCopies.canSaveFor(ctx)) {
-            ApiResponse.ok(ctx, new CopyResult(null));
-            return;
-        }
-        ApiResponse.ok(ctx, new CopyResult(savedCopies.copy(attachment.name(), store.path(attachment.hash()))));
+        ApiResponse.ok(ctx, files.copy(ctx, attachment.name(), attachment.hash()));
     }
 
-    /** @param saved what the copy was saved as; null when it could not be saved from here */
-    public record CopyResult(SavedCopies.Saved saved) {}
-
-    /** A picture of the file for the screen: the picture itself, or one page of a PDF as a PNG. */
     private void preview(Context ctx) {
         Attachment attachment = found(ctx);
-        if (attachment.kind() != Kind.PDF) {
-            ctx.contentType(attachment.kind().mime());
-            try {
-                ctx.result(Files.newInputStream(store.path(attachment.hash())));
-            } catch (IOException e) {
-                throw new UncheckedIOException("Could not open an attached file", e);
-            }
-            return;
-        }
-        int page = page(ctx, attachment);
-        byte[] png;
-        try {
-            png = previews.computeIfAbsent(attachment.hash() + "#" + page, key -> store.previewOfPdf(attachment.hash(), page));
-        } catch (RefusedFileException e) {
-            throw new ApiException(422, "We couldn't draw this page, but the file itself is safe. You can still save a copy and open it.");
-        }
-        ctx.contentType("image/png").result(png);
+        files.preview(ctx, attachment.hash(), attachment.kind(), attachment.pages());
     }
 
     private void remove(Context ctx) {
@@ -232,30 +164,14 @@ public final class AttachmentsRoutes {
                 .map(attachment -> new AttachmentView(
                         attachment.id(), attachment.name(), attachment.kind().mime(), attachment.sizeBytes(), attachment.pages()))
                 .toList();
-        return new Attached(views, store.maxBytes(), MAX_PER_OWNER);
+        return new Attached(views, files.maxBytes(), MAX_PER_OWNER);
     }
 
     /** The attachment, when its file is really there. One whose file has gone missing is said to be gone, not a crash. */
     private Attachment found(Context ctx) {
         Attachment attachment = attachments.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound);
-        if (!store.exists(attachment.hash())) {
-            throw new ApiException(410, "We couldn't find this file on this PC. It may have been removed from Budget's folder.");
-        }
+        files.requireOnDisk(attachment.hash());
         return attachment;
-    }
-
-    private static int page(Context ctx, Attachment attachment) {
-        String value = ctx.queryParam("page");
-        int page;
-        try {
-            page = value == null || value.isBlank() ? 1 : Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            throw ApiException.notFound();
-        }
-        if (page < 1 || attachment.pages() == null || page > attachment.pages()) {
-            throw ApiException.notFound();
-        }
-        return page;
     }
 
     private Owner entry(Context ctx) {
@@ -288,66 +204,5 @@ public final class AttachmentsRoutes {
             throw ApiException.notFound();
         }
         return new Owner.Statement(statementId);
-    }
-
-    /** The files sent, or a kind refusal when the request was not an upload or was over the server's limit. */
-    private List<UploadedFile> uploads(Context ctx) {
-        if (ctx.contentLength() > store.maxBytes() * MAX_PER_OWNER) {
-            throw tooLarge();
-        }
-        String type = ctx.contentType();
-        if (type == null || !type.toLowerCase(Locale.ROOT).startsWith("multipart/form-data")) {
-            throw ApiException.badRequest("Please choose a file to attach.");
-        }
-        try {
-            return ctx.uploadedFiles(FILE_FIELD);
-        } catch (RuntimeException e) {
-            // The server's own limit on an upload was passed, or the upload was cut short.
-            throw tooLarge();
-        }
-    }
-
-    private ApiException refused(RefusedFileException e) {
-        return switch (e.problem()) {
-            case EMPTY -> ApiException.badRequest("That file is empty. Please choose another.");
-            case TOO_LARGE -> tooLarge();
-            case NOT_SUPPORTED -> new ApiException(415,
-                    "Budget can keep PDFs and JPEG or PNG pictures. Please save this as one of those and try again.");
-            case LOCKED_PDF -> new ApiException(422,
-                    "That PDF is locked with a password. Please save a copy without one and try again.");
-            case UNREADABLE -> new ApiException(422,
-                    "We couldn't read that file. It may be damaged; please try saving it again.");
-        };
-    }
-
-    private ApiException tooLarge() {
-        return new ApiException(413, "That file is larger than " + store.maxBytes() / (1024 * 1024)
-                + " MB. Please choose a smaller one, or save it at a lower quality.");
-    }
-
-    /**
-     * The name to show for an upload: the last part of whatever path the browser sent, with
-     * nothing that could not be a file name, and never empty.
-     */
-    static String name(String sent, Kind kind) {
-        String name = sent == null ? "" : sent.replace('\\', '/');
-        name = name.substring(name.lastIndexOf('/') + 1)
-                .replaceAll("[\\p{Cntrl}<>:\"|?*]", "")
-                .strip();
-        if (name.length() > NAME_MAX) {
-            // Keep the end, where the extension is.
-            int dot = name.lastIndexOf('.');
-            String extension = dot > 0 && name.length() - dot <= 8 ? name.substring(dot) : "";
-            name = name.substring(0, NAME_MAX - extension.length()).strip() + extension;
-        }
-        if (name.isEmpty() || name.chars().allMatch(c -> c == '.')) {
-            name = (kind == Kind.PDF ? "Document." : "Picture.") + FileStore.extension(kind);
-        }
-        return name;
-    }
-
-    /** RFC 5987: a name in any language survives the trip in a header. */
-    private static String encoded(String name) {
-        return URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20");
     }
 }

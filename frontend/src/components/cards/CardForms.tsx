@@ -14,11 +14,13 @@ import {
   useSaveStatement,
 } from "../../api/cards";
 import { addDays, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { parseRate, rateToInput } from "../../lib/rates";
 import { DaySelect } from "../DaySelect";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { Segmented } from "../Segmented";
 import { PROMO_KIND_LABELS } from "./labels";
@@ -188,9 +190,11 @@ const PROMO_SCOPE_OPTIONS: readonly { value: PromoScope; label: string }[] = [
   { value: "amount", label: "A set amount" },
 ];
 
-/** The latest day of the month `day` (31 = last) on or before today: the statement most likely being entered. */
-function lastClose(day: number): string {
-  const today = todayIso();
+/**
+ * The latest day of the month `day` (31 = last) on or before `today`: the statement most likely being entered.
+ * `today` is the day new things start on, so entering a year from its start opens on that month's statement.
+ */
+function lastClose(day: number, today: string): string {
   const [year = 0, month = 1] = today.split("-").map(Number);
   const onDay = (y: number, m: number) => {
     // Day 0 of the next month is the last day of this one.
@@ -209,7 +213,9 @@ export function StatementForm({ account, settings, onClose }: { account: Account
   const id = useId();
   const save = useSaveStatement(account.id);
   const today = todayIso();
-  const [closeDate, setCloseDate] = useState(settings ? lastClose(settings.statementCloseDay) : today);
+  const startOn = useDefaultDate();
+  const [opensOn] = useState(settings ? lastClose(settings.statementCloseDay, startOn.date) : startOn.date);
+  const [closeDate, setCloseDate] = useState(opensOn);
   const [balance, setBalance] = useState("");
   const [minimum, setMinimum] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -250,6 +256,7 @@ export function StatementForm({ account, settings, onClose }: { account: Account
               required
               className={INPUT}
             />
+            <DefaultDateHint value={closeDate} openedOn={opensOn} />
           </div>
           <div>
             <label htmlFor={`${id}-due`} className={LABEL}>
@@ -294,14 +301,13 @@ export function StatementForm({ account, settings, onClose }: { account: Account
 export function PromoForm({ account, promo, onClose }: { account: Account; promo?: Promo; onClose: () => void }) {
   const id = useId();
   const save = useSavePromo(account.id, promo?.id);
-  const today = todayIso();
   const [step, setStep] = useState(0);
   const [label, setLabel] = useState(promo?.label ?? "");
   const [kind, setKind] = useState<PromoKind>(promo?.kind ?? "balance_transfer");
   // Most offers are on the whole card ("0% for 12 months"); a balance transfer or one financed purchase is on a set amount.
   const [scope, setScope] = useState<PromoScope>(promo && promo.originalBalanceCents !== null ? "amount" : "everything");
   const [original, setOriginal] = useState(promo && promo.originalBalanceCents !== null ? centsToInput(promo.originalBalanceCents) : "");
-  const [startDate, setStartDate] = useState(promo?.startDate ?? today);
+  const [startDate, setStartDate] = useState(promo?.startDate ?? useDefaultDate().date);
   const [endDate, setEndDate] = useState(promo?.endDate ?? "");
   const [rate, setRate] = useState(promo ? rateToInput(promo.rateBp) : "0.00");
   const [rateAfter, setRateAfter] = useState(promo?.rateAfterBp != null ? rateToInput(promo.rateAfterBp) : "");
@@ -413,6 +419,7 @@ export function PromoForm({ account, promo, onClose }: { account: Account; promo
                   required
                   className={INPUT}
                 />
+                {!promo && <DefaultDateHint value={startDate} />}
               </div>
               <div>
                 <label htmlFor={`${id}-end`} className={LABEL}>

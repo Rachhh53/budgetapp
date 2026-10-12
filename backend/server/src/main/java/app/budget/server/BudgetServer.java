@@ -34,6 +34,7 @@ import app.budget.server.files.AttachmentsRepository;
 import app.budget.server.files.AttachmentsRoutes;
 import app.budget.server.files.FileStore;
 import app.budget.server.files.SavedCopies;
+import app.budget.server.files.StoredFiles;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRoutes;
 import app.budget.server.income.PayCalendar;
@@ -54,6 +55,8 @@ import app.budget.server.schedule.HolidaysRoutes;
 import app.budget.server.settings.SettingKey;
 import app.budget.server.settings.SettingsRepository;
 import app.budget.server.settings.SettingsRoutes;
+import app.budget.server.stubs.PayStubsRepository;
+import app.budget.server.stubs.PayStubsRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.module.SimpleModule;
@@ -173,7 +176,7 @@ public final class BudgetServer {
             // Straight after the gate: everything a signed-in request changes from here on can be undone.
             new ChangeRoutes(new ChangeLog(database.jdbi(), clock)).register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
-            new SettingsRoutes(settings).register(routes);
+            new SettingsRoutes(settings, clock).register(routes);
             new AccountsRoutes(accounts, interest, buckets, ledger, clock).register(routes);
             new BucketsRoutes(buckets, accounts, ledger, clock).register(routes);
             new HolidaysRoutes(holidays, clock).register(routes);
@@ -186,7 +189,9 @@ public final class BudgetServer {
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
             new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
             SavedCopies savedCopies = new SavedCopies(config.downloadsDir());
-            new AttachmentsRoutes(attachments, fileStore, entries, items, itemCalendar, cards, accounts, clock, savedCopies)
+            StoredFiles storedFiles = new StoredFiles(fileStore, savedCopies);
+            new AttachmentsRoutes(attachments, storedFiles, entries, items, itemCalendar, cards, accounts, clock).register(routes);
+            new PayStubsRoutes(new PayStubsRepository(database.jdbi(), clock), storedFiles, income, payCalendar, accounts, clock)
                     .register(routes);
             new ReportsRoutes(reports, reportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
                     .register(routes);

@@ -173,6 +173,24 @@ class ApiTest {
         }
 
         @Test
+        void theDefaultDateIsTodayUntilADayUpToTodayIsChosen() throws Exception {
+            String cookie = server.unlock();
+            assertThat(server.get("/api/settings", cookie).data().get("default_date").asText()).isEmpty();
+
+            // The test server's clock says it is 2026-10-01.
+            assertThat(server.put("/api/settings/default_date", "{\"value\":\"2026-01-01\"}", cookie).status()).isEqualTo(200);
+            assertThat(server.put("/api/settings/default_date", "{\"value\":\"2026-10-01\"}", cookie).status()).isEqualTo(200);
+            assertThat(server.put("/api/settings/default_date", "{\"value\":\"2026-10-02\"}", cookie).status()).isEqualTo(400);
+            assertThat(server.put("/api/settings/default_date", "{\"value\":\"1999-12-31\"}", cookie).status()).isEqualTo(400);
+            assertThat(server.put("/api/settings/default_date", "{\"value\":\"January 1\"}", cookie).status()).isEqualTo(400);
+            assertThat(server.get("/api/settings", cookie).data().get("default_date").asText()).isEqualTo("2026-10-01");
+
+            // Empty goes back to today.
+            assertThat(server.put("/api/settings/default_date", "{\"value\":\"\"}", cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).data().get("default_date").asText()).isEmpty();
+        }
+
+        @Test
         void savesAChangeAndKeepsIt() throws Exception {
             String cookie = server.unlock();
 

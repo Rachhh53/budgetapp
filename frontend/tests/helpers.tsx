@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
   unpaid_highlight_days: "0",
   backup_folder: "",
   backup_keep_count: "30",
+  default_date: "",
 };
 
 /** Backups before any has been made, kept in the app's own folder. */
@@ -81,6 +82,10 @@ const nothingThisYear: Handler = () => ({
   data: { year: 2026, soFarCents: 0, paychecksSoFar: 0, wholeYearCents: 0, paychecksInYear: 0, estimate: false },
 });
 
+/** Any income source before a pay stub is added. */
+const NO_STUBS = /^GET \/api\/income-sources\/\d+\/pay-stubs$/;
+const noStubs: Handler = () => ({ status: 200, data: [] });
+
 /** Any loan before its terms are entered. */
 const NO_LOAN = /^GET \/api\/accounts\/\d+\/loan$/;
 const noLoanTerms: Handler = () => ({
@@ -109,7 +114,7 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
     const handler =
-      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : undefined);
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : NO_STUBS.test(`${method} ${path}`) ? noStubs : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;

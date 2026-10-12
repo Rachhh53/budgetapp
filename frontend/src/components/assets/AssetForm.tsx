@@ -2,6 +2,7 @@ import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Asset, ASSET_KINDS, type AssetKind, useDeleteAsset, useSaveAsset } from "../../api/assets";
 import { todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { parseDollars } from "../../lib/money";
 import { parseRate, rateToInput } from "../../lib/rates";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
@@ -12,6 +13,7 @@ import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { Segmented } from "../Segmented";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { HINT, INPUT, LABEL } from "../ui";
 import { ASSET_KIND_ICONS, ASSET_KIND_LABELS } from "./labels";
 
@@ -81,7 +83,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
   const [name, setName] = useState(asset?.name ?? "");
   const [color, setColor] = useState(asset?.color ?? firstUnusedColor(usedColors));
   const [value, setValue] = useState("");
-  const [valueDate, setValueDate] = useState(today);
+  const [valueDate, setValueDate] = useState(useDefaultDate().date);
   // A loss is kept as a rate below zero; here it is a direction and a plain percent.
   const [trend, setTrend] = useState<Trend>(!asset?.appreciationBp ? "hold" : asset.appreciationBp > 0 ? "up" : "down");
   const [rate, setRate] = useState(asset?.appreciationBp ? rateToInput(Math.abs(asset.appreciationBp)) : "");
@@ -184,6 +186,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
                 required
                 className={INPUT}
               />
+              {!asset && <DefaultDateHint value={valueDate} />}
             </div>
           </FormSection>
         )}
