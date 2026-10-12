@@ -1,5 +1,5 @@
 import { ChevronDown, Plus } from "lucide-react";
-import { type KeyboardEvent, useId, useState } from "react";
+import { type CSSProperties, type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from "react";
 import { INPUT, LABEL } from "./ui";
 
 export interface PickerOption {
@@ -8,6 +8,12 @@ export interface PickerOption {
   /** A color the user chose for this entry, shown as a dot. */
   color?: string;
 }
+
+/** The list is never taller than this, however much room there is. */
+const LIST_MAX_HEIGHT = 256;
+/** Kept clear between the list and the text box, and between the list and the window's edge. */
+const LIST_GAP = 4;
+const WINDOW_MARGIN = 8;
 
 interface PickerProps {
   label: string;
@@ -41,6 +47,9 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
   const [active, setActive] = useState(0);
   // True once something has been typed since the list opened; an untouched list changes nothing.
   const [edited, setEdited] = useState(false);
+  const anchor = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const [place, setPlace] = useState<CSSProperties>();
 
   const selected = options.find((option) => option.id === value);
   const typed = query.trim();
@@ -51,6 +60,40 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
   const canCreate = onCreate !== undefined && typed !== "" && !exists;
   // The "add as new" row is one more choice after the matches.
   const rowCount = matches.length + (canCreate ? 1 : 0);
+
+  // The list is placed against the window, not inside whatever holds the picker: sitting inside
+  // a dialog it would be cut off at the dialog's edge, or make a form that fits start to scroll.
+  // It opens under the text box, or over it when there is more room there.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(undefined);
+      return;
+    }
+    const position = () => {
+      const box = anchor.current?.getBoundingClientRect();
+      if (!box) {
+        return;
+      }
+      const below = window.innerHeight - box.bottom - LIST_GAP - WINDOW_MARGIN;
+      const above = box.top - LIST_GAP - WINDOW_MARGIN;
+      const wanted = Math.min(LIST_MAX_HEIGHT, list.current?.scrollHeight ?? LIST_MAX_HEIGHT);
+      const under = below >= wanted || below >= above;
+      setPlace({
+        left: box.left,
+        width: box.width,
+        maxHeight: Math.max(0, Math.min(LIST_MAX_HEIGHT, under ? below : above)),
+        ...(under ? { top: box.bottom + LIST_GAP } : { bottom: window.innerHeight - box.top + LIST_GAP }),
+      });
+    };
+    position();
+    // Whatever scrolls or resizes while it is open, the list stays with its text box.
+    window.addEventListener("scroll", position, true);
+    window.addEventListener("resize", position);
+    return () => {
+      window.removeEventListener("scroll", position, true);
+      window.removeEventListener("resize", position);
+    };
+  }, [open, rowCount]);
 
   const openList = () => {
     setQuery("");
@@ -109,7 +152,7 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
       <label htmlFor={id} className={LABEL}>
         {label}
       </label>
-      <div className="relative">
+      <div ref={anchor} className="relative">
         {selected?.color && !open && (
           <span
             aria-hidden
@@ -144,13 +187,15 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
 
       {/* Always in the page so aria-controls points at something; hidden until opened. */}
       <ul
+        ref={list}
         id={listId}
         role="listbox"
         aria-label={label}
         hidden={!open}
+        style={place}
         // Keep focus in the text box while a row is clicked, so the click is not lost to a blur.
         onMouseDown={(event) => event.preventDefault()}
-        className="absolute inset-x-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-surface p-1 shadow-lg"
+        className="fixed z-40 overflow-y-auto rounded-lg border border-line bg-surface p-1 shadow-lg"
       >
         {matches.map((option, index) => (
           <li

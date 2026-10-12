@@ -102,7 +102,7 @@ public final class FileStore {
     private static final String PART_SUFFIX = ".part";
 
     /** A preview is for reading on screen, not printing: about a page width on a laptop. */
-    private static final float PREVIEW_DPI = 110;
+    private static final float PREVIEW_DPI = 150;
 
     private final Path dataDir;
     private final long maxBytes;

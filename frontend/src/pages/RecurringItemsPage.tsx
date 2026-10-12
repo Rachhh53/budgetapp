@@ -32,11 +32,11 @@ interface Sort {
 }
 
 /**
- * Column widths from `md` up. Below that each row becomes a card instead: the same cells in
+ * Column widths from `xl` up (the table needs about 950px, which beside the menu is a 1280px window). Below that each row becomes a card instead: the same cells in
  * the same order, two to a line, with the amount lifted beside the name.
  */
 const COLUMNS =
-  "md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_7.5rem_6.5rem_minmax(0,1.1fr)_5.5rem_4.5rem] md:items-center md:gap-x-3";
+  "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_7.5rem_6.5rem_minmax(0,1.1fr)_5.5rem_4.5rem] xl:items-center xl:gap-x-3";
 
 /**
  * Recurring items (design/recurring.png): every bill, transfer, budget and card payment,
@@ -160,7 +160,8 @@ export function RecurringItemsPage() {
 
       {all.length > 0 && (
         <>
-          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+          {/* Two rows at every width: the kinds, then the key and the search. Side by side they never fit, and wrapped unevenly. */}
+          <div className="mb-4 flex flex-col gap-3">
             <div role="group" aria-label="Show" className="flex flex-wrap gap-2">
               <FilterChip label="All" count={active.length} pressed={filter === "all"} onPress={() => setFilter("all")} />
               {ITEM_KINDS.map((kind) => (
@@ -177,8 +178,8 @@ export function RecurringItemsPage() {
                 <FilterChip label="Archived" count={archived.length} pressed={filter === "archived"} onPress={() => setFilter("archived")} />
               )}
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:ml-auto">
-              {all.some((item) => item.estimate) && <EstimateKey />}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {all.some((item) => item.estimate) ? <EstimateKey /> : <span aria-hidden />}
               <div className="flex items-center gap-2">
                 <label htmlFor={searchId} className="font-medium">
                   Search
@@ -197,7 +198,7 @@ export function RecurringItemsPage() {
           </div>
 
           {/* A phone has no header row to press, so the same choice is offered as a list. */}
-          <div className="mb-3 flex items-center gap-2 md:hidden">
+          <div className="mb-3 flex items-center gap-2 xl:hidden">
             <label htmlFor={`${searchId}-sort`} className="font-medium">
               Sort by
             </label>
@@ -247,7 +248,7 @@ export function RecurringItemsPage() {
             </Card>
           ) : (
             <div role="table" aria-label="Recurring items" className="rounded-card border border-line bg-surface">
-              <div role="rowgroup" className="hidden md:block">
+              <div role="rowgroup" className="hidden xl:block">
                 <div role="row" className={`grid border-b border-line px-5 py-3 text-sm font-semibold text-muted ${COLUMNS}`}>
                   {SORTS.map((column) => (
                     <SortHeader
@@ -352,7 +353,7 @@ function ItemRow({ item, accounts }: { item: Item; accounts: readonly Account[] 
           navigate(page);
         }
       }}
-      className={`grid cursor-pointer grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 hover:bg-bg/60 md:px-5 ${COLUMNS} ${item.archived ? "text-muted" : ""}`}
+      className={`grid cursor-pointer grid-cols-2 gap-x-3 gap-y-1 px-4 py-3 hover:bg-bg/60 xl:px-5 ${COLUMNS} ${item.archived ? "text-muted" : ""}`}
     >
       <span role="cell" className="min-w-0">
         <Link to={page} className="block max-w-full truncate font-semibold">
@@ -365,23 +366,23 @@ function ItemRow({ item, accounts }: { item: Item; accounts: readonly Account[] 
           </span>
         )}
       </span>
-      <Cell className="text-sm md:text-base">{describeKind(item)}</Cell>
-      <Cell className="text-sm md:text-base">{describeItemSchedule(item.schedule)}</Cell>
+      <Cell className="text-sm xl:text-base">{describeKind(item)}</Cell>
+      <Cell className="text-sm xl:text-base">{describeItemSchedule(item.schedule)}</Cell>
       {/* On a phone the amount sits beside the name, where the eye looks for it. */}
-      <Cell className="col-start-2 row-start-1 text-right font-semibold md:col-start-auto md:row-start-auto">
+      <Cell className="col-start-2 row-start-1 text-right font-semibold xl:col-start-auto xl:row-start-auto">
         {/* Sized by the card's payment setting, statement by statement: there is no one amount to show. */}
         {item.followsCard ? <span className="text-sm">Follows the card</span> : <Amount cents={item.perOccurrenceCents} estimate={item.estimate} />}
       </Cell>
-      <Cell label="Per year" className="text-sm tabular-nums md:text-right md:text-base">
+      <Cell label="Per year" className="text-sm tabular-nums xl:text-right xl:text-base">
         {item.followsCard ? "—" : <span data-amount>{formatCents(item.perYearCents)}</span>}
       </Cell>
-      <Cell label="Paid from" className="text-sm md:truncate md:text-base">
+      <Cell label="Paid from" className="text-sm xl:truncate xl:text-base">
         {paidFrom}
       </Cell>
-      <Cell label="Lands in" className="text-sm md:text-base">
+      <Cell label="Lands in" className="text-sm xl:text-base">
         {describeLandsIn(item)}
       </Cell>
-      <Cell label="Next" className="text-sm md:text-base">
+      <Cell label="Next" className="text-sm xl:text-base">
         {item.next ? formatDay(item.next.dueDate) : "—"}
       </Cell>
     </div>
@@ -392,7 +393,7 @@ function ItemRow({ item, accounts }: { item: Item; accounts: readonly Account[] 
 function Cell({ label, className = "", children }: { label?: string; className?: string; children: ReactNode }) {
   return (
     <span role="cell" className={`min-w-0 ${className}`}>
-      {label && <span className="text-muted md:hidden">{label}: </span>}
+      {label && <span className="text-muted xl:hidden">{label}: </span>}
       {children}
     </span>
   );

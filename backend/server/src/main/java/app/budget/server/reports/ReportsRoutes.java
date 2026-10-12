@@ -46,6 +46,7 @@ public final class ReportsRoutes {
 
     private final ReportsRepository reports;
     private final ReportRunner runner;
+    private final IncomeReportRunner incomeRunner;
     private final AttachmentsRepository attachments;
     private final FileStore store;
     private final AccountsRepository accounts;
@@ -57,6 +58,7 @@ public final class ReportsRoutes {
     public ReportsRoutes(
             ReportsRepository reports,
             ReportRunner runner,
+            IncomeReportRunner incomeRunner,
             AttachmentsRepository attachments,
             FileStore store,
             AccountsRepository accounts,
@@ -66,6 +68,7 @@ public final class ReportsRoutes {
             SavedCopies savedCopies) {
         this.reports = reports;
         this.runner = runner;
+        this.incomeRunner = incomeRunner;
         this.attachments = attachments;
         this.store = store;
         this.accounts = accounts;
@@ -135,13 +138,21 @@ public final class ReportsRoutes {
     }
 
     private void run(Context ctx) {
-        ApiResponse.ok(ctx, runner.run(ReportDefinition.of(Inputs.body(ctx, RunInput.class).definition())));
+        ReportDefinition definition = ReportDefinition.of(Inputs.body(ctx, RunInput.class).definition());
+        // The two kinds answer with different figures; each says which it is in its {@code kind}.
+        ApiResponse.ok(ctx, definition.kind() == ReportDefinition.Kind.INCOME ? incomeRunner.run(definition) : runner.run(definition));
     }
 
     private void exportCsv(Context ctx) {
         ExportInput input = Inputs.body(ctx, ExportInput.class);
         String name = exportName(input.name());
-        Report report = runner.run(ReportDefinition.of(input.definition()));
+        ReportDefinition definition = ReportDefinition.of(input.definition());
+        if (definition.kind() == ReportDefinition.Kind.INCOME) {
+            IncomeReportRunner.Report income = incomeRunner.run(definition);
+            hand(ctx, input, "text/csv; charset=utf-8", name + ".csv", CsvExport.ofIncome(income, incomeRunner.accountNames(income)));
+            return;
+        }
+        Report report = runner.run(definition);
         hand(ctx, input, "text/csv; charset=utf-8", name + ".csv", CsvExport.of(report, runner.names(report)));
     }
 
@@ -149,6 +160,13 @@ public final class ReportsRoutes {
         ExportInput input = Inputs.body(ctx, ExportInput.class);
         String name = exportName(input.name());
         ReportDefinition definition = ReportDefinition.of(input.definition());
+        if (definition.kind() == ReportDefinition.Kind.INCOME) {
+            // Income has no receipts to add: a pay stub is kept with its income, and saved from there.
+            IncomeReportRunner.Report income = incomeRunner.run(definition);
+            byte[] pdf = PdfExport.ofIncome(name, aboutIncome(definition, income), income, incomeRunner.accountNames(income), fontsDir);
+            hand(ctx, input, "application/pdf", name + ".pdf", pdf);
+            return;
+        }
         Report report = runner.run(definition);
         List<Receipt> receipts = Boolean.TRUE.equals(input.withReceipts()) ? receipts(report) : List.of();
         if (receipts.size() > MAX_RECEIPTS) {
@@ -218,6 +236,23 @@ public final class ReportsRoutes {
         return lines;
     }
 
+    /** The lines under an income report's title: the dates, what counts, and each filter in words. */
+    private List<String> aboutIncome(ReportDefinition definition, IncomeReportRunner.Report report) {
+        List<String> lines = new ArrayList<>();
+        lines.add(PdfExport.day(report.from()) + " – " + PdfExport.day(report.to()));
+        lines.add("Income from " + definition.incomeInclude().stream().map(IncomeReportRunner::words).collect(Collectors.joining(", ")) + ".");
+        if (!definition.accountIds().isEmpty()) {
+            lines.add("Only what landed in " + accounts.all().stream()
+                    .filter(account -> definition.accountIds().contains(account.id()))
+                    .map(Account::name)
+                    .collect(Collectors.joining(" or ")) + ".");
+        }
+        if (!definition.sourceIds().isEmpty()) {
+            lines.add("Only the income sources chosen for this report.");
+        }
+        return lines;
+    }
+
     private static String words(Include include) {
         return switch (include) {
             case ONE_OFFS -> "one-off spending";
@@ -241,7 +276,11 @@ public final class ReportsRoutes {
     /** A definition whose tags, categories and accounts all exist, so nothing unusable is ever saved. */
     private ReportDefinition checked(ReportDefinition.Input input) {
         ReportDefinition definition = ReportDefinition.of(input);
-        runner.run(definition);
+        if (definition.kind() == ReportDefinition.Kind.INCOME) {
+            incomeRunner.run(definition);
+        } else {
+            runner.run(definition);
+        }
         return definition;
     }
 

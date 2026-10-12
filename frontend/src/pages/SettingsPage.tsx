@@ -19,6 +19,7 @@ import { ColorPicker } from "../components/ColorPicker";
 import { EraseAllData } from "../components/EraseAllData";
 import { SecurityCard } from "../components/security/SecurityCard";
 import { BackupsCard } from "../components/settings/BackupsCard";
+import { DefaultDateSetting } from "../components/settings/DefaultDateSetting";
 import { HolidaysCard } from "../components/settings/HolidaysCard";
 import { PAGE_TITLE } from "../components/ui";
 
@@ -95,6 +96,7 @@ export function SettingsPage() {
                       onChange={choose("projection_horizon_months")}
                       options={PROJECTION_HORIZONS.map((months) => ({ value: months, label: `${months} months` }))}
                     />
+                    <DefaultDateSetting value={data.default_date} />
                   </div>
                 </Card>
 

@@ -35,6 +35,13 @@ public final class ChangeRoutes {
     /** Requests that write files on this PC but none of the budget's data: nothing to record, nothing to wait for. */
     private static final Set<String> NOT_BUDGET_DATA = Set.of("/api/backups", "/api/folders");
 
+    /**
+     * Requests that only look things up, sent as a POST because what they ask is too long for an
+     * address: running a report and exporting one. Looking up paydays can fill in a new year's
+     * bank holidays on the way, which is not something to offer Undo for.
+     */
+    private static final Set<String> ASKS_ONLY = Set.of("/api/reports/run", "/api/reports/export/csv", "/api/reports/export/pdf");
+
     private static final String TURN_HELD = "changes.turnHeld";
     private static final String RECORDING = "changes.recording";
     private static final int WAIT_SECONDS = 10;
@@ -65,7 +72,8 @@ public final class ChangeRoutes {
     public record Undone(boolean undone, boolean available) {}
 
     private void start(Context ctx) throws InterruptedException {
-        if (READS.contains(ctx.method().name()) || NOT_DATA.contains(ctx.path()) || NOT_BUDGET_DATA.contains(ctx.path())) {
+        if (READS.contains(ctx.method().name()) || NOT_DATA.contains(ctx.path()) || NOT_BUDGET_DATA.contains(ctx.path())
+                || ASKS_ONLY.contains(ctx.path())) {
             return;
         }
         if (!turn.tryAcquire(WAIT_SECONDS, TimeUnit.SECONDS)) {

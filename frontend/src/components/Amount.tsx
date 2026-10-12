@@ -22,7 +22,7 @@ export function Amount({ cents, estimate = false, className = "" }: { cents: num
 /** The small key shown wherever estimates appear. */
 export function EstimateKey() {
   return (
-    <p className="flex items-center gap-2 text-sm text-muted">
+    <p className="flex shrink-0 items-center gap-2 text-sm whitespace-nowrap text-muted">
       <span aria-hidden className="rounded-md border border-estimate-line bg-estimate px-2 py-0.5 tabular-nums text-estimate-ink">
         $0.00
       </span>

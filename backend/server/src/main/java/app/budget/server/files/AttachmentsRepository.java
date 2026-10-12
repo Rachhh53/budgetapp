@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.Query;
 
@@ -79,22 +80,7 @@ public final class AttachmentsRepository {
     public long add(Owner owner, Stored file, String name) {
         return jdbi.inTransaction(handle -> {
             String now = clock.instant().toString();
-            // The same contents attached again reuse the one row and the one file on disk.
-            handle.createUpdate("""
-                            INSERT INTO files (hash, mime, size, pages, created_at)
-                            VALUES (:hash, :mime, :size, :pages, :now)
-                            ON CONFLICT (hash) DO NOTHING
-                            """)
-                    .bind("hash", file.hash())
-                    .bind("mime", file.kind().mime())
-                    .bind("size", file.size())
-                    .bind("pages", file.pages())
-                    .bind("now", now)
-                    .execute();
-            long fileId = handle.createQuery("SELECT id FROM files WHERE hash = :hash")
-                    .bind("hash", file.hash())
-                    .mapTo(Long.class)
-                    .one();
+            long fileId = fileId(handle, file, now);
             return handle.createQuery("""
                             INSERT INTO attachments (file_id, name, entry_id, item_id, scheduled_date, statement_id, created_at)
                             VALUES (:fileId, :name, :entryId, :itemId, :scheduledDate, :statementId, :now)
@@ -110,6 +96,28 @@ public final class AttachmentsRepository {
                     .mapTo(Long.class)
                     .one();
         });
+    }
+
+    /**
+     * The row of {@code files} for a file {@link FileStore} has just kept, added if this is the first
+     * time its contents are seen: the same contents kept again reuse the one row and the one file on disk.
+     */
+    public static long fileId(Handle handle, Stored file, String now) {
+        handle.createUpdate("""
+                        INSERT INTO files (hash, mime, size, pages, created_at)
+                        VALUES (:hash, :mime, :size, :pages, :now)
+                        ON CONFLICT (hash) DO NOTHING
+                        """)
+                .bind("hash", file.hash())
+                .bind("mime", file.kind().mime())
+                .bind("size", file.size())
+                .bind("pages", file.pages())
+                .bind("now", now)
+                .execute();
+        return handle.createQuery("SELECT id FROM files WHERE hash = :hash")
+                .bind("hash", file.hash())
+                .mapTo(Long.class)
+                .one();
     }
 
     /**
@@ -159,7 +167,7 @@ public final class AttachmentsRepository {
     }
 
     /**
-     * Forgets every file that is attached to nothing and that Undo could not attach again,
+     * Forgets every file that is attached to nothing, is no pay stub, and that Undo could not bring back,
      * and says which files are still wanted, so the rest can be deleted from disk.
      *
      * <p>Must not run while a change is being recorded: forgetting a file is housekeeping,
@@ -172,9 +180,10 @@ public final class AttachmentsRepository {
             handle.execute("""
                     DELETE FROM files
                     WHERE id NOT IN (SELECT file_id FROM attachments)
+                      AND id NOT IN (SELECT file_id FROM pay_stubs)
                       AND id NOT IN (
                           SELECT json_extract(before, '$.file_id') FROM change_log
-                          WHERE table_name = 'attachments' AND before IS NOT NULL)
+                          WHERE table_name IN ('attachments', 'pay_stubs') AND before IS NOT NULL)
                     """);
             return new HashSet<>(handle.createQuery("SELECT hash FROM files").mapTo(String.class).list());
         });

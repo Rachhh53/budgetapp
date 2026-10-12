@@ -223,6 +223,21 @@ describe("income screen: employer match", () => {
     expect(hint).toHaveTextContent("Putting in $66.00 more each paycheck would earn the whole match of $108.00: $33.00 more from your employer every time.");
   });
 
+  it("says it cannot see the contribution, not that the match is unclaimed, when no deduction goes to the match's account", async () => {
+    const unplaced: IncomeSource = {
+      ...SALARY,
+      deductions: SALARY.deductions.map((deduction) => ({ ...deduction, toAccountId: null })),
+      matchFigures: { perPaycheckCents: 0, mostPossibleCents: 10800, contributeMoreCents: 21600 },
+    };
+    withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [unplaced] }) });
+    renderApp("/income/1");
+
+    const salary = await screen.findByRole("region", { name: "Employer match" });
+    const hint = within(salary).getByRole("status");
+    expect(hint).toHaveTextContent("Budget can't see what you put in. None of the deductions on this income go to Brightwater 401(k)");
+    expect(salary).not.toHaveTextContent("Under the cap.");
+  });
+
   it("says nothing more once the whole match is being earned", async () => {
     withInvestments({ "GET /api/income-sources": () => ({ status: 200, data: [AT_THE_CAP] }) });
     renderApp("/income/1");

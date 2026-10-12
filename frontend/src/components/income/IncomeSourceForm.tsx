@@ -1,5 +1,6 @@
-import { Banknote, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { Banknote, ChevronLeft, ChevronRight, FileText, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useId, useState } from "react";
+import { useNavigate } from "react-router";
 import type { Account } from "../../api/accounts";
 import {
   type DeductionInput,
@@ -15,6 +16,8 @@ import {
   type WeekendRule,
 } from "../../api/income";
 import { formatDate, todayIso } from "../../lib/dates";
+import { ACCEPTED_STUBS, problemWithStub, type StubRead, useReadStub, useUploadStub } from "../../api/payStubs";
+import { useDefaultDate } from "../../api/settings";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
@@ -23,6 +26,7 @@ import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker, TextPicker } from "../Picker";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_LINK, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { FREQUENCY_LABELS, WEEKEND_LABELS } from "./schedule";
 
@@ -121,6 +125,14 @@ export function IncomeSourceForm({
 }: IncomeSourceFormProps) {
   const id = useId();
   const save = useSaveIncomeSource(source?.id);
+  const navigate = useNavigate();
+  const readStub = useReadStub();
+  const keepStub = useUploadStub();
+  // A stub chosen to fill in a new source: kept with the source once it exists.
+  const [stubFile, setStubFile] = useState<File>();
+  const [stubProblem, setStubProblem] = useState<string>();
+  // Set when the source was added but its stub could not be kept: the form then only says so, and closes.
+  const [stubNotKept, setStubNotKept] = useState<string>();
   const schedule = source?.schedule;
   // The amounts the form opens on: the history entry asked for, or the ones in force today.
   const pay = terms ?? source;
@@ -150,7 +162,8 @@ export function IncomeSourceForm({
   const [frequency, setFrequency] = useState<PayFrequency>(schedule?.frequency ?? "biweekly");
   const [day1, setDay1] = useState(schedule?.day1 ?? 1);
   const [day2, setDay2] = useState(schedule?.day2 ?? 15);
-  const [startDate, setStartDate] = useState(schedule?.startDate ?? todayIso());
+  const startOn = useDefaultDate();
+  const [startDate, setStartDate] = useState(schedule?.startDate ?? startOn.date);
   const [manualDates, setManualDates] = useState<string[]>(
     schedule && schedule.manualDates.length > 0 ? schedule.manualDates : ["", ""],
   );
@@ -306,8 +319,8 @@ export function IncomeSourceForm({
         day1: byDayOfMonth ? day1 : null,
         day2: frequency === "semi_monthly" ? day2 : null,
         // Paydays on fixed days of the month need no anchor; start from January so the
-        // pay period we are in right now already exists.
-        startDate: byDayOfMonth ? (schedule?.startDate ?? `${todayIso().slice(0, 4)}-01-01`) : startDate,
+        // pay period we are in right now already exists (January of the year new things start in).
+        startDate: byDayOfMonth ? (schedule?.startDate ?? `${startOn.date.slice(0, 4)}-01-01`) : startDate,
         endDate: schedule?.endDate ?? null,
         weekendRule,
         manualDates: frequency === "manual_dates" ? pickedDates : [],
@@ -342,7 +355,26 @@ export function IncomeSourceForm({
   const send = () => {
     const input = toInput();
     if (!isTrouble(input)) {
-      save.mutate(input, { onSuccess: onClose });
+      save.mutate(input, {
+        onSuccess: (saved) => {
+          if (source || !stubFile) {
+            onClose();
+            return;
+          }
+          // The stub that filled the form in is kept with the new source, and opens to be looked over:
+          // that is where its lines get their accounts, and where they are remembered for the next stub.
+          keepStub.mutate(
+            { sourceId: saved.id, file: stubFile },
+            {
+              onSuccess: (stub) => {
+                onClose();
+                navigate(`/income/${saved.id}/stubs/${stub.id}`);
+              },
+              onError: (error) => setStubNotKept(error.message),
+            },
+          );
+        },
+      });
     }
   };
 
@@ -356,11 +388,68 @@ export function IncomeSourceForm({
           : `Edit the pay from ${formatDate(terms.effectiveDate)}`
         : "Edit income source";
   const failure = parts.problem ?? save.error?.message;
+
+  /** Reads a stub on this PC and puts its figures in the form, to be looked over like anything typed. */
+  const fillFromStub = (picked: readonly File[]) => {
+    const file = picked[0];
+    if (!file) {
+      return;
+    }
+    const found = problemWithStub(picked);
+    setStubProblem(found ?? undefined);
+    if (found !== null) {
+      return;
+    }
+    readStub.mutate(file, {
+      onSuccess: (read: StubRead) => {
+        setStubFile(file);
+        if (read.lines.some((line) => line.section === "net")) {
+          setNet(centsToInput(read.totals.netCents));
+          setNetIsEstimate(false);
+        }
+        if (read.lines.some((line) => line.section === "earnings")) {
+          setGross(centsToInput(read.totals.grossCents));
+        }
+        // What comes out before and after tax; each gets its account on the stub's own page.
+        setDeductions(
+          read.lines
+            .filter((line) => (line.section === "pre_tax" || line.section === "after_tax") && line.amountCents > 0)
+            .map((line, index) => ({
+              key: index,
+              name: line.label,
+              unit: "dollars" as const,
+              amount: centsToInput(line.amountCents),
+              percent: "",
+              toAccountId: null,
+            })),
+        );
+      },
+    });
+  };
   const paydaysInView = manualDates.slice(paydaysFrom, paydaysFrom + PAYDAYS_SHOWN);
 
   return (
     <Modal title={title} icon={Banknote} onClose={onClose}>
-      <form ref={parts.ref} onSubmit={(event: FormEvent) => parts.submit(event, check, send)} className="space-y-4">
+      {stubNotKept !== undefined && (
+        // The income is saved; only its stub is not. Said plainly, with the one thing left to do.
+        <div className="space-y-4">
+          <p role="alert" className="font-medium">
+            {name} was added, but its pay stub could not be kept: {stubNotKept}
+          </p>
+          <p className="text-muted">You can add the stub again from {name}'s page, under Pay stubs.</p>
+          <div className="flex justify-end">
+            <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+      <form
+        ref={parts.ref}
+        onSubmit={(event: FormEvent) => parts.submit(event, check, send)}
+        hidden={stubNotKept !== undefined}
+        className="space-y-4"
+      >
         {source && terms && (
           <p className="rounded-lg border-l-4 border-accent bg-bg px-4 py-2 text-sm">
             {terms.effectiveDate === null
@@ -472,6 +561,7 @@ export function IncomeSourceForm({
                   className={INPUT}
                 />
                 <p className={HINT}>Any real payday works — your most recent one is ideal. Later paydays repeat from it.</p>
+                {!source && <DefaultDateHint value={startDate} />}
               </div>
             )}
 
@@ -586,6 +676,39 @@ export function IncomeSourceForm({
               </div>
               <MoneyField label="Gross per paycheck (optional)" value={gross} onChange={setGross} hint="Before taxes and deductions." />
             </div>
+            {!source && (
+              <div>
+                <label
+                  htmlFor={`${id}-stub`}
+                  className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-line px-3 py-2 text-center font-medium has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent-ink"
+                >
+                  <FileText aria-hidden className="size-4 shrink-0" />
+                  {readStub.isPending ? "Reading the stub…" : stubFile ? "Use a different pay stub" : "Fill these in from a pay stub (PDF)"}
+                  <input
+                    id={`${id}-stub`}
+                    type="file"
+                    accept={ACCEPTED_STUBS}
+                    disabled={readStub.isPending}
+                    onChange={(event) => {
+                      fillFromStub([...(event.target.files ?? [])]);
+                      event.target.value = "";
+                    }}
+                    className="sr-only"
+                  />
+                </label>
+                {stubFile && !readStub.isPending && (
+                  <p role="status" className={HINT}>
+                    Filled in from {stubFile.name}, read on this PC. Please check the amounts. It opens next, to say which accounts
+                    its deductions go to.
+                  </p>
+                )}
+                {(stubProblem ?? readStub.error?.message) && (
+                  <p role="alert" className="mt-1 text-sm text-danger">
+                    {stubProblem ?? readStub.error?.message}
+                  </p>
+                )}
+              </div>
+            )}
             {source && !terms && !payChange && (
               // Editing corrects; a raise is recorded with its own button, so the earlier paychecks keep what they had.
               <p className={HINT}>
@@ -807,7 +930,7 @@ export function IncomeSourceForm({
 
         {parts.buttons({
           onClose,
-          pending: save.isPending,
+          pending: save.isPending || keepStub.isPending,
           saveLabel: !source ? "Add income source" : payChange ? "Save pay change" : "Save changes",
         })}
       </form>

@@ -2,9 +2,11 @@ import { Wallet } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { type Account, useSaveBalance } from "../../api/accounts";
 import { todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { parseDollars } from "../../lib/money";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /**
@@ -15,7 +17,7 @@ export function BalanceForm({ account, onClose }: { account: Account; onClose: (
   const id = useId();
   const save = useSaveBalance(account.id);
   const today = todayIso();
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(useDefaultDate().date);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [amountError, setAmountError] = useState<string>();
@@ -59,6 +61,7 @@ export function BalanceForm({ account, onClose }: { account: Account; onClose: (
             className={INPUT}
           />
           <p className={HINT}>Today or earlier. A day you already entered is replaced.</p>
+          <DefaultDateHint value={date} />
         </div>
         <div>
           <label htmlFor={`${id}-note`} className={LABEL}>

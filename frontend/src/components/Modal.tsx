@@ -1,4 +1,4 @@
-import { type LucideIcon, X } from "lucide-react";
+import { type LucideIcon, TriangleAlert, X } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, type ReactNode, type SyntheticEvent, useEffect, useId, useRef, useState } from "react";
 import { isHexColor, readableTextOn } from "../lib/color";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY } from "./ui";
@@ -179,17 +179,24 @@ export function Modal({
           </button>
         </div>
         {asking && (
-          // Stays in view however far the form is scrolled.
-          <div role="alert" className="sticky top-0 z-10 mb-4 rounded-lg border border-line bg-bg p-4 shadow-lg">
-            <p className="font-semibold">You have changes that aren't saved.</p>
-            <p className="text-muted">Close anyway and they are left out.</p>
-            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <button ref={keepEditing} type="button" onClick={() => setAsking(false)} className={BUTTON_PRIMARY}>
-                Keep editing
-              </button>
-              <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
-                Close without saving
-              </button>
+          // Over the form, with the form dimmed behind it, in the warning colors and with an icon: set
+          // into the form in the form's own colors it was missed (Rachel, 2026-10-12), and it pushed the
+          // form down far enough to make it scroll. Against the window, so it takes no room in the form.
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+            <div role="alert" className="w-full max-w-sm rounded-card border-2 border-warn-line bg-warn p-5 text-warn-ink shadow-lg">
+              <p className="flex items-center gap-2 text-lg font-semibold">
+                <TriangleAlert aria-hidden className="size-6 shrink-0" />
+                You have changes that aren't saved.
+              </p>
+              <p className="mt-1">Close anyway and they are left out.</p>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <button ref={keepEditing} type="button" onClick={() => setAsking(false)} className={BUTTON_PRIMARY}>
+                  Keep editing
+                </button>
+                <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+                  Close without saving
+                </button>
+              </div>
             </div>
           </div>
         )}

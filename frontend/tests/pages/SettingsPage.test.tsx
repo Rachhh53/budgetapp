@@ -45,6 +45,42 @@ function savingSettings(overrides: Parameters<typeof fakeBackend>[0] = {}) {
   });
 }
 
+describe("the day new things start on", () => {
+  it("is today until a day is chosen, and one tap goes back to today", async () => {
+    const fetchMock = savingSettings();
+    renderApp("/settings");
+
+    const startOn = await screen.findByRole("group", { name: "New things start on" });
+    expect(within(startOn).getByRole("radio", { name: "Today" })).toBeChecked();
+    expect(screen.queryByLabelText("The day")).not.toBeInTheDocument();
+
+    await userEvent.click(within(startOn).getByRole("radio", { name: "A day I choose" }));
+    // Nothing is saved until a day is given.
+    expect(screen.getByRole("button", { name: "Use this day" })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("The day"), "2026-01-01");
+    await userEvent.click(screen.getByRole("button", { name: "Use this day" }));
+
+    expect(await screen.findByText(/Forms for something new open on Jan 1, 2026/)).toBeInTheDocument();
+    expect(bodiesSentTo(fetchMock, "PUT /api/settings/default_date")).toEqual([{ value: "2026-01-01" }]);
+
+    await userEvent.click(within(startOn).getByRole("radio", { name: "Today" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/settings/default_date")).toEqual([{ value: "2026-01-01" }, { value: "" }]));
+    expect(screen.queryByLabelText("The day")).not.toBeInTheDocument();
+  });
+
+  it("does not take a day after today", async () => {
+    const fetchMock = savingSettings();
+    renderApp("/settings");
+
+    await userEvent.click(await screen.findByRole("radio", { name: "A day I choose" }));
+    await userEvent.type(screen.getByLabelText("The day"), "2999-01-01");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Please choose today or an earlier day.");
+    expect(screen.getByRole("button", { name: "Use this day" })).toBeDisabled();
+    expect(bodiesSentTo(fetchMock, "PUT /api/settings/default_date")).toEqual([]);
+  });
+});
+
 describe("appearance", () => {
   it("takes an accent color from the picker and applies it", async () => {
     const fetchMock = savingSettings();

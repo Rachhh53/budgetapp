@@ -3,7 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account } from "../../src/api/accounts";
 import type { Tag } from "../../src/api/categories";
-import { NEW_REPORT, type Report, type ReportDefinition, type SavedReport } from "../../src/api/reports";
+import type { IncomeSource } from "../../src/api/income";
+import {
+  type IncomeReport,
+  NEW_INCOME_REPORT,
+  NEW_REPORT,
+  type Report,
+  type ReportDefinition,
+  type SavedReport,
+} from "../../src/api/reports";
 import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
@@ -23,6 +31,7 @@ const MEDICAL_DEFINITION: ReportDefinition = { ...NEW_REPORT, tagIds: [1] };
 const MEDICAL: SavedReport = { id: 4, name: "Medical out-of-pocket 2026", definition: MEDICAL_DEFINITION };
 
 const REPORT: Report = {
+  kind: "spending",
   from: "2026-01-01",
   to: "2026-12-31",
   groupBy: "month",
@@ -98,6 +107,109 @@ const REPORT: Report = {
   estimatedCents: 2360,
   hasReimbursements: true,
 };
+
+// Only what the screen reads of an income source: its id and its name.
+const BRIGHTWATER = { id: 2, name: "Brightwater Health" } as IncomeSource;
+
+const INCOME: IncomeReport = {
+  kind: "income",
+  from: "2026-01-01",
+  to: "2026-12-31",
+  groupBy: "month",
+  groups: [
+    {
+      key: "2026-03",
+      label: "March 2026",
+      color: null,
+      count: 4,
+      grossCents: 720000,
+      taxesCents: 176360,
+      deductionsCents: 46400,
+      takeHomeCents: 497240,
+      oneOffsCents: 50000,
+      interestCents: 0,
+      matchCents: 10000,
+      receivedCents: 547240,
+    },
+  ],
+  rows: [
+    {
+      kind: "paycheck",
+      date: "2026-03-01",
+      description: "Brightwater Health paycheck",
+      sourceId: 2,
+      accountId: 1,
+      amountCents: 248620,
+      grossCents: 360000,
+      taxesCents: 88180,
+      deductionsCents: 23200,
+      fromStub: true,
+      estimate: false,
+    },
+    {
+      kind: "match",
+      date: "2026-03-01",
+      description: "Employer match · Brightwater Health",
+      sourceId: 2,
+      accountId: 9,
+      amountCents: 5000,
+      grossCents: null,
+      taxesCents: null,
+      deductionsCents: null,
+      fromStub: false,
+      estimate: false,
+    },
+    {
+      kind: "one_off",
+      date: "2026-03-10",
+      description: "Tax refund",
+      sourceId: null,
+      accountId: 1,
+      amountCents: 50000,
+      grossCents: null,
+      taxesCents: null,
+      deductionsCents: null,
+      fromStub: false,
+      estimate: false,
+    },
+    {
+      kind: "paycheck",
+      date: "2026-03-15",
+      description: "Brightwater Health paycheck",
+      sourceId: 2,
+      accountId: 1,
+      amountCents: 248620,
+      grossCents: null,
+      taxesCents: null,
+      deductionsCents: null,
+      fromStub: false,
+      estimate: true,
+    },
+  ],
+  count: 4,
+  grossCents: 720000,
+  taxesCents: 176360,
+  deductionsCents: 46400,
+  takeHomeCents: 497240,
+  oneOffsCents: 50000,
+  interestCents: 0,
+  matchCents: 10000,
+  receivedCents: 547240,
+  estimatedCents: 248620,
+  paychecksWithoutGross: 1,
+};
+
+/** As {@link withReports}, with an income source, and an income report answering whatever asks for one. */
+function withIncome(overrides: Parameters<typeof fakeBackend>[0] = {}) {
+  return withReports({
+    "GET /api/income-sources": () => ({ status: 200, data: [BRIGHTWATER] }),
+    "POST /api/reports/run": (body) => ({
+      status: 200,
+      data: (body as { definition: ReportDefinition }).definition.kind === "income" ? INCOME : REPORT,
+    }),
+    ...overrides,
+  });
+}
 
 function withReports(overrides: Parameters<typeof fakeBackend>[0] = {}) {
   return fakeBackend({
@@ -455,5 +567,146 @@ describe("Reports", () => {
     renderApp("/reports");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Your data is safe");
+  });
+
+  describe("of income", () => {
+    it("switches the builder to income, keeping the dates and starting the rest again", async () => {
+      const fetchMock = withIncome();
+      renderApp("/reports");
+      await screen.findByText("Total", { selector: "p" });
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Dates" }), "last_year");
+
+      await userEvent.click(screen.getByRole("radio", { name: "Income" }));
+
+      await waitFor(() => expect(lastRun(fetchMock)).toEqual({ ...NEW_INCOME_REPORT, range: "last_year" }));
+      for (const name of ["Paychecks", "One-off money in", "Employer match", "Interest"]) {
+        expect(screen.getByRole("checkbox", { name })).toBeChecked();
+      }
+      expect(screen.queryByRole("checkbox", { name: "Bills & expenses" })).not.toBeInTheDocument();
+      expect(screen.getByText(/Money that pays back an expense is never counted/)).toBeInTheDocument();
+      // Income has no receipts to add to a PDF.
+      expect(screen.queryByRole("button", { name: "Export PDF with receipts" })).not.toBeInTheDocument();
+      // Only what income can be narrowed by is offered.
+      const kinds = within(screen.getByRole("combobox", { name: "Add a filter by" })).getAllByRole("option");
+      expect(kinds.map((option) => option.textContent)).toEqual(["Income source", "Landed in"]);
+
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Group by" }), "pay_period");
+      await userEvent.click(screen.getByRole("checkbox", { name: "Interest" }));
+      await userEvent.click(screen.getByRole("combobox", { name: "Income source is" }));
+      await userEvent.click(await screen.findByRole("option", { name: "Brightwater Health" }));
+
+      await waitFor(() =>
+        expect(lastRun(fetchMock)).toEqual({
+          ...NEW_INCOME_REPORT,
+          range: "last_year",
+          incomeGroupBy: "pay_period",
+          incomeInclude: ["paychecks", "one_offs", "match"],
+          sourceIds: [2],
+        }),
+      );
+      expect(screen.getByRole("button", { name: "Remove filter: Income source is Brightwater Health" })).toBeInTheDocument();
+
+      // Clearing an income report leaves a new income report, not a spending one.
+      await userEvent.click(screen.getByRole("button", { name: "Clear the form" }));
+      await userEvent.click(screen.getByRole("button", { name: "Yes, clear it" }));
+      expect(screen.getByRole("radio", { name: "Income" })).toBeChecked();
+      await waitFor(() => expect(lastRun(fetchMock)).toEqual(NEW_INCOME_REPORT));
+
+      // And back: a spending report as new.
+      await userEvent.click(screen.getByRole("radio", { name: "Spending" }));
+      await waitFor(() => expect(lastRun(fetchMock)).toEqual(NEW_REPORT));
+    });
+
+    it("shows gross, what came out and what came home, with the match beside the total", async () => {
+      withIncome();
+      renderApp("/reports");
+      await userEvent.click(await screen.findByRole("radio", { name: "Income" }));
+
+      expect((await screen.findByText("Received", { selector: "p" })).parentElement).toHaveTextContent("$5,472.40");
+      expect(screen.getByText("Gross pay").parentElement).toHaveTextContent("$7,200.00");
+      expect(screen.getByText("Taxes", { selector: "p" }).parentElement).toHaveTextContent("$1,763.60");
+      expect(screen.getByText("Other deductions", { selector: "p" }).parentElement).toHaveTextContent("$464.00");
+      expect(screen.getByText("Employer match", { selector: "p" }).parentElement).toHaveTextContent("$100.00");
+      expect(screen.getByText("Estimated or still to come").parentElement).toHaveTextContent("$2,486.20");
+      expect(screen.getByText(/An employer's match is beside it, not in it\./)).toBeInTheDocument();
+      expect(screen.getByText(/1 paycheck has no gross amount entered, so it is in the take-home/)).toBeInTheDocument();
+
+      const table = within(screen.getByRole("region", { name: "Table" })).getByRole("table");
+      expect(within(table).getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+        "Month", "Gross", "Taxes", "Other deductions", "Take-home", "Other money in", "Employer match", "Received",
+      ]);
+      expect(
+        within(table).getByRole("row", { name: "March 2026 $7,200.00 $1,763.60 $464.00 $4,972.40 $500.00 $100.00 $5,472.40" }),
+      ).toBeInTheDocument();
+      expect(within(table).getByRole("row", { name: /^Total \$7,200\.00 .* \$5,472\.40$/ })).toBeInTheDocument();
+
+      const lines = within(within(screen.getByRole("region", { name: "Every line" })).getAllByRole("list")[0]!).getAllByRole("listitem");
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toHaveTextContent("Paycheck · landed in Everyday Checking · from a pay stub");
+      expect(lines[0]).toHaveTextContent("Gross $3,600.00 · taxes $881.80 · other deductions $232.00");
+      expect(lines[1]).toHaveTextContent("Employer match · into an account that was removed · not in the total");
+      expect(lines[2]).toHaveTextContent("One-off money in · landed in Everyday Checking");
+      expect(lines[3]).toHaveTextContent("$2,486.20 (estimate)");
+    });
+
+    it("leaves out the columns an income report has nothing for", async () => {
+      withIncome({
+        "POST /api/reports/run": () => ({
+          status: 200,
+          data: {
+            ...INCOME,
+            groups: [{ ...INCOME.groups[0]!, grossCents: 0, taxesCents: 0, deductionsCents: 0, takeHomeCents: 0, matchCents: 0, receivedCents: 50000 }],
+            rows: [INCOME.rows[2]!],
+            count: 1,
+            grossCents: 0,
+            taxesCents: 0,
+            deductionsCents: 0,
+            takeHomeCents: 0,
+            matchCents: 0,
+            receivedCents: 50000,
+            estimatedCents: 0,
+            paychecksWithoutGross: 0,
+          },
+        }),
+      });
+      renderApp("/reports");
+
+      const table = within(await screen.findByRole("region", { name: "Table" })).getByRole("table");
+      expect(within(table).getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Month", "Other money in", "Received"]);
+      expect(screen.queryByText("Employer match", { selector: "p" })).not.toBeInTheDocument();
+    });
+
+    it("says so when no income matches", async () => {
+      withIncome({
+        "POST /api/reports/run": () => ({
+          status: 200,
+          data: { ...INCOME, groups: [], rows: [], count: 0, receivedCents: 0, matchCents: 0, estimatedCents: 0, paychecksWithoutGross: 0 },
+        }),
+      });
+      renderApp("/reports");
+
+      expect(await screen.findByText("No income matches this report.")).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Every line" })).not.toBeInTheDocument();
+    });
+
+    it("opens a saved income report folded, saying what it shows, and exports it", async () => {
+      const saved: SavedReport = { id: 6, name: "Brightwater 2026", definition: { ...NEW_INCOME_REPORT, sourceIds: [2], incomeGroupBy: "source" } };
+      const fetchMock = withIncome({
+        "GET /api/reports": () => ({ status: 200, data: [saved] }),
+        "POST /api/reports/export/csv": () => ({ status: 200, data: { saved: { fileName: "Brightwater 2026.csv", folder: "C:\\Users\\amara\\Downloads" } } }),
+      });
+      renderApp("/reports");
+
+      await userEvent.click(await screen.findByRole("combobox", { name: "Report" }));
+      await userEvent.click(await screen.findByRole("option", { name: "Brightwater 2026" }));
+
+      expect(
+        await screen.findByText("This year · income from paychecks, one-off money in, employer match, interest · Income source is Brightwater Health · by income source"),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+      await waitFor(() =>
+        expect(bodiesSentTo(fetchMock, "POST /api/reports/export/csv")).toEqual([{ name: "Brightwater 2026", definition: saved.definition, save: true }]),
+      );
+    });
   });
 });

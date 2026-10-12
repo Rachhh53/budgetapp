@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Account, AccountDetail, AccountPoint } from "../../src/api/accounts";
 import type { Bucket } from "../../src/api/buckets";
 import { todayIso } from "../../src/lib/dates";
-import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
+import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
   id: 1,
@@ -161,6 +161,25 @@ describe("account detail screen", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't find that.");
     expect(screen.getByRole("link", { name: "Back to all accounts" })).toHaveAttribute("href", "/accounts");
+  });
+
+  it("opens the balance form on the day chosen in Settings, and says so until the date is changed", async () => {
+    fakeBackend({
+      "GET /api/settings": () => ({ status: 200, data: { ...DEFAULT_SETTINGS, default_date: "2026-01-01" } }),
+      "GET /api/accounts/1": () => ({ status: 200, data: EMPTY }),
+    });
+    renderApp("/accounts/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Update balance" }));
+    const dialog = screen.getByRole("dialog", { name: "Update balance — Everyday Checking" });
+    const asOf = within(dialog).getByLabelText("As of");
+    expect(asOf).toHaveValue("2026-01-01");
+    expect(within(dialog).getByText(/Opened on Jan 1, 2026, the day chosen in/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+
+    await userEvent.clear(asOf);
+    await userEvent.type(asOf, "2026-02-01");
+    expect(within(dialog).queryByText(/the day chosen in/)).not.toBeInTheDocument();
   });
 
   it("records a balance in whole cents, dated today by default", async () => {

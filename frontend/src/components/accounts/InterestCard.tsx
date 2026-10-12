@@ -12,6 +12,7 @@ import {
 import { useBuckets } from "../../api/buckets";
 import { LAST_DAY } from "../../api/income";
 import { addDays, formatDate, ordinal, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { Card } from "../Card";
 import { DaySelect } from "../DaySelect";
@@ -19,6 +20,7 @@ import { EditButton } from "../EditButton";
 import { FormSection } from "../FormSection";
 import { Modal } from "../Modal";
 import { Picker } from "../Picker";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 const DESTINATION_LABELS: Record<InterestDestination, string> = {
@@ -149,7 +151,8 @@ function InterestForm({ detail, onClose }: { detail: AccountDetail; onClose: () 
   const saveSettings = useSaveInterest(account.id);
 
   const [rate, setRate] = useState(current ? rateToInput(current.rateBp) : "");
-  const [from, setFrom] = useState(current?.effectiveDate ?? todayIso());
+  const startOn = useDefaultDate();
+  const [from, setFrom] = useState(current?.effectiveDate ?? startOn.date);
   const [creditDay, setCreditDay] = useState(interest.creditDay);
   const [destination, setDestination] = useState<InterestDestination>(interest.destination);
   const [bucketId, setBucketId] = useState<string | null>(
@@ -230,6 +233,7 @@ function InterestForm({ detail, onClose }: { detail: AccountDetail; onClose: () 
                 required
                 className={`${INPUT} min-h-14`}
               />
+              {!current && <DefaultDateHint value={from} />}
             </div>
           </div>
           <p className={HINT}>

@@ -168,9 +168,22 @@ public final class IncomeRoutes {
      * @param soFarCents     take-home from the paychecks that have arrived, today's included
      * @param wholeYearCents take-home from every paycheck of the year, those still to come included
      * @param estimate       at least one paycheck still to come is an estimate
+     * @param grossSoFarCents      gross pay of the paychecks that have arrived and have a gross amount entered
+     * @param grossPaychecksSoFar  how many of them that is: fewer than {@code paychecksSoFar} when some have none
+     * @param grossWholeYearCents  gross pay of every paycheck of the year that has a gross amount entered
+     * @param grossPaychecksInYear how many of them that is
      */
     public record ThisYear(
-            int year, long soFarCents, int paychecksSoFar, long wholeYearCents, int paychecksInYear, boolean estimate) {}
+            int year,
+            long soFarCents,
+            int paychecksSoFar,
+            long wholeYearCents,
+            int paychecksInYear,
+            boolean estimate,
+            long grossSoFarCents,
+            int grossPaychecksSoFar,
+            long grossWholeYearCents,
+            int grossPaychecksInYear) {}
 
     /** Request body for typing over one paycheck's amount. */
     public record PaycheckInput(Long netCents) {}
@@ -219,9 +232,7 @@ public final class IncomeRoutes {
 
     private void thisYear(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        if (income.find(id).isEmpty()) {
-            throw ApiException.notFound();
-        }
+        IncomeRepository.Source source = income.find(id).orElseThrow(ApiException::notFound);
         LocalDate today = LocalDate.now(clock);
         List<PayCalendar.Paycheck> inYear = calendar.paychecks(today.withDayOfYear(1), today.withDayOfYear(today.lengthOfYear())).stream()
                 .filter(paycheck -> paycheck.incomeSourceId() == id)
@@ -233,7 +244,23 @@ public final class IncomeRoutes {
                 arrived.size(),
                 inYear.stream().mapToLong(PayCalendar.Paycheck::netCents).sum(),
                 inYear.size(),
-                inYear.stream().anyMatch(paycheck -> paycheck.payDate().isAfter(today) && paycheck.estimate())));
+                inYear.stream().anyMatch(paycheck -> paycheck.payDate().isAfter(today) && paycheck.estimate()),
+                gross(source, arrived).stream().mapToLong(Long::longValue).sum(),
+                gross(source, arrived).size(),
+                gross(source, inYear).stream().mapToLong(Long::longValue).sum(),
+                gross(source, inYear).size()));
+    }
+
+    /**
+     * The gross pay of each of these paychecks that has one, at the gross amount in force on the
+     * day its schedule names (so a raise counts from its date). A paycheck from before a gross
+     * amount was entered is left out rather than guessed at.
+     */
+    private static List<Long> gross(IncomeRepository.Source source, List<PayCalendar.Paycheck> paychecks) {
+        return paychecks.stream()
+                .map(paycheck -> source.termsOn(paycheck.scheduledDate()).pay().grossCents())
+                .filter(java.util.Objects::nonNull)
+                .toList();
     }
 
     /** "Pay periods follow" in Settings: hands the role to this source without touching anything else about it. */

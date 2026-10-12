@@ -20,6 +20,10 @@ import java.util.Objects;
  * @param include       never empty
  * @param categoryIds   a category chosen here also stands for the categories under it
  * @param reimbursement expenses that stand at any of these; bills and budgets never match one
+ * @param kind          what the report is of: spending, or income (decided 2026-10-12: a report is one or the other)
+ * @param incomeInclude for an income report: what counts as income; never empty then
+ * @param sourceIds     for an income report: only these income sources; what has no source is then left out
+ * @param incomeGroupBy for an income report: how it is grouped
  */
 public record ReportDefinition(
         Range range,
@@ -32,7 +36,11 @@ public record ReportDefinition(
         List<String> payees,
         List<Reimbursement.Status> reimbursement,
         GroupBy groupBy,
-        Show show) {
+        Show show,
+        Kind kind,
+        List<IncomeInclude> incomeInclude,
+        List<Long> sourceIds,
+        IncomeGroupBy incomeGroupBy) {
 
     private static final int MAX_CHOICES = 50;
     private static final int PAYEE_MAX = 120;
@@ -52,6 +60,24 @@ public record ReportDefinition(
 
     public enum Show { CHART_AND_TABLE, TABLE }
 
+    /** What a report is of. For an income report the spending-only parts (what to include, tags, categories, payees, reimbursement) say nothing. */
+    public enum Kind { SPENDING, INCOME }
+
+    /** What counts as income in an income report. */
+    public enum IncomeInclude {
+        /** Every paycheck, at what it actually was. */
+        PAYCHECKS,
+        /** One-off money in, except money that pays back an expense. */
+        ONE_OFFS,
+        /** What an employer adds to a retirement account: shown beside the total, not in it. */
+        MATCH,
+        /** Interest a checking or savings account earned, as Budget works it out. */
+        INTEREST
+    }
+
+    /** How an income report is grouped. */
+    public enum IncomeGroupBy { MONTH, YEAR, SOURCE, ACCOUNT, PAY_PERIOD }
+
     /** The first and last day a report covers. */
     public record Dates(LocalDate from, LocalDate to) {}
 
@@ -67,7 +93,11 @@ public record ReportDefinition(
             List<String> payees,
             List<String> reimbursement,
             String groupBy,
-            String show) {}
+            String show,
+            String kind,
+            List<String> incomeInclude,
+            List<Long> sourceIds,
+            String incomeGroupBy) {}
 
     /** Checks everything that can be checked without looking anything up. Whether ids exist is for the caller. */
     public static ReportDefinition of(Input input) {
@@ -88,8 +118,11 @@ public record ReportDefinition(
             from = input.from();
             to = input.to();
         }
+        // A report saved before income reports existed has no kind: it is a spending report.
+        Kind kind = input.kind() == null ? Kind.SPENDING : Inputs.choice(Kind.class, input.kind(), "what the report is of");
         List<Include> include = choices(Include.class, input.include(), "what to include");
-        if (include.isEmpty()) {
+        List<IncomeInclude> incomeInclude = choices(IncomeInclude.class, input.incomeInclude(), "what counts as income");
+        if (kind == Kind.SPENDING ? include.isEmpty() : incomeInclude.isEmpty()) {
             throw ApiException.badRequest("Please choose at least one thing to include.");
         }
         return new ReportDefinition(
@@ -102,8 +135,14 @@ public record ReportDefinition(
                 Inputs.ids(input.accountIds(), MAX_CHOICES, "Please choose accounts from the list."),
                 payees(input.payees()),
                 choices(Reimbursement.Status.class, input.reimbursement(), "where the reimbursement stands"),
-                Inputs.choice(GroupBy.class, input.groupBy(), "how to group it"),
-                Inputs.choice(Show.class, input.show(), "how to show it"));
+                input.groupBy() == null && kind == Kind.INCOME ? GroupBy.MONTH : Inputs.choice(GroupBy.class, input.groupBy(), "how to group it"),
+                Inputs.choice(Show.class, input.show(), "how to show it"),
+                kind,
+                incomeInclude,
+                Inputs.ids(input.sourceIds(), MAX_CHOICES, "Please choose income sources from the list."),
+                input.incomeGroupBy() == null
+                        ? IncomeGroupBy.MONTH
+                        : Inputs.choice(IncomeGroupBy.class, input.incomeGroupBy(), "how to group it"));
     }
 
     /** The days this report covers when it is run on {@code today}. */

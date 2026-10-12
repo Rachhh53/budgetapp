@@ -21,6 +21,7 @@ import {
   useSaveItem,
 } from "../../api/items";
 import { formatDate, todayIso } from "../../lib/dates";
+import { useDefaultDate } from "../../api/settings";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { firstUnusedColor } from "../ColorPicker";
@@ -32,9 +33,10 @@ import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
 import { Segmented } from "../Segmented";
+import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 import { PAYMENT_MODE_HELP, PAYMENT_MODE_LABELS } from "../cards/labels";
-import { ITEM_FREQUENCY_LABELS, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
+import { ITEM_FREQUENCY_LABELS, KIND_HELP, KIND_ICONS, KIND_LABELS, MONTH_NAMES } from "./labels";
 
 const KIND_OPTIONS = ITEM_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind], icon: KIND_ICONS[kind] }));
 /** What a new item can be. Setting money aside in a bucket is set up on the bucket itself, so it is not offered. */
@@ -197,6 +199,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
     // Only a change of step is news; the callback itself may be a new function on every render.
   }, [step]);
   const addBucket = useSaveBucket();
+  const startOn = useDefaultDate();
   const currentPeriod = usePayPeriods().data?.periods.find((period) => period.current);
 
   // Archived buckets are left out, unless this item already points at one.
@@ -250,9 +253,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const countsFromADate = frequency === "weekly" || frequency === "biweekly" || frequency === "one_time";
   // Where a new item starts until the user says otherwise. One that names its own day of the
   // month or year starts in January, so this year's occurrences exist; anything dated from
-  // today starts today. Money set aside in a bucket never reaches back on its own: it would
+  // a day starts on the day new things start on (today, unless Settings says another). Money set aside in a bucket never reaches back on its own: it would
   // fill the bucket with months of moves that never happened.
-  const startsOn = chosenStart ?? (countsFromADate || everyPaycheck || isBucketMove ? todayIso() : `${todayIso().slice(0, 4)}-01-01`);
+  const startsOn = chosenStart ?? (countsFromADate || everyPaycheck || isBucketMove ? startOn.date : `${startOn.date.slice(0, 4)}-01-01`);
 
   // Archived accounts are left out, unless this item already points at one.
   const offered = accounts.filter((account) => !account.archived || [payFrom, payTo].includes(String(account.id)));
@@ -393,9 +396,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
         {shows("item") && (
           <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
         )}
-        {shows("item") && kind === "bill" && (
-          <p className="text-sm text-muted">A bill, or regular spending nobody bills you for: a subscription, a class, a haircut.</p>
-        )}
+        {shows("item") && <p className="text-sm text-muted">{KIND_HELP[kind]}</p>}
 
         {kindChanged && (
           // An item is one kind for its whole life, so this cannot apply "from today on" like other changes.
@@ -644,6 +645,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                     className={INPUT}
                   />
                   {frequency !== "one_time" && <p className={HINT}>Any real due date works. It repeats from there.</p>}
+                  {!item && <DefaultDateHint value={startsOn} />}
                 </div>
               )}
 
@@ -713,6 +715,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                     : "Nothing is scheduled before this day. Choose an earlier day to include earlier ones."}
                   {isBucketMove && " The bucket counts from then too."}
                 </p>
+                {!item && (everyPaycheck || isBucketMove) && <DefaultDateHint value={startsOn} />}
               </div>
             )}
 
@@ -755,7 +758,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                           note: null,
                           archived: false,
                           // From this paycheck's payday, as a bucket added on its own page would be.
-                          openedOn: currentPeriod?.start ?? todayIso(),
+                          openedOn: startOn.fromSetting ? startOn.date : (currentPeriod?.start ?? todayIso()),
                           startingCents: 0,
                         },
                         { onSuccess: (created) => setSaveUpBucketId(String(created.bucket.id)) },

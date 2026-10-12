@@ -9,8 +9,10 @@ import { Card } from "../components/Card";
 import { EditPageButton } from "../components/EditButton";
 import { Modal } from "../components/Modal";
 import { AMOUNT_HELP, MoneyField } from "../components/MoneyField";
+import { DefaultDateHint } from "../components/settings/DefaultDateHint";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
+import { useDefaultDate } from "../api/settings";
 import { formatCents, parseDollars } from "../lib/money";
 import { formatRate } from "../lib/rates";
 
@@ -219,7 +221,7 @@ function ValueForm({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   const save = useSaveAssetValue(asset.id);
   const today = todayIso();
   const [value, setValue] = useState("");
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(useDefaultDate().date);
   const [valueError, setValueError] = useState<string>();
 
   const submit = (event: FormEvent) => {
@@ -259,6 +261,7 @@ function ValueForm({ asset, onClose }: { asset: Asset; onClose: () => void }) {
             className={INPUT}
           />
           <p className={HINT}>Today or earlier. A day you already entered is replaced.</p>
+          <DefaultDateHint value={date} />
         </div>
 
         {save.isError && (

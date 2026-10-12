@@ -1,4 +1,4 @@
-import { ArrowLeftRight, CalendarClock, ChevronDown, type LucideIcon, Minus, Plus } from "lucide-react";
+import { ArrowLeftRight, CalendarClock, ChevronDown, type LucideIcon, Minus, Plus, Upload } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -20,6 +20,7 @@ import { Modal } from "../Modal";
 import { Segmented } from "../Segmented";
 import { BUTTON_PRIMARY } from "../ui";
 import { EntryFields, type EntryPart } from "./EntryFields";
+import { UploadDialog } from "./UploadDialog";
 
 /** What the + Add item form can add: a one-off of some kind, or a recurring item. */
 export type AddKind = EntryKind | "recurring";
@@ -33,6 +34,8 @@ interface AddItemContext {
   /** Opens the form on a one-off that already exists, to change or delete it. */
   /** Opens a one-off for changing; `startAt` names the fields to open on, for a card's own Edit button. */
   editEntry: (entry: Entry, startAt?: EntryPart) => void;
+  /** Opens "Upload a pay stub or receipt…". */
+  upload: () => void;
   menuOpen: boolean;
   setMenuOpen: (open: boolean) => void;
   /** Tells the form which pay period is on screen; `undefined` when none is. */
@@ -66,6 +69,7 @@ const EDITABLE = "input, textarea, select, [contenteditable='true']";
  */
 export function AddItemProvider({ children }: { children: ReactNode }) {
   const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number; paysBack?: Entry; startAt?: EntryPart } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hasMenu, setHasMenu] = useState(false);
   const [period, setPeriod] = useState<PeriodDetail>();
@@ -75,10 +79,14 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
     setForm({ kind, accountId, paysBack });
   }, []);
   const editEntry = useCallback((entry: Entry, startAt?: EntryPart) => setForm({ kind: entry.kind, entry, startAt }), []);
+  const upload = useCallback(() => {
+    setMenuOpen(false);
+    setUploading(true);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || form !== null) {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || form !== null || uploading) {
         return;
       }
       const key = event.key.toLowerCase();
@@ -98,11 +106,11 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [add, form, hasMenu]);
+  }, [add, form, hasMenu, uploading]);
 
   const context = useMemo(
-    () => ({ add, editEntry, menuOpen, setMenuOpen, setPeriod, setHasMenu }),
-    [add, editEntry, menuOpen],
+    () => ({ add, editEntry, upload, menuOpen, setMenuOpen, setPeriod, setHasMenu }),
+    [add, editEntry, upload, menuOpen],
   );
 
   return (
@@ -117,6 +125,15 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
           startAt={form.startAt}
           period={period}
           onClose={() => setForm(null)}
+        />
+      )}
+      {uploading && (
+        <UploadDialog
+          onReceipt={() => {
+            setUploading(false);
+            add("money_out");
+          }}
+          onClose={() => setUploading(false)}
         />
       )}
     </Context.Provider>
@@ -215,7 +232,7 @@ const MENU: readonly { kind: AddKind; label: string; about: string; shortcut?: s
  * ↓/↑ move, Home/End jump, Enter chooses, Esc closes and hands the focus back to the button.
  */
 export function AddItemButton() {
-  const { add, menuOpen, setMenuOpen, setHasMenu } = useAddItem();
+  const { add, upload, menuOpen, setMenuOpen, setHasMenu } = useAddItem();
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
 
@@ -310,11 +327,20 @@ export function AddItemButton() {
             </button>
           ))}
           <div className="mt-2 border-t border-line pt-2">
-            {/* Shown so the menu matches what is coming, but it cannot be chosen yet. */}
-            <span role="menuitem" aria-disabled="true" className="flex min-h-11 flex-col justify-center rounded-lg p-2 text-muted">
-              Upload a pay stub or receipt…
-              <span className="text-sm">On its way, with receipts and pay stubs.</span>
-            </span>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={upload}
+              className="flex min-h-11 w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-bg focus-visible:bg-bg"
+            >
+              <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-bg text-accent-ink">
+                <Upload className="size-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold">Upload a pay stub or receipt…</span>
+                <span className="block text-sm text-muted">Read and kept on this PC</span>
+              </span>
+            </button>
           </div>
         </div>
       )}

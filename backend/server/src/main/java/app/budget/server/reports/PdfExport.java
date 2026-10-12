@@ -141,6 +141,84 @@ final class PdfExport {
         }
     }
 
+    /** An income report (spec §4.11): the figures, each group, then every line. It has no receipts to add. */
+    static byte[] ofIncome(String title, List<String> about, IncomeReportRunner.Report report, List<String> accounts,
+            Optional<Path> fontsDir) {
+        try (PDDocument document = new PDDocument()) {
+            Sheet sheet = new Sheet(document, fontsDir);
+            sheet.title(title);
+            for (String line : about) {
+                sheet.note(line);
+            }
+            sheet.gap(10);
+
+            List<String[]> figures = new ArrayList<>();
+            figures.add(new String[] {"Received", money(report.receivedCents())});
+            figures.add(new String[] {"Gross pay", money(report.grossCents())});
+            figures.add(new String[] {"Taxes", money(report.taxesCents())});
+            figures.add(new String[] {"Other deductions", money(report.deductionsCents())});
+            if (report.matchCents() > 0) {
+                figures.add(new String[] {"Employer match", money(report.matchCents())});
+            }
+            sheet.figures(figures);
+            sheet.note("Received is take-home pay, one-off money in and interest together. An employer's match is beside it, not in it.");
+            if (report.paychecksWithoutGross() > 0) {
+                sheet.note(report.paychecksWithoutGross() == 1
+                        ? "One paycheck has no gross amount entered, so it is in the take-home but not in the gross or the taxes."
+                        : report.paychecksWithoutGross()
+                                + " paychecks have no gross amount entered, so they are in the take-home but not in the gross or the taxes.");
+            }
+            if (report.estimatedCents() > 0) {
+                sheet.note("Includes " + money(report.estimatedCents()) + " that is estimated or still to come, shaded light blue.");
+            }
+            sheet.gap(12);
+
+            sheet.heading(switch (report.groupBy()) {
+                case MONTH -> "By month";
+                case YEAR -> "By year";
+                case SOURCE -> "By income source";
+                case ACCOUNT -> "By account it landed in";
+                case PAY_PERIOD -> "By pay period";
+            });
+            float[] groupWidths = {WIDTH - 5 * 72, 72, 72, 72, 72, 72};
+            boolean[] groupRight = {false, true, true, true, true, true};
+            sheet.tableHeader(groupWidths, groupRight, "", "Gross", "Taxes", "Deductions", "Match", "Received");
+            if (report.groups().isEmpty()) {
+                sheet.note("No income matches this report.");
+            }
+            for (IncomeReportRunner.GroupView group : report.groups()) {
+                sheet.tableRow(groupWidths, groupRight, -1, group.label(), money(group.grossCents()), money(group.taxesCents()),
+                        money(group.deductionsCents()), money(group.matchCents()), money(group.receivedCents()));
+            }
+            sheet.totalRow(groupWidths, groupRight, "Total", money(report.grossCents()), money(report.taxesCents()),
+                    money(report.deductionsCents()), money(report.matchCents()), money(report.receivedCents()));
+            sheet.gap(14);
+
+            if (!report.rows().isEmpty()) {
+                sheet.heading("Every line");
+                float[] widths = {62, WIDTH - 62 - 96 - 4 * 62, 96, 62, 62, 62, 62};
+                boolean[] right = {false, false, false, true, true, true, true};
+                sheet.tableHeader(widths, right, "Date", "What", "Landed in", "Gross", "Taxes", "Deductions", "Amount");
+                for (int i = 0; i < report.rows().size(); i++) {
+                    IncomeReportRunner.Row row = report.rows().get(i);
+                    sheet.tableRow(widths, right, row.estimate() ? 6 : -1,
+                            row.date().format(DAY), row.description(), accounts.get(i),
+                            row.grossCents() == null ? "" : money(row.grossCents()),
+                            row.taxesCents() == null ? "" : money(row.taxesCents()),
+                            row.deductionsCents() == null ? "" : money(row.deductionsCents()),
+                            money(row.amountCents()));
+                }
+            }
+            sheet.finish();
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not write the report PDF", e);
+        }
+    }
+
     private static void totals(Sheet sheet, Report report) throws IOException {
         List<String[]> figures = new ArrayList<>();
         figures.add(new String[] {"Total", money(report.totalCents())});

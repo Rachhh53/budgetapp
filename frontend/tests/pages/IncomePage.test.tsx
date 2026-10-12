@@ -186,7 +186,7 @@ describe("income screen", () => {
     withIncome({
       "GET /api/income-sources/1/this-year": () => ({
         status: 200,
-        data: { year: 2026, soFarCents: 4723780, paychecksSoFar: 19, wholeYearCents: 5966880, paychecksInYear: 24, estimate: false },
+        data: { year: 2026, soFarCents: 4723780, paychecksSoFar: 19, wholeYearCents: 5966880, paychecksInYear: 24, estimate: false, grossSoFarCents: 6840000, grossPaychecksSoFar: 19, grossWholeYearCents: 2160000, grossPaychecksInYear: 6 },
       }),
     });
     renderApp("/income/1");
@@ -198,6 +198,9 @@ describe("income screen", () => {
     expect(await within(main).findByText("take-home from 19 paychecks in 2026")).toBeInTheDocument();
     expect(main).toHaveTextContent("So far this year$47,237.80");
     expect(main).toHaveTextContent("Whole year$59,668.80take-home expected from 24 paychecks in 2026");
+    // The year's gross, as figures of its own; it says so when only some paychecks have a gross amount.
+    expect(main).toHaveTextContent("Gross so far this year$68,400.00before anything comes out, from 19 paychecks in 2026");
+    expect(main).toHaveTextContent("Gross whole year$21,600.00before anything comes out, from 6 of 24 paychecks in 2026; the others have no gross amount entered");
   });
 
   it("says so kindly when the year cannot be added up, and still shows the rest", async () => {

@@ -28,7 +28,7 @@ $AppInput  = Join-Path $Backend 'server\target\app'
 $MainJar   = 'budget-server.jar'
 $ImageName = 'budget-backend'   # must match BACKEND_EXE in desktop/src-tauri/src/main.rs
 $MinJava   = 21
-$TauriCli  = '2.11.5'   # keep in step with tauri in desktop/src-tauri/Cargo.toml; at least 14 days old
+$TauriCli  = '2.12.0'   # keep in step with tauri in desktop/src-tauri/Cargo.toml; at least 14 days old
 
 # Modules the backend's libraries load by reflection, which jdeps cannot see.
 # jdk.zipfs: Jetty 12 opens the jar as a file system to serve the UI from it; without the

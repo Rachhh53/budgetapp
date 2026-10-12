@@ -2,9 +2,9 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { contrastRatio } from "../src/lib/color";
-import { calls, fakeBackend, renderApp, UNLOCKED } from "./helpers";
+import { calls, DEFAULT_SETTINGS, fakeBackend, renderApp, UNLOCKED } from "./helpers";
 
-const DEFAULTS = { theme: "system", accent_color: "#0f766e", projection_horizon_months: "12" };
+const DEFAULTS = DEFAULT_SETTINGS;
 
 describe("app shell", () => {
   it("shows the sidebar with every screen and the privacy note", async () => {

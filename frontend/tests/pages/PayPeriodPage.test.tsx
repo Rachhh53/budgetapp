@@ -1255,3 +1255,103 @@ describe("bills due soon", () => {
     }
   });
 });
+
+describe("pay period screen: a paycheck and its stub", () => {
+  const RETIREMENT: Account = { ...CHECKING, id: 4, name: "Brightwater 401(k)", type: "investment" };
+  const WITH_CONTRIBUTION: PeriodDetail = {
+    ...OCTOBER,
+    paychecks: [{ ...PAYCHECK, contributions: [{ label: "401(k)", kind: "contribution", toAccountId: 4, amountCents: 18000 }] }],
+  };
+  const withPaycheck = (overrides: Parameters<typeof fakeBackend>[0] = {}) =>
+    withPeriod(WITH_CONTRIBUTION, { "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, VISA, RETIREMENT] }), ...overrides });
+  const STUB = { id: 7, incomeSourceId: 1 };
+
+  it("says what else goes to your accounts with a paycheck, and opens it from its row", async () => {
+    const fetchMock = withPaycheck({
+      "PUT /api/income-sources/1/paychecks/2026-10-01": () => ({ status: 200, data: { done: true }, changed: true }),
+    });
+    renderApp();
+
+    const income = await panel("Income");
+    expect(within(income).getByText(/\$180\.00 more to your accounts/)).toBeInTheDocument();
+    await userEvent.click(within(income).getByRole("button", { name: "Edit Northwind Health paycheck" }));
+
+    const dialog = screen.getByRole("dialog", { name: /^Northwind Health paycheck/ });
+    expect(within(dialog).getByText("401(k) → Brightwater 401(k)")).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "open Northwind Health" })).toHaveAttribute("href", "/income/1");
+    await userEvent.clear(within(dialog).getByLabelText("Take-home"));
+    await userEvent.type(within(dialog).getByLabelText("Take-home"), "2500");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1/paychecks/2026-10-01")).toEqual([{ netCents: 250000 }]);
+  });
+
+  it("saves nothing when the take-home is left as it was", async () => {
+    const fetchMock = withPaycheck();
+    renderApp();
+
+    await userEvent.click(within(await panel("Income")).getByRole("button", { name: "Edit Northwind Health paycheck" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls(fetchMock).some((call) => call.startsWith("PUT "))).toBe(false);
+  });
+
+  it("adds a paycheck's stub from its row, to be saved as just that paycheck", async () => {
+    const fetchMock = withPaycheck({
+      "POST /api/income-sources/1/pay-stubs": () => ({ status: 201, data: STUB, changed: true }),
+      // The review page is covered by its own tests; here it only has to be where we land.
+      "GET /api/pay-stubs/7": () => ({ status: 404, error: "We couldn't find that." }),
+    });
+    renderApp();
+
+    await userEvent.click(within(await panel("Income")).getByRole("button", { name: "Edit Northwind Health paycheck" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.upload(within(dialog).getByLabelText("Add this paycheck's stub (PDF)"), new File(["%PDF-1.7"], "stub.pdf", { type: "application/pdf" }));
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("GET /api/pay-stubs/7"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("uploads a pay stub from the + Add item menu, and leads a receipt to its expense", async () => {
+    const fetchMock = withPaycheck({
+      "GET /api/income-sources": () => ({
+        status: 200,
+        data: [
+          { id: 1, name: "Northwind Health", depositAccountId: 1 },
+          { id: 2, name: "Riverside Bakery", depositAccountId: 1 },
+        ],
+      }),
+      "POST /api/income-sources/2/pay-stubs": () => ({ status: 201, data: { id: 7, incomeSourceId: 2 }, changed: true }),
+      "GET /api/pay-stubs/7": () => ({ status: 404, error: "We couldn't find that." }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub or receipt" });
+    expect(within(dialog).getByRole("button", { name: "Add the expense it is for" })).toBeInTheDocument();
+    // The primary paycheck is offered first; another source can be chosen.
+    const whose = await within(dialog).findByLabelText("Whose stub it is");
+    expect(whose).toHaveValue("1");
+    await userEvent.selectOptions(whose, "Riverside Bakery");
+    await userEvent.upload(within(dialog).getByLabelText("Drop a pay stub here or browse"), new File(["%PDF-1.7"], "stub.pdf", { type: "application/pdf" }));
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("POST /api/income-sources/2/pay-stubs"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("points to the Income screen when there is no income to give a stub to", async () => {
+    withPaycheck();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub or receipt" });
+
+    expect(await within(dialog).findByRole("link", { name: "Add your paycheck on the Income screen" })).toHaveAttribute("href", "/income");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add the expense it is for" }));
+    expect(await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" })).toBeInTheDocument();
+  });
+});
