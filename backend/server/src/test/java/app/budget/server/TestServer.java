@@ -4,12 +4,14 @@ import app.budget.server.backups.BackupService;
 import app.budget.server.db.Database;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -30,6 +32,7 @@ public final class TestServer implements AutoCloseable {
     public static final Duration SESSION_IDLE = Duration.ofMinutes(15);
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String CRLF = "\r\n";
 
     /** A clock the test can move forward, to exercise session expiry without waiting. */
     public static final class MutableClock extends Clock {
@@ -78,10 +81,15 @@ public final class TestServer implements AutoCloseable {
     private final HttpClient http = HttpClient.newHttpClient();
     private final String baseUrl;
 
+    /** Stands in for the user's Downloads folder, so nothing a test saves ever lands in the real one. */
+    public final Path downloads;
+
     public TestServer(Path dataDir) throws IOException {
+        downloads = java.nio.file.Files.createDirectories(dataDir.resolve("downloads-of-this-test"));
         Config config = Config.fromEnvironment(Map.of(
                 "BUDGET_PORT", "0",
                 "BUDGET_DATA_DIR", dataDir.toString(),
+                "BUDGET_DOWNLOADS_DIR", downloads.toString(),
                 "BUDGET_SHUTDOWN_TOKEN", SHUTDOWN_TOKEN));
         server = new BudgetServer(
                 config,
@@ -138,6 +146,49 @@ public final class TestServer implements AutoCloseable {
 
     public Reply delete(String path, String cookie) throws IOException, InterruptedException {
         return send("DELETE", path, null, cookieHeader(cookie));
+    }
+
+    /** A file to send in an upload. */
+    public record FilePart(String fileName, byte[] content) {}
+
+    /** Uploads {@code files} to {@code path} the way the browser does: one multipart form, each under "file". */
+    public Reply upload(String path, String cookie, FilePart... files) throws IOException, InterruptedException {
+        String boundary = "----budget-test-" + System.nanoTime();
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        for (FilePart file : files) {
+            body.write(("--" + boundary + CRLF + "Content-Disposition: form-data; name=\"file\"; filename=\"" + file.fileName()
+                    + "\"" + CRLF + "Content-Type: application/octet-stream" + CRLF + CRLF).getBytes(StandardCharsets.UTF_8));
+            body.write(file.content());
+            body.write(CRLF.getBytes(StandardCharsets.UTF_8));
+        }
+        body.write(("--" + boundary + "--" + CRLF).getBytes(StandardCharsets.UTF_8));
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + path))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary);
+        cookieHeader(cookie).forEach(request::header);
+        HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+        return new Reply(response.statusCode(), JSON.readTree(response.body()), response.headers().firstValue("Set-Cookie"),
+                response.headers());
+    }
+
+    /** An answer that is a file, not the JSON envelope. */
+    public record Download(int status, byte[] body, HttpHeaders headers) {
+        public String header(String name) {
+            return headers.firstValue(name).orElse(null);
+        }
+    }
+
+    /** Asks for a file: a GET when {@code jsonBody} is null, a POST otherwise. */
+    public Download download(String path, String jsonBody, String cookie) throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + path));
+        if (jsonBody == null) {
+            request.GET();
+        } else {
+            request.POST(HttpRequest.BodyPublishers.ofString(jsonBody)).header("Content-Type", "application/json");
+        }
+        cookieHeader(cookie).forEach(request::header);
+        HttpResponse<byte[]> response = http.send(request.build(), HttpResponse.BodyHandlers.ofByteArray());
+        return new Download(response.statusCode(), response.body(), response.headers());
     }
 
     private static Map<String, String> cookieHeader(String cookie) {

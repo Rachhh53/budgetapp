@@ -1,8 +1,11 @@
+import { Paperclip } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { Link } from "react-router";
+import { type AttachmentOwner, useAttachments } from "../../api/attachments";
 import { type Occurrence, type OccurrenceEdit, useEditOccurrence } from "../../api/periods";
 import { formatDay, todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
+import { Receipts } from "../files/Receipts";
 import { KIND_ICONS } from "../items/labels";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
@@ -40,6 +43,10 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
   const [code, setCode] = useState(occurrence.confirmationCode ?? "");
   const [check, setCheck] = useState(occurrence.checkNumber ?? "");
   const [problem, setProblem] = useState<string>();
+  // The receipts belong to this one time the item came due, named by the date its schedule gives it.
+  const owner: AttachmentOwner = { type: "occurrence", itemId: occurrence.itemId, scheduledDate: occurrence.scheduledDate };
+  const attached = useAttachments(owner);
+  const [showingFiles, setShowingFiles] = useState(false);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -90,10 +97,24 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
   };
 
   const failure = problem ?? save.error?.message;
+  const fileCount = attached.data?.attachments.length ?? 0;
 
   return (
-    <Modal title={`Edit ${occurrence.name}`} icon={KIND_ICONS[occurrence.kind]} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-4">
+    <Modal title={showingFiles ? `Receipts for ${occurrence.name}` : `Edit ${occurrence.name}`} icon={KIND_ICONS[occurrence.kind]} onClose={onClose}>
+      {/* The receipts take the form's place rather than opening over it, so there is one dialog and it
+          still fits the screen. What was typed in the form waits, unsaved, until Back. */}
+      {showingFiles && (
+        <div className="space-y-4">
+          <p className="text-muted">For this one, due {formatDay(occurrence.dueDate)}. Files are kept as soon as they are added.</p>
+          <Receipts owner={owner} compact />
+          <div className="flex justify-end">
+            <button type="button" onClick={() => setShowingFiles(false)} className={BUTTON_SECONDARY}>
+              Back
+            </button>
+          </div>
+        </div>
+      )}
+      <form onSubmit={submit} hidden={showingFiles} className="space-y-4">
         <p className="text-muted">Just this one, due {formatDay(occurrence.dueDate)}. The others stay as they are.</p>
 
         <MoneyField label="Amount this time" value={amount} onChange={setAmount} required />
@@ -170,12 +191,22 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
           <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={NOTE_MAX} autoComplete="off" className={INPUT} />
         </div>
 
-        <p>
-          <Link to={`/recurring/${occurrence.itemId}`} className="font-semibold text-accent-ink underline">
-            Change {occurrence.name} itself
-          </Link>
-          <span className="block text-sm text-muted">Its name, schedule, accounts, or its amount from now on.</span>
-        </p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <p>
+            <Link to={`/recurring/${occurrence.itemId}`} className="font-semibold text-accent-ink underline">
+              Change {occurrence.name} itself
+            </Link>
+            <span className="block text-sm text-muted">Its name, schedule, accounts, or its amount from now on.</span>
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowingFiles(true)}
+            className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg border border-line bg-surface px-3 font-semibold"
+          >
+            <Paperclip aria-hidden className="size-4" />
+            {fileCount === 0 ? "Add a receipt" : fileCount === 1 ? "1 receipt" : `${fileCount} receipts`}
+          </button>
+        </div>
 
         {failure && (
           <p role="alert" className="text-danger">

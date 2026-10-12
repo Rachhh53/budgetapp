@@ -155,8 +155,22 @@ const VET: Entry = {
   checkNumber: null,
   tagIds: [],
   bucketSplits: [],
+  reimbursement: { status: "none", submittedOn: null, to: null, paidBackCents: 0, reimbursedCents: 0, owedCents: 0 },
+  reimbursesEntryId: null,
+  fileCount: 0,
 };
-const BONUS: Entry = { ...VET, id: 10, kind: "money_in", date: "2026-10-09", amountCents: 150000, estimate: true, description: "Q3 bonus", payee: null, categoryId: null };
+const BONUS: Entry = {
+  ...VET,
+  id: 10,
+  kind: "money_in",
+  date: "2026-10-09",
+  amountCents: 150000,
+  estimate: true,
+  description: "Q3 bonus",
+  payee: null,
+  categoryId: null,
+  reimbursement: null,
+};
 
 const ELECTRIC_ITEM: Item = {
   id: 2,
@@ -866,10 +880,15 @@ describe("+ Add item", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     expect(within(dialog).getByRole("radio", { name: "Money out" })).toBeChecked();
-    // The account the paycheck lands in is offered first.
-    expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
+    // A screen at a time, so the dialog never outgrows the window: the amount and what it is come first.
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 2");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Birthday gift for Mom");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    // What is being added has been chosen: the switch steps aside for the second screen.
+    expect(within(dialog).queryByRole("radio", { name: "Money out" })).not.toBeInTheDocument();
+    // The account the paycheck lands in is offered first.
+    expect(within(dialog).getByRole("combobox", { name: "Paid from" })).toHaveValue("Everyday Checking");
     // Paid from a checking account, so a check number can be kept with it.
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Check number (optional)" }), "1042");
     const date = within(dialog).getByLabelText("Date");
@@ -896,6 +915,7 @@ describe("+ Add item", () => {
         checkNumber: "1042",
         tagIds: [],
         bucketSplits: [],
+        reimbursesEntryId: null,
       },
     ]);
   });
@@ -913,6 +933,11 @@ describe("+ Add item", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "1,500");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Q3 bonus");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    // Setting aside is the last of the screens behind "More options".
+    await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "Set some aside in a bucket" }));
     const gifts = within(dialog).getByRole("textbox", { name: "Holiday gifts" });
 
@@ -960,6 +985,7 @@ describe("+ Add item", () => {
     expect(within(dialog).queryByRole("checkbox", { name: "Set some aside in a bucket" })).not.toBeInTheDocument();
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Birthday gift for Mom");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     const from = await within(dialog).findByRole("combobox", { name: "Comes out of" });
 
     // Nothing is assumed: it has to be said, and nothing is sent until it is.
@@ -990,6 +1016,7 @@ describe("+ Add item", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "85");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Vet");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.selectOptions(await within(dialog).findByRole("combobox", { name: "Comes out of" }), "Money that is not in a bucket");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
 
@@ -1008,22 +1035,25 @@ describe("+ Add item", () => {
     await userEvent.keyboard("{Control>}i{/Control}");
     const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
     expect(within(dialog).getByRole("radio", { name: "Money in" })).toBeChecked();
-    expect(within(dialog).getByRole("combobox", { name: "Into" })).toBeInTheDocument();
-    // Grouped like the recurring item form, the amount first and large.
-    for (const section of ["Amount", "What it is", "When and where to", "Tags and notes"]) {
-      expect(within(dialog).getByRole("group", { name: section })).toBeInTheDocument();
-    }
+    // Stepped like the recurring item form, the amount first and large.
+    expect(within(dialog).getByRole("group", { name: "Amount" })).toBeInTheDocument();
     expect(within(dialog).getByRole("textbox", { name: "Amount" })).toHaveClass("text-2xl");
 
     await userEvent.click(within(dialog).getByRole("radio", { name: "Transfer" }));
-    expect(within(dialog).getByRole("group", { name: "When, from and to" })).toBeInTheDocument();
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "200");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Top up savings");
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Estimate, not final yet" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole("group", { name: "When, from and to" })).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the account this money goes to.");
 
     await userEvent.type(within(dialog).getByRole("combobox", { name: "To" }), "Rainy{Enter}");
-    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Estimate, not final yet" }));
+    // Back keeps everything typed, and brings the switch back with it.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    expect(within(dialog).getByRole("radio", { name: "Transfer" })).toBeChecked();
+    expect(within(dialog).getByRole("textbox", { name: "Amount" })).toHaveValue("200");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
@@ -1073,16 +1103,21 @@ describe("+ Add item", () => {
     let dialog = screen.getByRole("dialog", { name: "Edit Vet emergency" });
     // A one-off stays a one-off.
     expect(within(dialog).queryByRole("radio", { name: "Recurring" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("textbox", { name: "Paid to (optional)" })).toHaveValue("Maple Street Vets");
     const amount = within(dialog).getByRole("textbox", { name: "Amount" });
     await userEvent.clear(amount);
     await userEvent.type(amount, "655.25");
+    // One group of fields at a time, so the dialog never scrolls; Save is on every one and sends them all.
+    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), "When and where");
+    expect(within(dialog).queryByRole("textbox", { name: "Amount" })).not.toBeInTheDocument();
+    // Who it was paid to is a picker of the names typed before, not free text.
+    expect(within(dialog).getByRole("combobox", { name: "Paid to (optional)" })).toHaveValue("Maple Street Vets");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9")).toHaveLength(1));
     expect(bodiesSentTo(fetchMock, "PUT /api/entries/9")[0]).toMatchObject({ amountCents: 65525, payee: "Maple Street Vets", categoryId: 1 });
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit Vet emergency" }));
     dialog = screen.getByRole("dialog", { name: "Edit Vet emergency" });
+    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), "Delete");
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete this one-off" }));
 
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/entries/9"));

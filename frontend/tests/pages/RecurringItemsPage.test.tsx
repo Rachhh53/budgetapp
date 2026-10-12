@@ -176,7 +176,7 @@ describe("recurring items screen", () => {
     renderApp("/recurring");
 
     const rent = await rowFor("Rent");
-    expect(rent).toHaveTextContent("Bill · manual");
+    expect(rent).toHaveTextContent("Bill or expense · manual");
     expect(rent).toHaveTextContent("Monthly · 1st");
     expect(rent).toHaveTextContent("$1,550.00");
     expect(rent).toHaveTextContent("$18,600.00");
@@ -329,7 +329,7 @@ describe("recurring items screen", () => {
     expect(await within(card).findByText("Paused until you turn it back on.")).toBeInTheDocument();
     expect(bodiesSentTo(fetchMock, "PUT /api/items/1/pause")).toEqual([{}]);
     // Under the name, in words, and nothing is left on the calendar.
-    expect(screen.getByText(/Bill · manual · Monthly · 1st · Paused/)).toBeInTheDocument();
+    expect(screen.getByText(/Bill or expense · manual · Monthly · 1st · Paused/)).toBeInTheDocument();
     expect(screen.getByText("paused, so nothing is scheduled")).toBeInTheDocument();
 
     await userEvent.click(within(card).getByRole("button", { name: "Resume now" }));
@@ -353,9 +353,9 @@ describe("recurring items screen", () => {
     withItems();
     renderApp("/recurring");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Bills · 2" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Bills & expenses · 2" }));
 
-    expect(screen.getByRole("button", { name: "Bills · 2" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Bills & expenses · 2" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("link", { name: "Rent" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Groceries" })).not.toBeInTheDocument();
 
@@ -385,7 +385,7 @@ describe("recurring items screen", () => {
     expect(within(table).getAllByRole("row").slice(1)).toHaveLength(1);
     expect(screen.queryByRole("link", { name: "Electric" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "All · 1" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Bills · 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bills & expenses · 1" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Archived · 1" }));
     const rows = within(screen.getByRole("table", { name: "Recurring items" })).getAllByRole("row").slice(1);
@@ -521,7 +521,7 @@ describe("recurring items screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Add item" }));
     const adding = screen.getByRole("dialog", { name: "Add a recurring item" });
     expect(within(adding).getAllByRole("radio").slice(0, 4).map((radio) => radio.closest("label")?.textContent)).toEqual([
-      "Bill",
+      "Bill or expense",
       "Transfer",
       "Budget",
       "Card payment",
@@ -585,14 +585,15 @@ describe("recurring items screen", () => {
     ]);
   });
 
-  it("says why a bill paid from a card cannot be saved up for", async () => {
+  it("offers no More options on a bill paid from a card, which has no bucket to save up in", async () => {
     withItems([{ ...ELECTRIC, payFromAccountId: VISA.id }]);
     renderApp("/recurring/2");
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit where it is paid from" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Electric · Paid from" });
 
-    expect(within(dialog).getByText(/Buckets live in checking and savings accounts/)).toBeInTheDocument();
+    // Nothing to choose there, so nothing is shown: an explanation alone is not an option.
+    expect(within(dialog).queryByText("More options")).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("combobox", { name: "Save up for it in a bucket (optional)" })).not.toBeInTheDocument();
   });
 
@@ -819,8 +820,8 @@ describe("recurring items screen", () => {
     renderApp("/recurring/1");
 
     expect(await screen.findByRole("heading", { level: 1, name: "Rent" })).toBeInTheDocument();
-    expect(screen.getByText("/ Bill", { exact: false })).toHaveTextContent("Recurring items / Bill");
-    expect(screen.getByText("Bill · manual · Monthly · 1st")).toBeInTheDocument();
+    expect(screen.getByText("/ Bill or expense", { exact: false })).toHaveTextContent("Recurring items / Bill or expense");
+    expect(screen.getByText("Bill or expense · manual · Monthly · 1st")).toBeInTheDocument();
 
     expect(screen.getByText("Amount").parentElement).toHaveTextContent("$1,550.00each time");
     expect(screen.getByText("A year").parentElement).toHaveTextContent("$18,600.00");
@@ -853,7 +854,7 @@ describe("recurring items screen", () => {
     // Edit item is the small one: what it is, archiving, deleting.
     await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const whole = screen.getByRole("dialog", { name: "Edit Rent" });
-    expect(within(whole).getByRole("radio", { name: "Bill" })).toBeChecked();
+    expect(within(whole).getByRole("radio", { name: "Bill or expense" })).toBeChecked();
     expect(within(whole).getByRole("textbox", { name: "Name" })).toHaveValue("Rent");
     expect(within(whole).getByRole("checkbox", { name: "Archived" })).not.toBeChecked();
     expect(within(whole).getByRole("button", { name: "Delete item…" })).toBeInTheDocument();
@@ -916,7 +917,7 @@ describe("recurring items screen", () => {
     const card = await screen.findByRole("region", { name: "Pause" });
     expect(card).toHaveTextContent("This item is archived");
     expect(within(card).queryByRole("button")).not.toBeInTheDocument();
-    expect(screen.getByText(/Bill · manual · Monthly · 1st · Archived/)).toBeInTheDocument();
+    expect(screen.getByText(/Bill or expense · manual · Monthly · 1st · Archived/)).toBeInTheDocument();
   });
 
   it("shows when an item starts, and saves an earlier start so it can be backdated", async () => {

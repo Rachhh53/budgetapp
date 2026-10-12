@@ -8,7 +8,7 @@ import { BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
 /** What each kind of line is called. Anything new the backend sends falls back to its own word. */
 const KIND_LABELS: Record<string, string> = {
   paycheck: "Paycheck",
-  bill: "Bill",
+  bill: "Bill or expense",
   budget: "Budget",
   transfer: "Transfer",
   card_payment: "Card payment",

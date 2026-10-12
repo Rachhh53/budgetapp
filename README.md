@@ -171,7 +171,23 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | POST | `/api/items/{id}/replacement` | archive that item and add the body (same shape as a new item) as a new one starting today; for changing what kind of item something is without touching its past |
 | PUT | `/api/items/{id}/occurrences/{scheduledDate}` | "just this one": any of `{ amountCents, dueDate, periodStart, paid, paidDate, confirmationCode, note, skipped, checkNumber }` (a check number only for something paid from a checking account) |
 | GET, POST | `/api/entries` | one-off money in, money out and transfers; optional `from`, `to`; add `{ kind, date, amountCents, description, accountId, toAccountId?, estimate?, payee?, categoryId?, tagIds?, note?, bucketSplits?, checkNumber? }` (`checkNumber` is kept only for money leaving a checking account); `bucketSplits` is `[{ bucketId, amountCents }]`, naming a bucket of the receiving account to set part of money in or a transfer aside there, or a bucket of the paying account to pay money out or a transfer from it (refused beyond what the bucket holds that day) |
-| PUT, DELETE | `/api/entries/{id}` | change; delete |
+| | | entries also take `reimbursementStatus?` (money out: `none`, `to_submit`, `submitted` or `reimbursed`) and `reimbursesEntryId?` (money in: the expense it pays back). Each comes back with `fileCount` and, for money out, `reimbursement` `{ status, submittedOn, to, paidBackCents, reimbursedCents, owedCents }` |
+| GET, PUT, DELETE | `/api/entries/{id}` | one entry with the money in that paid it back (`paybacks`) and the expense it pays back (`reimburses`); change; delete (its paybacks stay, as ordinary money in) |
+| PUT | `/api/entries/{id}/reimbursement` | where an expense's reimbursement stands `{ status, submittedOn?, to? }`; money out only |
+| GET | `/api/expense-years` | the years with one-off money out, for the Expenses year filter |
+| GET | `/api/payees` | `{ payees, reimbursers }`: the names used so far, for the pickers |
+| GET, POST | `/api/entries/{id}/attachments` | the receipts and documents on an entry `{ attachments, maxBytes, maxFiles }`; POST adds files as `multipart/form-data` (field `file`, one or more): PDF, JPEG or PNG by content, all or nothing. 413 too large, 415 not one of those, 422 cannot be read, 409 more than 20 |
+| GET, POST | `/api/items/{id}/occurrences/{scheduledDate}/attachments` | the same for one time a recurring item was paid |
+| GET, POST | `/api/cards/{id}/statements/{statementId}/attachments` | the same for a card statement |
+| GET | `/api/attachments/{id}/file` | the file as it was added, as a download |
+| POST | `/api/attachments/{id}/copy` | "Save a copy": from this PC, puts the file in the Downloads folder and answers `{ saved: { fileName, folder } }` (never replacing a file: `name (2).pdf`); from anywhere else `{ saved: null }`, and the screen downloads `/file` |
+| GET | `/api/attachments/{id}/preview` | a picture of it: the image itself, or `?page=` of a PDF as PNG. 410 when the file is no longer on disk |
+| DELETE | `/api/attachments/{id}` | take it off; Undo puts it back |
+| GET | `/api/attachment-counts?from=&to=` | how many files each recurring item's time in those dates has |
+| GET, POST | `/api/reports` | saved reports; save one `{ name, definition }` (up to 100; a name already used is 409) |
+| PUT, DELETE | `/api/reports/{id}` | rename or change; delete |
+| POST | `/api/reports/run` | work a report out without saving it `{ definition }`: `{ from, to, groups, rows, count, totalCents, reimbursedCents, waitingCents, notSubmittedCents, estimatedCents, hasReimbursements }`. `definition` is `{ range, from?, to?, include, groupBy, show, tagIds, categoryIds, accountIds, payees, reimbursement }` (`spec.md` §4.11) |
+| POST | `/api/reports/export/csv`, `/api/reports/export/pdf` | the report as a file `{ name, definition, withReceipts?, save? }`; the PDF can end with every receipt's pages (at most 300, else 413). With `save: true` from this PC the file is put in the Downloads folder and the answer is `{ saved: { fileName, folder } }`; otherwise the answer is the file itself. A line not paid yet says so in words ("Not paid yet"); only an estimated amount is shaded |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | GET | `/api/undo` | `{ available }`: whether there is a change to undo |
@@ -274,6 +290,12 @@ Until a folder is chosen they go in `backups\` inside the data folder.
 - **Settings → Erase all data** deletes the database files outright and rebuilds an empty one, and
   deletes `files/` and `backups/`, so nothing is left behind on disk. Logs stay (they hold no
   financial data). It cannot be undone.
+- Receipts and documents are copied into `files/`, named by their SHA-256 and never changed. Removing one
+  from the app deletes the copy at the next start, once Undo can no longer bring it back. They are
+  reached only through the app, by id, behind the session. `upload-cache/` holds a file only while it is
+  being added.
+- A report export or "Save a copy" of a receipt is written by the app into your Downloads folder, and the
+  screen says what it is called there. Nothing already in the folder is replaced.
 - The session token lives in an HttpOnly, SameSite=Strict cookie and in memory only.
 - A strict Content-Security-Policy blocks every external origin; requests with an unrecognised
   `Host` header are refused (protection against DNS rebinding).

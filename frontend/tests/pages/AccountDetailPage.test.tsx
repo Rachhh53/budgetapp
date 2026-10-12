@@ -98,7 +98,7 @@ describe("account detail screen", () => {
     const rows = within(await screen.findByRole("region", { name: "Transactions" }));
     const rent = (await rows.findByText("Rent")).closest("li")!;
     expect(rent).toHaveTextContent("-$1,200.00");
-    expect(rent).toHaveTextContent("Bill · Upcoming · Not paid yet");
+    expect(rent).toHaveTextContent("Bill or expense · Upcoming · Not paid yet");
     expect(rows.getByText("Acme Corp").closest("li")).toHaveTextContent("+$2,486.20");
     expect(rows.getByText("Acme Corp").closest("li")).toHaveTextContent("Oct 1, 2026 · Paycheck");
     // A balance entered is shown as where the account stood, with no plus or minus.

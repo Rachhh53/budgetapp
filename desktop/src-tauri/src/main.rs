@@ -119,13 +119,17 @@ fn start_backend(app: &AppHandle) -> Result<Backend, String> {
 }
 
 fn open_app_window(app: &AppHandle, port: u16) {
-    let url = format!("http://{LOOPBACK}:{port}/").parse().expect("valid local URL");
+    let url: tauri::Url = format!("http://{LOOPBACK}:{port}/").parse().expect("valid local URL");
+    let backend = url.origin();
     let _ = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
         .title("Budget")
         .inner_size(1440.0, 900.0)
         .min_inner_size(375.0, 600.0)
-        // Privacy: the window may only ever show the local backend, never another site.
-        .on_navigation(move |target| target.host_str() == Some(LOOPBACK) && target.port() == Some(port))
+        // The shell would otherwise swallow dropped files itself; receipts are dropped onto the page.
+        .disable_drag_drop_handler()
+        // Privacy: the window may only ever show the local backend, never another site. Compared by
+        // origin so a report the page has just built (a blob: address of the backend's) can be saved.
+        .on_navigation(move |target| target.origin() == backend)
         .build();
 }
 

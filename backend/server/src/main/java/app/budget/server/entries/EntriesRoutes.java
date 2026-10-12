@@ -1,5 +1,6 @@
 package app.budget.server.entries;
 
+import app.budget.engine.reports.Reimbursement.Status;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
@@ -23,7 +24,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/** One-off money in, money out and transfers: {@code /api/entries} and {@code /api/entries/{id}}. */
+/**
+ * One-off money in, money out and transfers: {@code /api/entries} and {@code /api/entries/{id}}, with
+ * where an expense stands on being paid back ({@code /api/entries/{id}/reimbursement}).
+ */
 public final class EntriesRoutes {
 
     private static final int TEXT_MAX = 120;
@@ -33,6 +37,7 @@ public final class EntriesRoutes {
     private static final int MAX_SPLITS = 20;
     private static final int CHECK_NUMBER_MAX = 20;
     private static final String CHOOSE_BUCKETS = "Please choose each bucket once, from the list.";
+    private static final String CHOOSE_EXPENSE = "Please choose the expense this pays back from the list.";
 
     private final EntriesRepository entries;
     private final AccountsRepository accounts;
@@ -62,11 +67,21 @@ public final class EntriesRoutes {
     public void register(JavalinDefaultRoutingApi routes) {
         routes.get("/api/entries", this::list);
         routes.post("/api/entries", this::create);
+        routes.get("/api/entries/{id}", this::one);
         routes.put("/api/entries/{id}", this::update);
         routes.delete("/api/entries/{id}", this::delete);
+        routes.put("/api/entries/{id}/reimbursement", this::setReimbursement);
+        routes.get("/api/expense-years", ctx -> ApiResponse.ok(ctx, new Years(entries.yearsWithExpenses())));
+        routes.get("/api/payees", ctx -> ApiResponse.ok(ctx, new Names(entries.payees(), entries.reimbursers())));
     }
 
-    /** Request body for creating or changing an entry. Amounts are whole cents, never negative. */
+    /**
+     * Request body for creating or changing an entry. Amounts are whole cents, never negative.
+     *
+     * @param reimbursementStatus money going out: {@code none}, {@code to_submit}, {@code submitted} or
+     *                            {@code reimbursed}; left out, it stays as it was (none, when new)
+     * @param reimbursesEntryId   money coming in: the expense it pays back, if any
+     */
     public record EntryInput(
             String kind,
             LocalDate date,
@@ -80,7 +95,36 @@ public final class EntriesRoutes {
             String note,
             List<Long> tagIds,
             List<SplitInput> bucketSplits,
-            String checkNumber) {}
+            String checkNumber,
+            String reimbursementStatus,
+            Long reimbursesEntryId) {}
+
+    /**
+     * Request body for where an expense stands on being paid back.
+     *
+     * @param submittedOn the day it was sent in; kept only once it has been
+     * @param to          who pays it back, e.g. "HSA"; optional
+     */
+    public record ReimbursementInput(String status, LocalDate submittedOn, String to) {}
+
+    /**
+     * One entry with what it is linked to.
+     *
+     * @param paybacks   an expense: the money that came in to pay it back, oldest first
+     * @param reimburses money coming in: the expense it pays back; {@code null} when it pays none back
+     */
+    public record EntryDetail(Entry entry, List<Entry> paybacks, Entry reimburses) {}
+
+    /** @param years the years that have one-off spending in them, newest first */
+    public record Years(List<Integer> years) {}
+
+    /**
+     * Names typed before, for the pickers that offer them again.
+     *
+     * @param payees      who one-off entries were paid to or came from
+     * @param reimbursers who expenses were sent to for paying back
+     */
+    public record Names(List<String> payees, List<String> reimbursers) {}
 
     /** Part of money coming in to set aside in one bucket. */
     public record SplitInput(Long bucketId, Long amountCents) {}
@@ -96,8 +140,16 @@ public final class EntriesRoutes {
         ApiResponse.ok(ctx, entries.between(from, to));
     }
 
+    private void one(Context ctx) {
+        Entry entry = view(Inputs.id(ctx, "id"));
+        ApiResponse.ok(ctx, new EntryDetail(
+                entry,
+                entry.kind() == EntryKind.MONEY_OUT ? entries.paybacksOf(entry.id()) : List.of(),
+                entry.reimbursesEntryId() == null ? null : entries.find(entry.reimbursesEntryId()).orElse(null)));
+    }
+
     private void create(Context ctx) {
-        Fields fields = fields(Inputs.body(ctx, EntryInput.class));
+        Fields fields = fields(Inputs.body(ctx, EntryInput.class), null);
         requireTheMoneyIsThere(fields, null);
         long id = entries.create(fields);
         ApiResponse.send(ctx, 201, view(id));
@@ -106,7 +158,7 @@ public final class EntriesRoutes {
     private void update(Context ctx) {
         long id = Inputs.id(ctx, "id");
         Entry existing = entries.find(id).orElseThrow(ApiException::notFound);
-        Fields fields = fields(Inputs.body(ctx, EntryInput.class));
+        Fields fields = fields(Inputs.body(ctx, EntryInput.class), id);
         requireTheMoneyIsThere(fields, existing);
         if (!entries.update(id, fields)) {
             throw ApiException.notFound();
@@ -121,11 +173,33 @@ public final class EntriesRoutes {
         ApiResponse.ok(ctx, new Deleted(true));
     }
 
+    private void setReimbursement(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        Entry existing = entries.find(id).orElseThrow(ApiException::notFound);
+        ReimbursementInput input = Inputs.body(ctx, ReimbursementInput.class);
+        if (existing.kind() != EntryKind.MONEY_OUT) {
+            throw ApiException.conflict("Only money going out can be paid back.");
+        }
+        Status status = Inputs.choice(Status.class, input.status(), "where this stands");
+        if (input.submittedOn() != null && !Inputs.inSupportedYears(input.submittedOn())) {
+            throw ApiException.badRequest("Please choose the day it was sent in.");
+        }
+        // Something still to send in has no day it was sent, and something nobody pays back has nobody to name.
+        boolean sent = status == Status.SUBMITTED || status == Status.REIMBURSED;
+        entries.setReimbursement(
+                id,
+                status,
+                sent ? input.submittedOn() : null,
+                status == Status.NONE ? null : Inputs.optionalText(input.to(), "who pays this back", TEXT_MAX));
+        ApiResponse.ok(ctx, view(id));
+    }
+
     private Entry view(long id) {
         return entries.find(id).orElseThrow(ApiException::notFound);
     }
 
-    private Fields fields(EntryInput input) {
+    /** @param id the entry being changed; {@code null} for a new one */
+    private Fields fields(EntryInput input, Long id) {
         EntryKind kind = Inputs.choice(EntryKind.class, input.kind(), "money out, money in or transfer");
         if (input.date() == null || !Inputs.inSupportedYears(input.date())) {
             throw ApiException.badRequest("Please choose the date.");
@@ -170,7 +244,22 @@ public final class EntriesRoutes {
                 // Only money leaving a checking account can have been paid by check; the form sends whatever was last typed.
                 kind != EntryKind.MONEY_IN && isChecking(input.accountId())
                         ? Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)
-                        : null);
+                        : null,
+                kind != EntryKind.MONEY_OUT || input.reimbursementStatus() == null
+                        ? null
+                        : Inputs.choice(Status.class, input.reimbursementStatus(), "where this stands on being paid back"),
+                paysBack(input.reimbursesEntryId(), kind, id));
+    }
+
+    /** The expense that money coming in pays back: one that exists, is money going out, and is not itself. */
+    private Long paysBack(Long expenseId, EntryKind kind, Long id) {
+        if (expenseId == null || kind != EntryKind.MONEY_IN) {
+            return null;
+        }
+        if (expenseId.equals(id) || entries.find(expenseId).filter(expense -> expense.kind() == EntryKind.MONEY_OUT).isEmpty()) {
+            throw ApiException.badRequest(CHOOSE_EXPENSE);
+        }
+        return expenseId;
     }
 
     private boolean isChecking(long accountId) {

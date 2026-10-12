@@ -3,8 +3,12 @@ import { LAST_DAY } from "../../api/income";
 import type { Item, ItemFrequency, ItemKind, ItemSchedule } from "../../api/items";
 import { ordinal, weekdayName } from "../../lib/dates";
 
+/**
+ * "Bill or expense" (Rachel, 2026-10-12): regular spending nobody sends a bill for, a class or a
+ * subscription, works exactly like a bill, and someone looking for "expense" has to find it.
+ */
 export const KIND_LABELS: Record<ItemKind, string> = {
-  bill: "Bill",
+  bill: "Bill or expense",
   transfer: "Transfer",
   budget: "Budget",
   card_payment: "Card payment",
@@ -22,7 +26,7 @@ export const KIND_ICONS: Record<ItemKind, LucideIcon> = {
 };
 
 export const KIND_PLURALS: Record<ItemKind, string> = {
-  bill: "Bills",
+  bill: "Bills & expenses",
   transfer: "Transfers",
   budget: "Budgets",
   card_payment: "Card payments",

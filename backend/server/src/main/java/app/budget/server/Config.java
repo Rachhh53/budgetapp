@@ -17,6 +17,10 @@ import java.util.stream.Collectors;
  * @param parentPid      the desktop shell's process id, so the server can exit when it dies
  * @param shutdownToken  per-launch secret the desktop shell presents to stop the server
  * @param allowedHosts   extra Host header names to accept beyond IP literals and localhost
+ * @param maxUploadMb    the largest receipt or document that can be attached, in megabytes
+ * @param fontsDir       a folder of fonts for the PDFs the app writes (Windows' own, unless set); empty when there is none
+ * @param downloadsDir   where exports and copies of receipts asked for from this PC are saved (the user's Downloads
+ *                       folder, unless set); empty when there is none, and they are then handed to the browser
  */
 public record Config(
         String bindHost,
@@ -24,11 +28,15 @@ public record Config(
         Path dataDir,
         Optional<Long> parentPid,
         Optional<String> shutdownToken,
-        Set<String> allowedHosts) {
+        Set<String> allowedHosts,
+        int maxUploadMb,
+        Optional<Path> fontsDir,
+        Optional<Path> downloadsDir) {
 
     static final String DEFAULT_BIND_HOST = "127.0.0.1";
     static final int DEFAULT_PORT = 4873;
     static final String APP_FOLDER = "Budget";
+    static final int DEFAULT_MAX_UPLOAD_MB = 25;
 
     /** Thrown with a message that is safe and useful to show the person starting the app. */
     public static final class InvalidConfigException extends RuntimeException {
@@ -49,7 +57,12 @@ public record Config(
                                 .map(host -> host.trim().toLowerCase())
                                 .filter(host -> !host.isEmpty())
                                 .collect(Collectors.toUnmodifiableSet()))
-                        .orElse(Set.of()));
+                        .orElse(Set.of()),
+                number(env, "BUDGET_MAX_UPLOAD_MB", 1, 200).map(Long::intValue).orElse(DEFAULT_MAX_UPLOAD_MB),
+                text(env, "BUDGET_FONTS_DIR").map(Path::of)
+                        .or(() -> text(env, "WINDIR").map(windows -> Path.of(windows, "Fonts"))),
+                text(env, "BUDGET_DOWNLOADS_DIR").map(Path::of)
+                        .or(() -> text(env, "USERPROFILE").map(home -> Path.of(home, "Downloads"))));
     }
 
     /** %APPDATA%\Budget on Windows; the XDG-style equivalent elsewhere (dev containers). */
