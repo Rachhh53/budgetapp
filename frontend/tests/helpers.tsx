@@ -5,7 +5,8 @@ import { vi } from "vitest";
 import { App } from "../src/App";
 
 /** `changed` marks the answer the way the backend marks a change that can be undone. */
-type Handler = (body: unknown) => { status: number; data?: unknown; error?: string; changed?: boolean };
+/** `file` answers with that text as a file to save, the way the backend sends one, in place of the usual envelope. */
+type Handler = (body: unknown) => { status: number; data?: unknown; error?: string; changed?: boolean; file?: string };
 
 export const DEFAULT_SETTINGS = {
   theme: "system",
@@ -112,9 +113,15 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;
+    if (answer.file !== undefined) {
+      return new Response(answer.file, {
+        status,
+        headers: { "Content-Type": "application/octet-stream", "Content-Disposition": "attachment; filename*=UTF-8''report.csv" },
+      });
+    }
     return new Response(JSON.stringify({ data, error, status }), {
       status,
-      headers: answer.changed ? { "X-Budget-Changed": "true" } : undefined,
+      headers: { "Content-Type": "application/json", ...(answer.changed ? { "X-Budget-Changed": "true" } : {}) },
     });
   });
   vi.stubGlobal("fetch", fetchMock);

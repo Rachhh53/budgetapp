@@ -1,6 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Account } from "../../src/api/accounts";
 import type { Attached } from "../../src/api/attachments";
 import type { Tag } from "../../src/api/categories";
@@ -250,7 +250,15 @@ describe("One expense", () => {
     expect(screen.getByText("Still owed to you").parentElement).toHaveTextContent("$25.00");
 
     const reimbursement = screen.getByRole("region", { name: "Reimbursement" });
-    expect(within(reimbursement).getByRole("radio", { name: "Submitted" })).toBeChecked();
+    // Three stops in a line, shown and not clicked: it is on the second, and each says in words where it is.
+    const steps = within(within(reimbursement).getByRole("list", { name: "How far along it is" })).getAllByRole("listitem");
+    expect(steps.map((step) => step.textContent)).toEqual([
+      "To submitDone",
+      expect.stringMatching(/^SubmittedSep 29, \d+$/),
+      "ReimbursedNot yet",
+    ]);
+    expect(steps[1]).toHaveAttribute("aria-current", "step");
+    expect(within(reimbursement).queryByRole("radio")).not.toBeInTheDocument();
     expect(within(reimbursement).getByText(/Submitted to HSA on Sep 29, \d+ · \$25.00 still to come\./)).toBeInTheDocument();
     expect(within(reimbursement).getByRole("button", { name: "Edit HSA payout" })).toBeInTheDocument();
 
@@ -266,7 +274,36 @@ describe("One expense", () => {
       "src",
       "/api/attachments/5/preview?page=1",
     );
-    expect(within(receipts).getByRole("link", { name: "Save a copy of receipt.jpg" })).toHaveAttribute("href", "/api/attachments/6/file");
+    expect(within(receipts).getByRole("button", { name: "Save a copy of receipt.jpg" })).toBeInTheDocument();
+  });
+
+  it("saves a copy of a receipt and says where Budget put it", async () => {
+    const fetchMock = withExpenses({
+      "POST /api/attachments/6/copy": () => ({
+        status: 200,
+        data: { saved: { fileName: "receipt (2).jpg", folder: "C:\\Users\\Amara\\Downloads" } },
+      }),
+    });
+    renderApp("/expenses/9");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save a copy of receipt.jpg" }));
+
+    expect(await screen.findByText("Saved in C:\\Users\\Amara\\Downloads as receipt (2).jpg.")).toBeInTheDocument();
+    expect(calls(fetchMock)).toContain("POST /api/attachments/6/copy");
+  });
+
+  it("downloads the copy in the browser when Budget cannot save it itself, as on a phone", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    withExpenses({ "POST /api/attachments/6/copy": () => ({ status: 200, data: { saved: null } }) });
+    renderApp("/expenses/9");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save a copy of receipt.jpg" }));
+
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    const link = click.mock.contexts[0] as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/api/attachments/6/file");
+    expect(link.download).toBe("receipt.jpg");
+    click.mockRestore();
   });
 
   it("pages through a PDF and switches to another file", async () => {
@@ -289,7 +326,8 @@ describe("One expense", () => {
     const fetchMock = withExpenses({ "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: PEDS, changed: true }) });
     renderApp("/expenses/9");
 
-    await userEvent.click(await screen.findByRole("radio", { name: "Reimbursed" }));
+    // One button, for the next thing to do.
+    await userEvent.click(await screen.findByRole("button", { name: "Mark as reimbursed" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(1));
     // The day it was sent in and who to are kept.
@@ -298,6 +336,111 @@ describe("One expense", () => {
       submittedOn: `${YEAR}-09-29`,
       to: "HSA",
     });
+  });
+
+  it("links to the pay period the expense falls in", async () => {
+    const fetchMock = withExpenses({
+      "GET /api/pay-periods": () => ({
+        status: 200,
+        data: {
+          primarySourceId: 1,
+          primaryAccountId: 1,
+          periods: [
+            { start: `${YEAR}-09-01`, end: `${YEAR}-09-14` },
+            { start: `${YEAR}-09-15`, end: `${YEAR}-09-30` },
+          ],
+        },
+      }),
+    });
+    renderApp("/expenses/9");
+
+    const link = await screen.findByRole("link", { name: "See its pay period" });
+    expect(link).toHaveAttribute("href", `/periods/${YEAR}-09-15`);
+    // Asked for the weeks up to the expense's own day, which is as far as its period can reach back.
+    expect(calls(fetchMock).some((call) => call.startsWith("GET /api/pay-periods"))).toBe(true);
+  });
+
+  it("offers no pay period when none holds the expense's date", async () => {
+    withExpenses();
+    renderApp("/expenses/9");
+
+    await screen.findByRole("heading", { level: 1, name: "Valley Pediatrics" });
+    expect(screen.queryByRole("link", { name: "See its pay period" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Details card's pencil on that card's own fields, and saves them", async () => {
+    const fetchMock = withExpenses({ "PUT /api/entries/9": () => ({ status: 200, data: PEDS, changed: true }) });
+    renderApp("/expenses/9");
+
+    const details = await screen.findByRole("region", { name: "Details" });
+    await userEvent.click(within(details).getByRole("button", { name: "Edit details" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // What the card shows is what the form opens on: category, tags and note.
+    expect(within(dialog).getByRole("combobox", { name: "What to change" })).toHaveDisplayValue("Details");
+    expect(within(dialog).getByRole("combobox", { name: "Tags (optional)" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("combobox", { name: "Category (optional)" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("textbox", { name: "Amount" })).not.toBeInTheDocument();
+    // Past the first screen there is no switch between money out, money in and transfer.
+    expect(within(dialog).queryByRole("radio", { name: "Money out" })).not.toBeInTheDocument();
+
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Note (optional)" }), "Asked for an itemised bill");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9")).toHaveLength(1));
+    // Everything the form did not show goes back as it was.
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9")[0]).toMatchObject({
+      amountCents: PEDS.amountCents,
+      payee: PEDS.payee,
+      tagIds: PEDS.tagIds,
+      note: expect.stringContaining("Asked for an itemised bill"),
+    });
+  });
+
+  it("opens Edit expense at the top on the amount", async () => {
+    withExpenses();
+    renderApp("/expenses/9");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit expense" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("combobox", { name: "What to change" })).toHaveDisplayValue("Amount");
+    expect(within(dialog).getByRole("textbox", { name: "Amount" })).toBeInTheDocument();
+  });
+
+  it("keeps the ways back behind Change", async () => {
+    const fetchMock = withExpenses({ "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: PEDS, changed: true }) });
+    renderApp("/expenses/9");
+
+    const change = await screen.findByRole("button", { name: "Change" });
+    expect(screen.queryByRole("button", { name: "Back to To submit" })).not.toBeInTheDocument();
+    await userEvent.click(change);
+    expect(change).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Back to To submit" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(1));
+    // Not sent in after all, so the day it was sent in goes too.
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[0]).toEqual({ status: "to_submit", submittedOn: null, to: "HSA" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+    await userEvent.click(screen.getByRole("button", { name: "I won't be paid back for this" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(2));
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[1]).toMatchObject({ status: "none" });
+  });
+
+  it("offers to start tracking an expense nobody was expected to pay back", async () => {
+    const untracked: Entry = { ...PEDS, reimbursement: { ...NOT_REPAID } };
+    const fetchMock = withExpenses({
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: untracked, paybacks: [], reimburses: null } }),
+      "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: untracked, changed: true }),
+    });
+    renderApp("/expenses/9");
+
+    expect(await screen.findByText("Nobody pays this back.")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "How far along it is" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "I'll be paid back for this" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[0]).toMatchObject({ status: "to_submit" });
   });
 
   it("marking something sent in with no day given means today", async () => {
@@ -309,7 +452,8 @@ describe("One expense", () => {
     renderApp("/expenses/9");
 
     expect(await screen.findByText("Still to send in · $85.00 to ask for.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("radio", { name: "Submitted" }));
+    expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent("To submitNot sent in yet");
+    await userEvent.click(screen.getByRole("button", { name: "Mark as submitted" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toHaveLength(1));
     expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[0]).toEqual({ status: "submitted", submittedOn: todayIso(), to: null });
@@ -335,6 +479,21 @@ describe("One expense", () => {
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
     expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({ kind: "money_in", amountCents: 2500, reimbursesEntryId: 9 });
+  });
+
+  it("says what to do when what was dropped is a link from a web page, not a file", async () => {
+    const fetchMock = withExpenses({ "POST /api/entries/9/attachments": () => ({ status: 201, data: TWO_FILES, changed: true }) });
+    renderApp("/expenses/9");
+
+    const zone = await screen.findByText("Drop files here or browse");
+    fireEvent.drop(zone, { dataTransfer: { files: [], types: ["text/uri-list"] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("That came across as a link, not a file");
+    expect(calls(fetchMock)).not.toContain("POST /api/entries/9/attachments");
+
+    // A real file dropped in the same place is kept.
+    fireEvent.drop(zone, { dataTransfer: { files: [new File(["%PDF-1.7"], "eob.pdf", { type: "application/pdf" })] } });
+    await waitFor(() => expect(calls(fetchMock)).toContain("POST /api/entries/9/attachments"));
   });
 
   it("attaches a file, and refuses one it cannot keep before sending anything", async () => {

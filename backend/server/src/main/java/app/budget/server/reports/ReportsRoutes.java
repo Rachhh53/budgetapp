@@ -13,6 +13,7 @@ import app.budget.server.files.AttachmentsRepository;
 import app.budget.server.files.AttachmentsRepository.Attachment;
 import app.budget.server.files.AttachmentsRepository.Owner;
 import app.budget.server.files.FileStore;
+import app.budget.server.files.SavedCopies;
 import app.budget.server.reports.PdfExport.Receipt;
 import app.budget.server.reports.ReportDefinition.Include;
 import app.budget.server.reports.ReportRunner.Report;
@@ -51,6 +52,7 @@ public final class ReportsRoutes {
     private final CategoriesRepository categories;
     private final TagsRepository tags;
     private final Optional<Path> fontsDir;
+    private final SavedCopies savedCopies;
 
     public ReportsRoutes(
             ReportsRepository reports,
@@ -60,7 +62,8 @@ public final class ReportsRoutes {
             AccountsRepository accounts,
             CategoriesRepository categories,
             TagsRepository tags,
-            Optional<Path> fontsDir) {
+            Optional<Path> fontsDir,
+            SavedCopies savedCopies) {
         this.reports = reports;
         this.runner = runner;
         this.attachments = attachments;
@@ -69,6 +72,7 @@ public final class ReportsRoutes {
         this.categories = categories;
         this.tags = tags;
         this.fontsDir = fontsDir;
+        this.savedCopies = savedCopies;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -93,7 +97,14 @@ public final class ReportsRoutes {
      * @param name         the report's name, for the heading and the file's name; "Report" when left out
      * @param withReceipts PDF only: true to add the receipts and documents after the report
      */
-    public record ExportInput(String name, ReportDefinition.Input definition, Boolean withReceipts) {}
+    /**
+     * @param save true to have the file put in this PC's Downloads folder and be told its name, when the
+     *             request comes from this PC; otherwise, and from anywhere else, the answer is the file itself
+     */
+    public record ExportInput(String name, ReportDefinition.Input definition, Boolean withReceipts, Boolean save) {}
+
+    /** The answer to an export that was saved on this PC in place of being sent back. */
+    public record Exported(SavedCopies.Saved saved) {}
 
     public record Deleted(boolean deleted) {}
 
@@ -131,7 +142,7 @@ public final class ReportsRoutes {
         ExportInput input = Inputs.body(ctx, ExportInput.class);
         String name = exportName(input.name());
         Report report = runner.run(ReportDefinition.of(input.definition()));
-        download(ctx, "text/csv; charset=utf-8", name + ".csv", CsvExport.of(report, runner.names(report)));
+        hand(ctx, input, "text/csv; charset=utf-8", name + ".csv", CsvExport.of(report, runner.names(report)));
     }
 
     private void exportPdf(Context ctx) {
@@ -145,7 +156,7 @@ public final class ReportsRoutes {
                     + MAX_RECEIPTS + "). Please choose fewer dates, or export it without receipts.");
         }
         byte[] pdf = PdfExport.of(name, about(definition, report), report, runner.names(report), receipts, fontsDir);
-        download(ctx, "application/pdf", name + ".pdf", pdf);
+        hand(ctx, input, "application/pdf", name + ".pdf", pdf);
     }
 
     /** Every file attached to a line of the report, in the report's order, with what it belongs to. */
@@ -210,7 +221,7 @@ public final class ReportsRoutes {
     private static String words(Include include) {
         return switch (include) {
             case ONE_OFFS -> "one-off spending";
-            case BILLS -> "bills";
+            case BILLS -> "bills and expenses";
             case BUDGETS -> "budgets";
         };
     }
@@ -240,6 +251,15 @@ public final class ReportsRoutes {
     }
 
     /** Sends {@code bytes} as a file to save. The name is cleaned of anything a file name cannot hold. */
+    /** Saves the export on this PC when that was asked for and can be done; otherwise sends it back. */
+    private void hand(Context ctx, ExportInput input, String contentType, String fileName, byte[] bytes) {
+        if (Boolean.TRUE.equals(input.save()) && savedCopies.canSaveFor(ctx)) {
+            ApiResponse.ok(ctx, new Exported(savedCopies.save(fileName, bytes)));
+            return;
+        }
+        download(ctx, contentType, fileName, bytes);
+    }
+
     private static void download(Context ctx, String contentType, String fileName, byte[] bytes) {
         String safe = fileName.replaceAll("[\\p{Cntrl}<>:\"/\\\\|?*]", " ").strip();
         ctx.contentType(contentType);

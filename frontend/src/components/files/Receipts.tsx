@@ -5,14 +5,15 @@ import {
   type Attachment,
   type AttachmentOwner,
   DEFAULT_MAX_BYTES,
-  fileUrl,
   formatSize,
   previewUrl,
   problemWith,
   useAttach,
   useAttachments,
   useRemoveAttachment,
+  useSaveCopy,
 } from "../../api/attachments";
+import { savedMessage } from "../../api/client";
 import { BUTTON_LINK } from "../ui";
 
 /** Until the backend has said otherwise: its own limit on how many files one thing can have. */
@@ -33,6 +34,7 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
   const attached = useAttachments(owner);
   const attach = useAttach(owner);
   const remove = useRemoveAttachment();
+  const saveCopy = useSaveCopy();
   const inputId = useId();
   const [chosenId, setChosenId] = useState<number>();
   const [problem, setProblem] = useState<string>();
@@ -66,10 +68,19 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
   const onDrop = (event: DragEvent) => {
     event.preventDefault();
     setOver(false);
-    add([...event.dataTransfer.files]);
+    const dropped = [...event.dataTransfer.files];
+    if (dropped.length === 0) {
+      // Dragged out of a web page or another app, what arrives is a link to the document, not the
+      // document. Budget never goes out to fetch anything, so say what will work instead.
+      setProblem(
+        "That came across as a link, not a file, so there was nothing to keep. Download it first, then drop it here from the browser's downloads list or from its folder, or choose it with browse.",
+      );
+      return;
+    }
+    add(dropped);
   };
 
-  const failure = problem ?? attach.error?.message ?? remove.error?.message;
+  const failure = problem ?? attach.error?.message ?? remove.error?.message ?? saveCopy.error?.message;
 
   return (
     <div className="space-y-3">
@@ -105,15 +116,16 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
                 <span className="min-w-0 flex-1 truncate font-medium">{file.name}</span>
                 <span className="shrink-0 text-sm text-muted tabular-nums">{formatSize(file.sizeBytes)}</span>
               </button>
-              <a
-                href={fileUrl(file)}
-                download={file.name}
+              <button
+                type="button"
+                onClick={() => saveCopy.mutate(file)}
+                disabled={saveCopy.isPending}
                 aria-label={`Save a copy of ${file.name}`}
                 title={`Save a copy of ${file.name}`}
-                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-accent-ink"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-accent-ink disabled:opacity-60"
               >
                 <Download aria-hidden className="size-4" />
-              </a>
+              </button>
               <button
                 type="button"
                 onClick={() => remove.mutate(file.id)}
@@ -193,6 +205,11 @@ export function Receipts({ owner, compact = false }: { owner: AttachmentOwner; c
         />
       </label>
 
+      {saveCopy.data && (
+        <p role="status" className="font-medium wrap-anywhere">
+          {savedMessage(saveCopy.data)}
+        </p>
+      )}
       {failure && (
         <p role="alert" className="text-danger">
           {failure}

@@ -3,7 +3,7 @@ import { type FormEvent, useId, useState } from "react";
 import { Link } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
-import { saveFile } from "../api/client";
+import { savedMessage } from "../api/client";
 import { REIMBURSEMENT_LABELS, REIMBURSEMENT_STATUSES, type ReimbursementStatus, useNames } from "../api/entries";
 import {
   NEW_REPORT,
@@ -40,6 +40,9 @@ import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, LABEL, 
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 
+/** The picker's choice for a report not saved yet. Not a number, so it can never be a saved report's id. */
+const NEW = "new";
+
 /** A report with a great many lines lists the first of them; the exports always have every one. */
 const MOST_LINES_SHOWN = 200;
 
@@ -75,6 +78,10 @@ interface Chip {
  * dates, what it counts, its filters, how it is grouped. The figures follow the builder as it
  * changes; nothing is kept until Save. A report can be taken away as a CSV or a PDF, and the
  * PDF can carry every receipt.
+ *
+ * The saved ones are a picker at the top, not a column of their own (Rachel, 2026-10-12: beside
+ * the app's own side bar the column took a large part of the screen), and a saved report opens
+ * with its builder folded to one line, so its figures are what the screen shows first.
  */
 export function ReportsPage() {
   const saved = useSavedReports();
@@ -93,8 +100,15 @@ export function ReportsPage() {
   const [openId, setOpenId] = useState<number | null>(null);
   const [definition, setDefinition] = useState<ReportDefinition>(NEW_REPORT);
   const [naming, setNaming] = useState<"save" | "rename" | null>(null);
+  // Whether the builder is unfolded: always for a new report, on request for a saved one.
+  const [building, setBuilding] = useState(true);
   const open = saved.data?.find((report) => report.id === openId) ?? null;
   const changed = open === null || JSON.stringify(open.definition) !== JSON.stringify(definition);
+
+  // A new report exactly as the screen opens on it: nothing in it to clear.
+  const untouched = open === null && JSON.stringify(definition) === JSON.stringify(NEW_REPORT);
+  // "Clear the form" asks once before it throws away what was chosen (Rachel, 2026-10-12).
+  const [clearing, setClearing] = useState(false);
 
   const datesProblem = problemWithDates(definition);
   const report = useReport(datesProblem === null ? definition : null);
@@ -104,6 +118,8 @@ export function ReportsPage() {
 
   const show = (next: SavedReport | null) => {
     setOpenId(next?.id ?? null);
+    setBuilding(next === null);
+    setClearing(false);
     // A tag, category or account deleted since the report was saved is dropped from its filters.
     setDefinition(next === null ? NEW_REPORT : withoutMissing(next.definition, lists));
     save.reset();
@@ -111,7 +127,18 @@ export function ReportsPage() {
   };
 
   const exportAs = (format: "csv" | "pdf", withReceipts = false) =>
-    exporting.mutate({ format, name: open?.name ?? "Report", definition, withReceipts }, { onSuccess: saveFile });
+    exporting.mutate({ format, name: open?.name ?? "Report", definition, withReceipts });
+
+  const saveButton = (
+    <button
+      type="button"
+      disabled={datesProblem !== null || save.isPending || (open !== null && !changed)}
+      onClick={() => (open ? save.mutate({ id: open.id, name: open.name, definition }) : setNaming("save"))}
+      className={BUTTON_PRIMARY}
+    >
+      {save.isPending ? "Saving…" : open ? "Save changes" : "Save…"}
+    </button>
+  );
 
   return (
     <>
@@ -120,23 +147,50 @@ export function ReportsPage() {
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Your reports</p>
           <h1 className={PAGE_TITLE}>Reports</h1>
         </div>
-        <button type="button" onClick={() => show(null)} className={BUTTON_PRIMARY}>
-          + New report
-        </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <SavedList saved={saved.data} loading={saved.isPending} error={saved.error?.message} openId={openId} onOpen={show} />
-
+      <div className="space-y-4">
         <div className="min-w-0 space-y-4">
           <Card>
-            {/* The name gets a line to itself: beside the buttons there is only room for its first letters. */}
             <div className="flex flex-col gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <h2 className="min-w-0 truncate text-xl font-bold">{name}</h2>
-                {open && <EditButton name={`the name of ${open.name}`} onClick={() => setNaming("rename")} />}
-                {open && changed && <span className="shrink-0 text-sm text-muted">· changed, not saved</span>}
+              <h2 className="sr-only">{name}</h2>
+              <div className="flex min-w-0 flex-wrap items-end gap-2">
+                <div className="min-w-0 flex-1 sm:max-w-md">
+                  <Picker
+                    label="Report"
+                    noun="report"
+                    placeholder="Choose a report"
+                    // "New report" is one of the choices, so there is always a way back to an empty one.
+                    options={[
+                      { id: NEW, label: "New report" },
+                      ...(saved.data ?? []).map((report) => ({ id: String(report.id), label: report.name })),
+                    ]}
+                    value={openId === null ? NEW : String(openId)}
+                    onChange={(chosen) => {
+                      const next = saved.data?.find((report) => String(report.id) === chosen) ?? null;
+                      // Choosing "New report" while on one changes nothing: clearing it is the button below, which asks first.
+                      if (next !== null || open !== null) {
+                        show(next);
+                      }
+                    }}
+                  />
+                </div>
+                {open && (
+                  <span className="flex min-h-11 items-center">
+                    <EditButton name={`the name of ${open.name}`} onClick={() => setNaming("rename")} />
+                  </span>
+                )}
+                {open && changed && <span className="flex min-h-11 items-center text-sm text-muted">· changed, not saved</span>}
               </div>
+              {saved.isPending && <p className="text-muted">Loading your reports…</p>}
+              {saved.error && (
+                <p role="alert" className="text-danger">
+                  {saved.error.message}
+                </p>
+              )}
+              {saved.data?.length === 0 && (
+                <p className="text-muted">None saved yet. Build one here, press Save, and it waits in this list for next time.</p>
+              )}
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 <button type="button" disabled={datesProblem !== null || exporting.isPending} onClick={() => exportAs("csv")} className={BUTTON_SECONDARY}>
                   Export CSV
@@ -152,14 +206,6 @@ export function ReportsPage() {
                 >
                   Export PDF with receipts
                 </button>
-                <button
-                  type="button"
-                  disabled={datesProblem !== null || save.isPending || (open !== null && !changed)}
-                  onClick={() => (open ? save.mutate({ id: open.id, name: open.name, definition }) : setNaming("save"))}
-                  className={BUTTON_PRIMARY}
-                >
-                  {save.isPending ? "Saving…" : open ? "Save changes" : "Save…"}
-                </button>
               </div>
             </div>
             {exporting.isPending && (
@@ -167,13 +213,67 @@ export function ReportsPage() {
                 Putting the file together…
               </p>
             )}
-            {(exporting.error ?? save.error) && (
+            {exporting.data && (
+              <p role="status" className="mt-2 font-medium wrap-anywhere">
+                {savedMessage(exporting.data)}
+              </p>
+            )}
+            {exporting.error && (
               <p role="alert" className="mt-2 text-danger">
-                {(exporting.error ?? save.error)?.message}
+                {exporting.error.message}
               </p>
             )}
 
-            <Builder definition={definition} onChange={setDefinition} lists={lists} datesProblem={datesProblem} />
+            {/* Dates that cannot be run yet are only put right in the builder, so it is never folded over them. */}
+            {building || datesProblem !== null ? (
+              <>
+                <Builder definition={definition} onChange={setDefinition} lists={lists} datesProblem={datesProblem} />
+                {/* Save sits under the choices it saves, where a form's Save always is. */}
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  {saveButton}
+                  {open && datesProblem === null && (
+                    <button type="button" onClick={() => setBuilding(false)} className={BUTTON_SECONDARY}>
+                      Hide these choices
+                    </button>
+                  )}
+                  {open === null && !untouched && !clearing && (
+                    <button type="button" onClick={() => setClearing(true)} className={BUTTON_SECONDARY}>
+                      Clear the form
+                    </button>
+                  )}
+                </div>
+                {open === null && !untouched && clearing && (
+                  <div role="group" aria-label="Clear the form?" className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <p className="font-medium sm:mr-2">Clear everything chosen here and start again?</p>
+                    <button type="button" onClick={() => show(null)} className={BUTTON_DANGER_OUTLINE}>
+                      Yes, clear it
+                    </button>
+                    <button type="button" data-autofocus onClick={() => setClearing(false)} className={BUTTON_SECONDARY}>
+                      Keep it
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <p>
+                  <span className="text-muted">Shows </span>
+                  {summaryOf(definition, lists)}
+                </p>
+                <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                  {/* Folded away there is only something to save when the report differs from what was saved. */}
+                  {changed && saveButton}
+                  <button type="button" onClick={() => setBuilding(true)} className={BUTTON_SECONDARY}>
+                    Change what it shows
+                  </button>
+                </div>
+              </div>
+            )}
+            {save.error && (
+              <p role="alert" className="mt-2 text-danger">
+                {save.error.message}
+              </p>
+            )}
           </Card>
 
           {datesProblem === null && report.isPending && <p className="text-muted">Working out the report…</p>}
@@ -222,53 +322,18 @@ function withoutMissing(definition: ReportDefinition, lists: Lists): ReportDefin
   };
 }
 
-function SavedList({
-  saved,
-  loading,
-  error,
-  openId,
-  onOpen,
-}: {
-  saved: SavedReport[] | undefined;
-  loading: boolean;
-  error: string | undefined;
-  openId: number | null;
-  onOpen: (report: SavedReport) => void;
-}) {
-  return (
-    <Card title="Saved">
-      {loading && <p className="text-muted">Loading your reports…</p>}
-      {error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-      )}
-      {saved?.length === 0 && (
-        <p className="text-muted">None saved yet. Build one here, press Save, and it waits here for next time.</p>
-      )}
-      {saved && saved.length > 0 && (
-        <ul className="space-y-2">
-          {saved.map((report) => (
-            <li key={report.id}>
-              <button
-                type="button"
-                onClick={() => onOpen(report)}
-                aria-current={report.id === openId ? "true" : undefined}
-                className={`flex min-h-11 w-full cursor-pointer flex-col rounded-lg border px-3 py-2 text-left hover:bg-bg/60 ${
-                  report.id === openId ? "border-2 border-accent" : "border-line"
-                }`}
-              >
-                <span className="font-semibold wrap-break-word">{report.name}</span>
-                <span className="text-sm text-muted">
-                  {REPORT_RANGE_LABELS[report.definition.range]} · by {REPORT_GROUP_LABELS[report.definition.groupBy].toLowerCase()}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
+/** What a report shows, in a line, for a saved one whose builder is folded away: "This year · one-off spending · Tag is Medical · by month". */
+function summaryOf(definition: ReportDefinition, lists: Lists): string {
+  const dates =
+    definition.range === "custom" && definition.from !== null && definition.to !== null
+      ? `${formatDate(definition.from)} – ${formatDate(definition.to)}`
+      : REPORT_RANGE_LABELS[definition.range];
+  return [
+    dates,
+    definition.include.map((include) => REPORT_INCLUDE_LABELS[include].toLowerCase()).join(", "),
+    ...chipsOf(definition, lists).map((chip) => `${FILTER_LABELS[chip.kind]} is ${chip.label}`),
+    `by ${REPORT_GROUP_LABELS[definition.groupBy].toLowerCase()}`,
+  ].join(" · ");
 }
 
 /** The builder: every choice is a dropdown, a checkbox or a picker (spec §1), and each change shows at once. */
@@ -529,31 +594,29 @@ function Results({ report, show, lists }: { report: Report; show: ReportShow; li
 
   return (
     <>
-      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${report.hasReimbursements ? "xl:grid-cols-4" : ""}`}>
-        <Card>
-          <p className="text-muted">Total</p>
-          <p data-amount className="text-3xl font-bold tabular-nums">
-            {formatCents(report.totalCents)}
-          </p>
-          <p className="text-muted">
-            {report.count === 1 ? "1 line" : `${report.count} lines`} · {formatDate(report.from)} – {formatDate(report.to)}
-          </p>
-        </Card>
-        {report.hasReimbursements && (
-          <>
-            <Figure label="Reimbursed" cents={report.reimbursedCents} />
-            <Figure label="Submitted, waiting" cents={report.waitingCents} />
-            <Figure label="Not submitted yet" cents={report.notSubmittedCents} />
-          </>
-        )}
-        {report.estimatedCents > 0 && (
-          <Card>
-            <p className="text-muted">Estimated or still to come</p>
-            <Amount cents={report.estimatedCents} estimate className="-ml-2 text-2xl font-bold" />
-            <p className="text-muted">of the total</p>
-          </Card>
-        )}
-      </div>
+      {/* One card, like the figures at the top of Expenses and Accounts, and one row from a tablet up however
+          many figures there are (Rachel, 2026-10-12: a card each was too big). Two across on a phone. */}
+      <Card>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:auto-cols-fr md:grid-flow-col md:grid-cols-none">
+          <Figure label="Total" cents={report.totalCents} main />
+          {report.hasReimbursements && (
+            <>
+              <Figure label="Reimbursed" cents={report.reimbursedCents} />
+              <Figure label="Submitted, waiting" cents={report.waitingCents} />
+              <Figure label="Not submitted yet" cents={report.notSubmittedCents} />
+            </>
+          )}
+          {report.estimatedCents > 0 && (
+            <div className="min-w-0">
+              <p className="text-sm text-muted">Estimated or still to come</p>
+              <Amount cents={report.estimatedCents} estimate className="-ml-2 text-xl font-bold" />
+            </div>
+          )}
+        </div>
+        <p className="mt-2 text-sm text-muted">
+          {report.count === 1 ? "1 line" : `${report.count} lines`} · {formatDate(report.from)} – {formatDate(report.to)}
+        </p>
+      </Card>
 
       {nothing ? (
         <Card>
@@ -578,14 +641,14 @@ function Results({ report, show, lists }: { report: Report; show: ReportShow; li
   );
 }
 
-function Figure({ label, cents }: { label: string; cents: number }) {
+function Figure({ label, cents, main = false }: { label: string; cents: number; main?: boolean }) {
   return (
-    <Card>
-      <p className="text-muted">{label}</p>
-      <p data-amount className="text-2xl font-bold tabular-nums">
+    <div className="min-w-0">
+      <p className="text-sm text-muted">{label}</p>
+      <p data-amount className={`font-bold tabular-nums ${main ? "text-2xl" : "text-xl"}`}>
         {formatCents(cents)}
       </p>
-    </Card>
+    </div>
   );
 }
 
@@ -693,7 +756,7 @@ function Lines({ rows, lists }: { rows: readonly ReportRow[]; lists: Lists }) {
   );
 }
 
-const KIND_LABELS: Record<ReportRow["kind"], string> = { one_off: "One-off", bill: "Bill", budget: "Budget" };
+const KIND_LABELS: Record<ReportRow["kind"], string> = { one_off: "One-off", bill: "Bill or expense", budget: "Budget" };
 
 /**
  * Names a report: to save a new one, or to rename (or delete) one already saved. Deleting asks

@@ -58,6 +58,7 @@ public final class AttachmentsRoutes {
     private final CardsRepository cards;
     private final AccountsRepository accounts;
     private final Clock clock;
+    private final SavedCopies savedCopies;
 
     private final Map<String, byte[]> previews = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
         @Override
@@ -74,7 +75,8 @@ public final class AttachmentsRoutes {
             ItemCalendar calendar,
             CardsRepository cards,
             AccountsRepository accounts,
-            Clock clock) {
+            Clock clock,
+            SavedCopies savedCopies) {
         this.attachments = attachments;
         this.store = store;
         this.entries = entries;
@@ -83,6 +85,7 @@ public final class AttachmentsRoutes {
         this.cards = cards;
         this.accounts = accounts;
         this.clock = clock;
+        this.savedCopies = savedCopies;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -93,6 +96,7 @@ public final class AttachmentsRoutes {
         routes.get("/api/cards/{id}/statements/{statementId}/attachments", ctx -> list(ctx, statement(ctx)));
         routes.post("/api/cards/{id}/statements/{statementId}/attachments", ctx -> attach(ctx, statement(ctx)));
         routes.get("/api/attachments/{id}/file", this::download);
+        routes.post("/api/attachments/{id}/copy", this::saveCopy);
         routes.get("/api/attachments/{id}/preview", this::preview);
         routes.delete("/api/attachments/{id}", this::remove);
         routes.get("/api/attachment-counts", this::counts);
@@ -177,6 +181,23 @@ public final class AttachmentsRoutes {
             throw new UncheckedIOException("Could not open an attached file", e);
         }
     }
+
+    /**
+     * "Save a copy", asked from this PC: the file goes into the Downloads folder and the answer says what
+     * it is called there. Asked from anywhere else, the answer is that nothing was saved, and the screen
+     * falls back to a download of {@code /file}.
+     */
+    private void saveCopy(Context ctx) {
+        Attachment attachment = found(ctx);
+        if (!savedCopies.canSaveFor(ctx)) {
+            ApiResponse.ok(ctx, new CopyResult(null));
+            return;
+        }
+        ApiResponse.ok(ctx, new CopyResult(savedCopies.copy(attachment.name(), store.path(attachment.hash()))));
+    }
+
+    /** @param saved what the copy was saved as; null when it could not be saved from here */
+    public record CopyResult(SavedCopies.Saved saved) {}
 
     /** A picture of the file for the screen: the picture itself, or one page of a PDF as a PNG. */
     private void preview(Context ctx) {

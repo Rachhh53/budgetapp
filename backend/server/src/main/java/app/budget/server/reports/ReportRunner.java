@@ -88,6 +88,7 @@ public final class ReportRunner {
      * @param scheduledDate   with {@code itemId}: the date the item's schedule names for this time
      * @param date            the day it counts on: the day a bill was paid once it has been, its due date until then
      * @param estimate        true while the amount is not final, or the day has not come yet
+     * @param unpaid          true while the day has not come yet and it has not been marked paid
      * @param reimbursement   where a one-off expense stands; {@code null} for anything nobody pays back
      * @param reimbursedCents how much of it counts as having come back
      * @param owedCents       how much is still to come back
@@ -105,6 +106,7 @@ public final class ReportRunner {
             long accountId,
             long amountCents,
             boolean estimate,
+            boolean unpaid,
             Reimbursement.Status reimbursement,
             long reimbursedCents,
             long owedCents,
@@ -167,6 +169,7 @@ public final class ReportRunner {
                 Row row = new Row(
                         "one_off", entry.id(), null, null, entry.date(), entry.description(), entry.payee(), entry.categoryId(),
                         entry.tagIds(), entry.accountId(), entry.amountCents(), entry.estimate() || entry.date().isAfter(today),
+                        entry.date().isAfter(today),
                         entry.reimbursement().status(), share.reimbursed().cents(), share.owed().cents(), entry.fileCount());
                 if (filter.lets(row)) {
                     rows.add(row);
@@ -191,6 +194,7 @@ public final class ReportRunner {
                         occurrence.categoryId(), tagsByItem.getOrDefault(occurrence.itemId(), List.of()),
                         occurrence.payFromAccountId(), occurrence.amountCents(),
                         occurrence.estimate() || !occurrence.paid() && date.isAfter(today),
+                        !occurrence.paid() && date.isAfter(today),
                         null, 0, 0,
                         files.getOrDefault(new Owner.Occurrence(occurrence.itemId(), occurrence.scheduledDate()), 0));
                 if (filter.lets(row)) {

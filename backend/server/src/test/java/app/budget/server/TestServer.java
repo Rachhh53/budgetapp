@@ -81,10 +81,15 @@ public final class TestServer implements AutoCloseable {
     private final HttpClient http = HttpClient.newHttpClient();
     private final String baseUrl;
 
+    /** Stands in for the user's Downloads folder, so nothing a test saves ever lands in the real one. */
+    public final Path downloads;
+
     public TestServer(Path dataDir) throws IOException {
+        downloads = java.nio.file.Files.createDirectories(dataDir.resolve("downloads-of-this-test"));
         Config config = Config.fromEnvironment(Map.of(
                 "BUDGET_PORT", "0",
                 "BUDGET_DATA_DIR", dataDir.toString(),
+                "BUDGET_DOWNLOADS_DIR", downloads.toString(),
                 "BUDGET_SHUTDOWN_TOKEN", SHUTDOWN_TOKEN));
         server = new BudgetServer(
                 config,

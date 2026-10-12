@@ -33,6 +33,7 @@ import app.budget.server.entries.EntriesRoutes;
 import app.budget.server.files.AttachmentsRepository;
 import app.budget.server.files.AttachmentsRoutes;
 import app.budget.server.files.FileStore;
+import app.budget.server.files.SavedCopies;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRoutes;
 import app.budget.server.income.PayCalendar;
@@ -184,8 +185,10 @@ public final class BudgetServer {
             new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
             new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
-            new AttachmentsRoutes(attachments, fileStore, entries, items, itemCalendar, cards, accounts, clock).register(routes);
-            new ReportsRoutes(reports, reportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir())
+            SavedCopies savedCopies = new SavedCopies(config.downloadsDir());
+            new AttachmentsRoutes(attachments, fileStore, entries, items, itemCalendar, cards, accounts, clock, savedCopies)
+                    .register(routes);
+            new ReportsRoutes(reports, reportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
                     .register(routes);
             new DataRoutes(database, sessions).register(routes);
             new BackupRoutes(backups, folders, settings, sessions).register(routes);

@@ -68,6 +68,8 @@ class AttachmentsApiTest extends ApiTestBase {
             assertThat(server.download("/api/attachments/" + id + "/file", null, null).status()).isEqualTo(401);
             assertThat(server.download("/api/attachments/" + id + "/preview", null, null).status()).isEqualTo(401);
             assertThat(server.delete("/api/attachments/" + id, null).status()).isEqualTo(401);
+            assertThat(server.post("/api/attachments/" + id + "/copy", null, null).status()).isEqualTo(401);
+            assertThat(server.downloads).isEmptyDirectory();
             assertThat(server.get("/api/attachment-counts", null).status()).isEqualTo(401);
             // Nothing was changed by any of those, and no file was handed over.
             assertThat(server.get(path(), cookie).data().get("attachments")).hasSize(1);
@@ -274,6 +276,24 @@ class AttachmentsApiTest extends ApiTestBase {
 
     @Nested
     class ShowingAndSaving {
+        @Test
+        void savesACopyIntoDownloadsFromThisPcAndSaysWhatItIsCalled() throws Exception {
+            long id = server.upload(path(), cookie, new FilePart("Zoë's invoice.pdf", INVOICE.content()))
+                    .data().get("attachments").get(0).get("id").asLong();
+
+            Reply first = server.post("/api/attachments/" + id + "/copy", null, cookie);
+            Reply second = server.post("/api/attachments/" + id + "/copy", null, cookie);
+
+            assertThat(first.status()).isEqualTo(200);
+            assertThat(first.data().get("saved").get("fileName").asText()).isEqualTo("Zoë's invoice.pdf");
+            assertThat(first.data().get("saved").get("folder").asText()).isEqualTo(server.downloads.toString());
+            assertThat(server.downloads.resolve("Zoë's invoice.pdf")).hasBinaryContent(INVOICE.content());
+            // A second copy sits beside the first; nothing is replaced, and nothing in the budget changed.
+            assertThat(second.data().get("saved").get("fileName").asText()).isEqualTo("Zoë's invoice (2).pdf");
+            assertThat(first.changed()).isFalse();
+            assertThat(server.post("/api/attachments/999999/copy", null, cookie).status()).isEqualTo(404);
+        }
+
         @Test
         void savesACopyExactlyAsItWasAttachedUnderItsOwnName() throws Exception {
             long id = server.upload(path(), cookie, new FilePart("Zoë's invoice.pdf", INVOICE.content()))

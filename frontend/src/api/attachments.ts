@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "./client";
+import { api, type Saved } from "./client";
 import { PAY_KEY } from "./income";
 
 /** A receipt or document attached to something. */
@@ -99,6 +99,27 @@ export function useRemoveAttachment() {
   return useMutation({
     mutationFn: (id: number) => api.delete<Attached>(`/api/attachments/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+  });
+}
+
+/**
+ * "Save a copy". From this PC the backend puts the copy in the Downloads folder and the answer says
+ * what it is called; from anywhere else nothing is saved (`null`) and the browser downloads it.
+ */
+export function useSaveCopy() {
+  return useMutation({
+    mutationFn: async (attachment: Attachment): Promise<Saved | null> => {
+      const { saved } = await api.post<{ saved: Saved | null }>(`/api/attachments/${attachment.id}/copy`, undefined);
+      if (saved === null) {
+        const link = document.createElement("a");
+        link.href = fileUrl(attachment);
+        link.download = attachment.name;
+        document.body.append(link);
+        link.click();
+        link.remove();
+      }
+      return saved;
+    },
   });
 }
 

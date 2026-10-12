@@ -152,7 +152,8 @@ final class PdfExport {
         sheet.figures(figures);
         if (report.estimatedCents() > 0) {
             sheet.note("Includes " + money(report.estimatedCents())
-                    + " that is estimated or still to come. Estimates are shaded light blue below.");
+                    + " that is estimated or still to come.");
+            sheet.note("An estimate is shaded light blue. A line not paid yet says so.");
         }
         sheet.gap(12);
     }
@@ -184,16 +185,18 @@ final class PdfExport {
             return;
         }
         sheet.heading("Every line");
-        float[] widths = {78, 160, 108, 94, WIDTH - 78 - 160 - 108 - 94};
-        boolean[] right = {false, false, false, false, true};
-        sheet.tableHeader(widths, right, "Date", "What", "Category", "Paid from", "Amount");
+        float[] widths = {66, 130, 84, 100, 62, WIDTH - 66 - 130 - 84 - 100 - 62};
+        boolean[] right = {false, false, false, false, false, true};
+        sheet.tableHeader(widths, right, "Date", "What", "Category", "Paid from", "Status", "Amount");
         for (int i = 0; i < report.rows().size(); i++) {
             Row row = report.rows().get(i);
             String what = row.payee() == null || row.payee().equalsIgnoreCase(row.description())
                     ? row.description()
                     : row.payee() + " · " + row.description();
-            sheet.tableRow(widths, right, row.estimate() ? 4 : -1,
-                    row.date().format(DAY), what, names.get(i).category(), names.get(i).account(), money(row.amountCents()));
+            // Not paid yet is said in words, not by a color: the blue box is kept for an amount that is itself a guess.
+            sheet.tableRow(widths, right, row.estimate() && !row.unpaid() ? 5 : -1,
+                    row.date().format(DAY), what, names.get(i).category(), names.get(i).account(),
+                    row.unpaid() ? "Not paid yet" : "", money(row.amountCents()));
         }
     }
 

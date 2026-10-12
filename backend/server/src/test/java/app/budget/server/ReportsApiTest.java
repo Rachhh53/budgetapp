@@ -117,6 +117,9 @@ class ReportsApiTest extends ApiTestBase {
             assertThat(server.put("/api/reports/" + id, save.replace("Medical", "Renamed"), null).status()).isEqualTo(401);
             assertThat(server.delete("/api/reports/" + id, null).status()).isEqualTo(401);
             assertThat(server.post("/api/reports/run", "{\"definition\":" + medicalOutOfPocket() + "}", null).status()).isEqualTo(401);
+            assertThat(server.post("/api/reports/export/csv", "{\"save\":true,\"definition\":" + medicalOutOfPocket() + "}", null).status())
+                    .isEqualTo(401);
+            assertThat(server.downloads).isEmptyDirectory();
             Download csv = server.download("/api/reports/export/csv", "{\"definition\":" + medicalOutOfPocket() + "}", null);
             Download pdf = server.download("/api/reports/export/pdf", "{\"definition\":" + medicalOutOfPocket() + "}", null);
             assertThat(csv.status()).isEqualTo(401);
@@ -255,6 +258,8 @@ class ReportsApiTest extends ApiTestBase {
             assertThat(september.get("itemId").asLong()).isEqualTo(electric);
             assertThat(september.get("amountCents").asLong()).isEqualTo(10150);
             assertThat(september.get("estimate").asBoolean()).isFalse();
+            assertThat(september.get("unpaid").asBoolean()).isFalse();
+            assertThat(bills.get("rows").get(3).get("unpaid").asBoolean()).isTrue();
             assertThat(september.get("fileCount").asInt()).isEqualTo(1);
             assertThat(september.get("reimbursement").isNull()).isTrue();
             assertThat(bills.get("rows").get(3).get("estimate").asBoolean()).isTrue();
@@ -407,16 +412,69 @@ class ReportsApiTest extends ApiTestBase {
             assertThat(csv.header("Content-Disposition"))
                     .isEqualTo("attachment; filename*=UTF-8''Medical%20out-of-pocket%202026.csv");
             String text = new String(csv.body(), StandardCharsets.UTF_8);
-            assertThat(text).startsWith("﻿Date,Description,Paid to,Kind,Category,Tags,Paid from,Amount,Estimate,"
+            assertThat(text).startsWith("﻿Date,Description,Paid to,Kind,Category,Tags,Paid from,Amount,Estimate,Not paid yet,"
                     + "Reimbursement,Reimbursed,Still owed,Files\r\n");
             String[] lines = text.split("\r\n");
             assertThat(lines).hasSize(4);
             assertThat(lines[1]).isEqualTo(
-                    "2026-01-20,Visit,Urgent care,One-off,Medical,Medical – out of pocket,Everyday Checking,120.00,,Reimbursed,120.00,0.00,0");
+                    "2026-01-20,Visit,Urgent care,One-off,Medical,Medical – out of pocket,Everyday Checking,120.00,,,Reimbursed,120.00,0.00,0");
             assertThat(lines[2]).isEqualTo(
                     "2026-09-19,Visit,CVS Pharmacy,One-off,Medical › Dental,\"Medical – out of pocket, Tax deductible\","
-                            + "Everyday Checking,23.60,,To submit,0.00,23.60,0");
+                            + "Everyday Checking,23.60,,,To submit,0.00,23.60,0");
             assertThat(lines[3]).contains("Valley Pediatrics", "85.00", "Submitted,60.00,25.00");
+        }
+
+        @Test
+        void askedToSaveFromThisPcItPutsTheFileInDownloadsAndSaysWhatItIsCalled() throws Exception {
+            Reply first = server.post("/api/reports/export/csv", export(",\"save\":true"), cookie);
+
+            assertThat(first.status()).isEqualTo(200);
+            assertThat(first.data().get("saved").get("fileName").asText()).isEqualTo("Medical out-of-pocket 2026.csv");
+            assertThat(first.data().get("saved").get("folder").asText()).isEqualTo(server.downloads.toString());
+            assertThat(server.downloads.resolve("Medical out-of-pocket 2026.csv"))
+                    .content(StandardCharsets.UTF_8).contains("Valley Pediatrics");
+            // Saving a file is not a change to the budget: there is nothing for Undo to take back.
+            assertThat(first.changed()).isFalse();
+
+            // The same again never replaces what is there: it is saved beside it, as Windows names a second download.
+            Reply second = server.post("/api/reports/export/pdf", export(",\"save\":true"), cookie);
+            Reply third = server.post("/api/reports/export/pdf", export(",\"save\":true,\"withReceipts\":true"), cookie);
+            assertThat(second.data().get("saved").get("fileName").asText()).isEqualTo("Medical out-of-pocket 2026.pdf");
+            assertThat(third.data().get("saved").get("fileName").asText()).isEqualTo("Medical out-of-pocket 2026 (2).pdf");
+            try (PDDocument document = Loader.loadPDF(server.downloads.resolve("Medical out-of-pocket 2026 (2).pdf").toFile())) {
+                assertThat(new PDFTextStripper().getText(document)).contains("Medical out-of-pocket 2026", "$228.60");
+            }
+        }
+
+        @Test
+        void aNameThatCouldNotBeAFileIsSavedUnderOneThatCan() throws Exception {
+            String body = "{\"name\":\"..\\\\..\\\\taxes: 2026?\",\"save\":true,\"definition\":%s}".formatted(medicalOutOfPocket());
+
+            Reply reply = server.post("/api/reports/export/csv", body, cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            String saved = reply.data().get("saved").get("fileName").asText();
+            assertThat(saved).doesNotContain("\\", "/", ":", "?").endsWith(".csv");
+            // Inside the folder, and nowhere else.
+            assertThat(server.downloads.resolve(saved)).exists().hasParent(server.downloads);
+        }
+
+        @Test
+        void pdfSaysInWordsWhatIsNotPaidYetInPlaceOfShadingIt() throws Exception {
+            created("/api/entries", """
+                    {"kind":"money_out","date":"2026-12-30","amountCents":4200,"description":"Follow-up visit",
+                     "payee":"Valley Pediatrics","accountId":%d,"tagIds":[%d]}""".formatted(checking, outOfPocket));
+
+            Download pdf = server.download("/api/reports/export/pdf", export(""), cookie);
+            String csv = new String(server.download("/api/reports/export/csv", export(""), cookie).body(), StandardCharsets.UTF_8);
+
+            try (PDDocument document = Loader.loadPDF(pdf.body())) {
+                String text = new PDFTextStripper().getText(document);
+                assertThat(text).contains("Status", "Not paid yet", "A line not paid yet says so.");
+                // Said once, for the one line still to come.
+                assertThat(text.split("Not paid yet", -1)).hasSize(2);
+            }
+            assertThat(csv).contains("2026-12-30,Follow-up visit,Valley Pediatrics,One-off,,Medical – out of pocket,Everyday Checking,42.00,yes,yes,");
         }
 
         @Test

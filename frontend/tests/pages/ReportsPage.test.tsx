@@ -45,6 +45,7 @@ const REPORT: Report = {
       accountId: 1,
       amountCents: 12000,
       estimate: false,
+      unpaid: false,
       reimbursement: "reimbursed",
       reimbursedCents: 12000,
       owedCents: 0,
@@ -63,6 +64,7 @@ const REPORT: Report = {
       accountId: 1,
       amountCents: 8500,
       estimate: false,
+      unpaid: false,
       reimbursement: "submitted",
       reimbursedCents: 6000,
       owedCents: 2500,
@@ -81,6 +83,7 @@ const REPORT: Report = {
       accountId: 1,
       amountCents: 2360,
       estimate: true,
+      unpaid: true,
       reimbursement: null,
       reimbursedCents: 0,
       owedCents: 0,
@@ -107,6 +110,12 @@ function withReports(overrides: Parameters<typeof fakeBackend>[0] = {}) {
   });
 }
 
+/** Chooses the saved report from the picker at the top, once the list of them has arrived. */
+async function openSaved() {
+  await userEvent.click(await screen.findByRole("combobox", { name: "Report" }));
+  await userEvent.click(await screen.findByRole("option", { name: "Medical out-of-pocket 2026" }));
+}
+
 /** The definition the screen last asked the backend to run. */
 function lastRun(fetchMock: ReturnType<typeof fakeBackend>): ReportDefinition {
   const runs = bodiesSentTo(fetchMock, "POST /api/reports/run") as { definition: ReportDefinition }[];
@@ -122,6 +131,20 @@ describe("Reports", () => {
     expect(await screen.findByText(/None saved yet/)).toBeInTheDocument();
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/reports/run")).toHaveLength(1));
     expect(lastRun(fetchMock)).toEqual(NEW_REPORT);
+    expect(screen.getByRole("combobox", { name: "Report" })).toHaveValue("New report");
+    // Nothing chosen yet, so nothing to clear.
+    expect(screen.queryByRole("button", { name: "Clear the form" })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Group by" }), "payee");
+    // Clearing asks first, and "Keep it" leaves everything as it was.
+    await userEvent.click(screen.getByRole("button", { name: "Clear the form" }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(screen.getByRole("combobox", { name: "Group by" })).toHaveValue("payee");
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear the form" }));
+    await userEvent.click(within(screen.getByRole("group", { name: "Clear the form?" })).getByRole("button", { name: "Yes, clear it" }));
+    expect(screen.getByRole("combobox", { name: "Group by" })).toHaveValue("month");
+    expect(screen.queryByRole("button", { name: "Clear the form" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "One-off spending" })).toBeChecked();
     // The last thing included cannot be taken out: a report of nothing is not a report.
     expect(screen.getByRole("checkbox", { name: "One-off spending" })).toBeDisabled();
@@ -185,7 +208,7 @@ describe("Reports", () => {
     await screen.findByText("Total", { selector: "p" });
 
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Group by" }), "category");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Bills" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Bills & expenses" }));
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Show" }), "table");
 
     await waitFor(() => expect(lastRun(fetchMock)).toMatchObject({ groupBy: "category", include: ["one_offs", "bills"], show: "table" }));
@@ -238,14 +261,21 @@ describe("Reports", () => {
     const fetchMock = withReports({ "PUT /api/reports/4": () => ({ status: 200, data: changedReport, changed: true }) });
     renderApp("/reports");
 
-    await userEvent.click(await screen.findByRole("button", { name: /Medical out-of-pocket 2026/ }));
+    await openSaved();
     expect(screen.getByRole("heading", { level: 2, name: "Medical out-of-pocket 2026" })).toBeInTheDocument();
     await waitFor(() => expect(lastRun(fetchMock).tagIds).toEqual([1]));
-    expect(screen.getByText("Tag is Medical – out of pocket")).toBeInTheDocument();
-    // As saved: nothing to save yet.
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    // A saved report opens on its figures: what it shows is one line, and the choices behind it are folded away.
+    expect(screen.getByText("This year · one-off spending · Tag is Medical – out of pocket · by month")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Group by" })).not.toBeInTheDocument();
+    // As saved: nothing to save yet, so no Save is offered beside the line.
+    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole("button", { name: "Change what it shows" }));
+    // Save sits under the choices, and has nothing to do until one of them changes.
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Group by" }), "payee");
+    await userEvent.click(screen.getByRole("button", { name: "Hide these choices" }));
+    expect(screen.getByText("This year · one-off spending · Tag is Medical – out of pocket · by payee")).toBeInTheDocument();
     expect(screen.getByText("· changed, not saved")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -256,12 +286,27 @@ describe("Reports", () => {
     });
   });
 
+  it("goes from a saved report to a new one by choosing New report", async () => {
+    const fetchMock = withReports();
+    renderApp("/reports");
+    await openSaved();
+    await waitFor(() => expect(lastRun(fetchMock).tagIds).toEqual([1]));
+
+    await userEvent.click(screen.getByRole("combobox", { name: "Report" }));
+    await userEvent.click(await screen.findByRole("option", { name: "New report" }));
+
+    expect(screen.getByRole("heading", { level: 2, name: "New report" })).toBeInTheDocument();
+    await waitFor(() => expect(lastRun(fetchMock)).toEqual(NEW_REPORT));
+    // A new report opens with its choices showing.
+    expect(screen.getByRole("combobox", { name: "Group by" })).toBeInTheDocument();
+  });
+
   it("drops a filter whose tag has been deleted since the report was saved", async () => {
     const stale: SavedReport = { ...MEDICAL, definition: { ...MEDICAL_DEFINITION, tagIds: [1, 99] } };
     const fetchMock = withReports({ "GET /api/reports": () => ({ status: 200, data: [stale] }) });
     renderApp("/reports");
 
-    await userEvent.click(await screen.findByRole("button", { name: /Medical out-of-pocket 2026/ }));
+    await openSaved();
 
     await waitFor(() => expect(lastRun(fetchMock).tagIds).toEqual([1]));
     expect(screen.getByText("· changed, not saved")).toBeInTheDocument();
@@ -304,7 +349,7 @@ describe("Reports", () => {
       "DELETE /api/reports/4": () => ({ status: 200, data: { deleted: true }, changed: true }),
     });
     renderApp("/reports");
-    await userEvent.click(await screen.findByRole("button", { name: /Medical out-of-pocket 2026/ }));
+    await openSaved();
 
     await userEvent.click(screen.getByRole("button", { name: "Edit the name of Medical out-of-pocket 2026" }));
     let dialog = screen.getByRole("dialog", { name: "Rename Medical out-of-pocket 2026" });
@@ -340,22 +385,43 @@ describe("Reports", () => {
       click.mockReset();
     });
 
-    it("asks for the report on screen as a CSV and hands the file over", async () => {
-      const fetchMock = withReports({ "POST /api/reports/export/csv": () => ({ status: 200, data: "Date,Description" }) });
+    it("says where an export was saved when Budget saved it on this PC", async () => {
+      const fetchMock = withReports({
+        "POST /api/reports/export/csv": () => ({
+          status: 200,
+          data: { saved: { fileName: "Medical out-of-pocket 2026 (2).csv", folder: "C:\\Users\\Amara\\Downloads" } },
+        }),
+      });
       renderApp("/reports");
-      await userEvent.click(await screen.findByRole("button", { name: /Medical out-of-pocket 2026/ }));
+      await openSaved();
+
+      await userEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+
+      // The desktop window saves a file without a word, so the page says it: where, and under what name.
+      expect(await screen.findByText("Saved in C:\\Users\\Amara\\Downloads as Medical out-of-pocket 2026 (2).csv.")).toBeInTheDocument();
+      expect(bodiesSentTo(fetchMock, "POST /api/reports/export/csv")).toEqual([
+        { name: "Medical out-of-pocket 2026", definition: MEDICAL_DEFINITION, save: true },
+      ]);
+      // Nothing was handed to the browser to download.
+      expect(click).not.toHaveBeenCalled();
+    });
+
+    it("hands the file to the browser when it comes back as a file, as it does to a phone", async () => {
+      const fetchMock = withReports({ "POST /api/reports/export/csv": () => ({ status: 200, file: "Date,Description" }) });
+      renderApp("/reports");
+      await openSaved();
 
       await userEvent.click(screen.getByRole("button", { name: "Export CSV" }));
 
       await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
       expect(bodiesSentTo(fetchMock, "POST /api/reports/export/csv")).toEqual([
-        { name: "Medical out-of-pocket 2026", definition: MEDICAL_DEFINITION },
+        { name: "Medical out-of-pocket 2026", definition: MEDICAL_DEFINITION, save: true },
       ]);
       expect(createObjectURL).toHaveBeenCalledTimes(1);
     });
 
     it("asks for the PDF with or without receipts", async () => {
-      const fetchMock = withReports({ "POST /api/reports/export/pdf": () => ({ status: 200, data: "%PDF" }) });
+      const fetchMock = withReports({ "POST /api/reports/export/pdf": () => ({ status: 200, file: "%PDF" }) });
       renderApp("/reports");
       await screen.findByText("Total", { selector: "p" });
 
@@ -365,8 +431,8 @@ describe("Reports", () => {
       await waitFor(() => expect(click).toHaveBeenCalledTimes(2));
 
       expect(bodiesSentTo(fetchMock, "POST /api/reports/export/pdf")).toEqual([
-        { name: "Report", definition: NEW_REPORT, withReceipts: true },
-        { name: "Report", definition: NEW_REPORT, withReceipts: false },
+        { name: "Report", definition: NEW_REPORT, withReceipts: true, save: true },
+        { name: "Report", definition: NEW_REPORT, withReceipts: false, save: true },
       ]);
     });
 

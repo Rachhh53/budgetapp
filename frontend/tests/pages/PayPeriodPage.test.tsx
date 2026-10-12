@@ -1107,7 +1107,7 @@ describe("+ Add item", () => {
     await userEvent.clear(amount);
     await userEvent.type(amount, "655.25");
     // One group of fields at a time, so the dialog never scrolls; Save is on every one and sends them all.
-    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), "Paid to and category");
+    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "What to change" }), "When and where");
     expect(within(dialog).queryByRole("textbox", { name: "Amount" })).not.toBeInTheDocument();
     // Who it was paid to is a picker of the names typed before, not free text.
     expect(within(dialog).getByRole("combobox", { name: "Paid to (optional)" })).toHaveValue("Maple Street Vets");

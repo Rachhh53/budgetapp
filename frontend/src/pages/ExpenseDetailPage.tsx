@@ -1,5 +1,5 @@
-import { CircleCheck, Clock, type LucideIcon, Minus, Send } from "lucide-react";
-import { type ReactNode, useId } from "react";
+import { CalendarDays, CircleCheck, Clock, type LucideIcon, Minus, Send } from "lucide-react";
+import { type ReactNode, useId, useState } from "react";
 import { Link, useParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { useCategories, useTags } from "../api/categories";
@@ -7,25 +7,24 @@ import {
   type Entry,
   type EntryDetail,
   REIMBURSEMENT_LABELS,
-  REIMBURSEMENT_STATUSES,
   type Reimbursement,
   type ReimbursementStatus,
   useEntry,
   useNames,
   useSetReimbursement,
 } from "../api/entries";
+import { usePayPeriodsBetween } from "../api/periods";
 import { useAddItem } from "../components/add/AddItem";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { categoryLabel } from "../components/categories/LabelFields";
-import { EditPageButton } from "../components/EditButton";
+import { EditButton, EditPageButton } from "../components/EditButton";
 import { TagChips } from "../components/expenses/TagChips";
 import { Receipts } from "../components/files/Receipts";
 import { TextPicker } from "../components/Picker";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
-import { Segmented } from "../components/Segmented";
-import { BUTTON_SECONDARY, DETAIL_HEADER, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
-import { formatDate, todayIso } from "../lib/dates";
+import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
+import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 
 const KIND_NAMES: Record<Entry["kind"], string> = { money_out: "Expense", money_in: "Money in", transfer: "Transfer" };
@@ -90,6 +89,7 @@ export function ExpenseDetailPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
+          <PeriodLink date={entry.date} />
           <EditPageButton label={`Edit ${kindName.toLowerCase()}`} onClick={() => editEntry(entry)} />
         </div>
       </div>
@@ -101,7 +101,7 @@ export function ExpenseDetailPage() {
           <div className="space-y-4">
             {entry.reimbursement && <ReimbursementCard detail={detail.data} reimbursement={entry.reimbursement} />}
             {detail.data.reimburses && <PaysBackCard expense={detail.data.reimburses} />}
-            <AboutCard entry={entry} onEdit={() => editEntry(entry)} />
+            <AboutCard entry={entry} onEdit={() => editEntry(entry, "tags")} />
           </div>
           <Card title="Receipts & documents">
             <Receipts owner={{ type: "entry", entryId: entry.id }} />
@@ -173,18 +173,73 @@ function ReimbursementCard({ detail, reimbursement }: { detail: EntryDetail; rei
 
   const set = (change: Partial<{ status: ReimbursementStatus; submittedOn: string | null; to: string | null }>) =>
     save.mutate({ status, submittedOn, to, ...change });
+  // The ways back, and out, are a click further away than the way forward.
+  const [changing, setChanging] = useState(false);
+  const step = (change: Parameters<typeof set>[0]) => {
+    setChanging(false);
+    set(change);
+  };
 
   return (
     <Card title="Reimbursement">
       <div className="space-y-4">
-        <Segmented
-          legend="Where it stands"
-          options={REIMBURSEMENT_STATUSES.map((value) => ({ value, label: REIMBURSEMENT_LABELS[value], icon: STATUS_ICONS[value] }))}
-          value={status}
-          // Marking it sent in with no day given means today; the day can be changed below.
-          onChange={(next) => set({ status: next, submittedOn: next === "submitted" && submittedOn === null ? todayIso() : submittedOn })}
-        />
-        <p className="text-muted">{summary(reimbursement)}</p>
+        {status === "none" ? (
+          <>
+            <p className="text-muted">{summary(reimbursement)}</p>
+            <button type="button" onClick={() => set({ status: "to_submit" })} disabled={save.isPending} className={BUTTON_SECONDARY}>
+              I'll be paid back for this
+            </button>
+          </>
+        ) : (
+          <>
+            {/* How far along it is, to look at; the one button under it is the next thing to do. */}
+            <Steps reimbursement={reimbursement} />
+            <p className="text-muted">{summary(reimbursement)}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {status === "to_submit" && (
+                // Marking it sent in means today; the day can be changed below.
+                <button
+                  type="button"
+                  onClick={() => set({ status: "submitted", submittedOn: submittedOn ?? todayIso() })}
+                  disabled={save.isPending}
+                  className={BUTTON_PRIMARY}
+                >
+                  Mark as submitted
+                </button>
+              )}
+              {status === "submitted" && (
+                <button type="button" onClick={() => set({ status: "reimbursed" })} disabled={save.isPending} className={BUTTON_PRIMARY}>
+                  Mark as reimbursed
+                </button>
+              )}
+              <button type="button" onClick={() => setChanging(!changing)} aria-expanded={changing} className={BUTTON_LINK}>
+                Change
+              </button>
+            </div>
+            {changing && (
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                {status === "submitted" && (
+                  <button
+                    type="button"
+                    onClick={() => step({ status: "to_submit", submittedOn: null })}
+                    disabled={save.isPending}
+                    className={BUTTON_SECONDARY}
+                  >
+                    Back to To submit
+                  </button>
+                )}
+                {status === "reimbursed" && (
+                  <button type="button" onClick={() => step({ status: "submitted" })} disabled={save.isPending} className={BUTTON_SECONDARY}>
+                    Back to Submitted
+                  </button>
+                )}
+                <button type="button" onClick={() => step({ status: "none" })} disabled={save.isPending} className={BUTTON_SECONDARY}>
+                  I won't be paid back for this
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
         {status !== "none" && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -254,6 +309,82 @@ function ReimbursementCard({ detail, reimbursement }: { detail: EntryDetail; rei
   );
 }
 
+/** Longer than any pay period, so looking this far back from a day always reaches the period that holds it. */
+const LONGEST_PERIOD_DAYS = 45;
+
+/**
+ * The way to the pay period this falls in (Rachel, 2026-10-12), to see it among everything else
+ * that came in and went out then. Not there when no pay period holds its date: before the first
+ * paycheck, say, or while no income has been set up.
+ */
+function PeriodLink({ date }: { date: string }) {
+  const periods = usePayPeriodsBetween(addDays(date, -LONGEST_PERIOD_DAYS), date);
+  const period = periods.data?.periods.find((candidate) => candidate.start <= date && date <= candidate.end);
+  if (period === undefined) {
+    return null;
+  }
+  return (
+    <Link
+      to={`/periods/${period.start}`}
+      title={`Open the ${formatDay(period.start)} – ${formatDay(period.end)} pay period`}
+      className={`${BUTTON_SECONDARY} inline-flex items-center justify-center gap-2`}
+    >
+      <CalendarDays aria-hidden className="size-4" />
+      See its pay period
+    </Link>
+  );
+}
+
+/** The three stops on the way to being paid back, in order. */
+const STEPS = ["to_submit", "submitted", "reimbursed"] as const satisfies readonly ReimbursementStatus[];
+
+/**
+ * How far along being paid back it is, as a line of three stops (Rachel, 2026-10-12: a row of
+ * choices to click "look like tabs", and did not say which one it was on). Only shown, never
+ * clicked. Each stop has its icon and says in words whether it is done, so nothing rests on color.
+ */
+function Steps({ reimbursement }: { reimbursement: Reimbursement }) {
+  const at = STEPS.findIndex((step) => step === reimbursement.status);
+  const under = (step: (typeof STEPS)[number], position: number): string => {
+    if (position > at) {
+      return "Not yet";
+    }
+    switch (step) {
+      case "to_submit":
+        return position === at ? "Not sent in yet" : "Done";
+      case "submitted":
+        return reimbursement.submittedOn === null ? "Sent in" : formatDate(reimbursement.submittedOn);
+      case "reimbursed":
+        return "Paid back";
+    }
+  };
+  return (
+    <ol aria-label="How far along it is" className="grid grid-cols-3">
+      {STEPS.map((step, position) => {
+        const Icon = STATUS_ICONS[step];
+        const reached = position <= at;
+        return (
+          <li key={step} aria-current={position === at ? "step" : undefined} className="relative flex min-w-0 flex-col items-center text-center">
+            {/* The line from the stop before, drawn behind the two circles it joins. */}
+            {position > 0 && <span aria-hidden className={`absolute top-5 right-1/2 h-0.5 w-full ${reached ? "bg-accent" : "bg-line"}`} />}
+            <span
+              className={`relative flex size-10 items-center justify-center rounded-full border-2 ${
+                reached ? "border-accent bg-accent text-on-accent" : "border-line bg-surface text-muted"
+              } ${position === at ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
+            >
+              <Icon aria-hidden className="size-5" />
+            </span>
+            <span className={`mt-2 text-sm ${position === at ? "font-bold" : "font-medium"} ${reached ? "" : "text-muted"}`}>
+              {REIMBURSEMENT_LABELS[step]}
+            </span>
+            <span className="text-sm text-muted">{under(step, position)}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 /** Where it stands, in a sentence: "Submitted to HSA on Sep 29, 2026 · $25.00 still to come." */
 function summary({ status, submittedOn, to, owedCents, paidBackCents }: Reimbursement): string {
   const whom = to === null ? "" : ` to ${to}`;
@@ -262,7 +393,7 @@ function summary({ status, submittedOn, to, owedCents, paidBackCents }: Reimburs
     case "none":
       return paidBackCents > 0
         ? `Nobody is expected to pay this back, though ${formatCents(paidBackCents)} has come in for it.`
-        : "Nobody pays this back. Choose To submit if someone will.";
+        : "Nobody pays this back.";
     case "to_submit":
       return `Still to send in${whom} · ${formatCents(owedCents)} to ask for.`;
     case "submitted":
@@ -296,11 +427,7 @@ function AboutCard({ entry, onEdit }: { entry: Entry; onEdit: () => void }) {
   return (
     <Card
       title="Details"
-      action={
-        <button type="button" onClick={onEdit} aria-label="Edit details" className="min-h-11 rounded-lg px-2 font-semibold text-accent-ink">
-          Edit
-        </button>
-      }
+      action={<EditButton name="details" onClick={onEdit} />}
     >
       <dl className="grid gap-4 sm:grid-cols-2">
         <Fact term="Tags">

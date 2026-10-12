@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "./client";
+import { api, type Saved, saveFile } from "./client";
 import type { ReimbursementStatus } from "./entries";
 import { PAY_KEY } from "./income";
 
@@ -20,7 +20,7 @@ export type ReportInclude = (typeof REPORT_INCLUDES)[number];
 
 export const REPORT_INCLUDE_LABELS: Record<ReportInclude, string> = {
   one_offs: "One-off spending",
-  bills: "Bills",
+  bills: "Bills & expenses",
   budgets: "Budgets",
 };
 
@@ -88,6 +88,8 @@ export interface ReportRow {
   amountCents: number;
   /** True while the amount is not final, or the day has not come yet. */
   estimate: boolean;
+  /** True while its day has not come and it has not been marked paid. */
+  unpaid: boolean;
   /** Where a one-off expense stands; `null` for a bill or a budget. */
   reimbursement: ReimbursementStatus | null;
   reimbursedCents: number;
@@ -180,18 +182,26 @@ export function useDeleteReport() {
   });
 }
 
-/** Asks for the report as a file to save. */
+/**
+ * Asks for the report as a file. From this PC the backend saves it in the Downloads folder and the
+ * answer says what it is called; from anywhere else the file comes back and the browser saves it.
+ */
 export function useExportReport() {
   return useMutation({
-    mutationFn: ({ format, name, definition, withReceipts }: {
+    mutationFn: async ({ format, name, definition, withReceipts }: {
       format: "csv" | "pdf";
       name: string;
       definition: ReportDefinition;
       withReceipts?: boolean;
-    }) =>
-      api.download(
+    }): Promise<Saved | null> => {
+      const handed = await api.handOver(
         `/api/reports/export/${format}`,
-        format === "pdf" ? { name, definition, withReceipts: withReceipts ?? false } : { name, definition },
-      ),
+        format === "pdf" ? { name, definition, withReceipts: withReceipts ?? false, save: true } : { name, definition, save: true },
+      );
+      if (handed.saved === null) {
+        saveFile(handed.download);
+      }
+      return handed.saved;
+    },
   });
 }

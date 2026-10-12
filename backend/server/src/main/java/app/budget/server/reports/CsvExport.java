@@ -19,7 +19,7 @@ final class CsvExport {
     private static final String LINE_END = "\r\n";
 
     private static final List<String> HEADER = List.of(
-            "Date", "Description", "Paid to", "Kind", "Category", "Tags", "Paid from", "Amount", "Estimate",
+            "Date", "Description", "Paid to", "Kind", "Category", "Tags", "Paid from", "Amount", "Estimate", "Not paid yet",
             "Reimbursement", "Reimbursed", "Still owed", "Files");
 
     private CsvExport() {}
@@ -41,6 +41,7 @@ final class CsvExport {
                     text(named.account()),
                     dollars(row.amountCents()),
                     row.estimate() ? "yes" : "",
+                    row.unpaid() ? "yes" : "",
                     row.reimbursement() == null ? "" : words(Inputs.code(row.reimbursement())),
                     row.reimbursement() == null ? "" : dollars(row.reimbursedCents()),
                     row.reimbursement() == null ? "" : dollars(row.owedCents()),
@@ -85,7 +86,7 @@ final class CsvExport {
     static String kind(String kind) {
         return switch (kind) {
             case "one_off" -> "One-off";
-            case "bill" -> "Bill";
+            case "bill" -> "Bill or expense";
             default -> "Budget";
         };
     }

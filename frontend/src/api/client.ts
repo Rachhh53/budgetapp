@@ -57,6 +57,24 @@ export interface Download {
   fileName: string;
 }
 
+/** A file the backend put in this PC's Downloads folder itself, in place of sending it back. */
+export interface Saved {
+  fileName: string;
+  folder: string;
+}
+
+/**
+ * How a file asked for came: saved on this PC by the backend (the desktop window saves a file
+ * handed to it without a word, and refuses the ones after the first), or sent back to be saved
+ * by the browser, as it is to a phone.
+ */
+export type Handed = { saved: Saved; download?: undefined } | { saved: null; download: Download };
+
+/** What to tell someone whose file was saved for them: where it is and what it is called. */
+export function savedMessage(saved: Saved): string {
+  return `Saved in ${saved.folder} as ${saved.fileName}.`;
+}
+
 /** Sends the request itself; what the answer means is for the caller. */
 async function call(method: string, path: string, body?: unknown): Promise<Response> {
   try {
@@ -96,6 +114,23 @@ async function fetchFile(method: string, path: string, body?: unknown): Promise<
   // RFC 5987, as the backend writes it: filename*=UTF-8''Medical%202026.pdf
   const named = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get("Content-Disposition") ?? "");
   return { blob: await response.blob(), fileName: named?.[1] ? decodeURIComponent(named[1]) : "download" };
+}
+
+/** Asks for a file to be saved on this PC; the answer says it was, or is the file itself. */
+async function fetchHanded(method: string, path: string, body?: unknown): Promise<Handed> {
+  const response = await call(method, path, body);
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  if (response.headers.get("Content-Type")?.includes("application/json")) {
+    const envelope = (await response.json()) as { data: { saved: Saved | null } | null };
+    if (envelope.data?.saved) {
+      return { saved: envelope.data.saved };
+    }
+    throw new ApiError(response.status, UNEXPECTED);
+  }
+  const named = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get("Content-Disposition") ?? "");
+  return { saved: null, download: { blob: await response.blob(), fileName: named?.[1] ? decodeURIComponent(named[1]) : "download" } };
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -188,6 +223,8 @@ export const api = {
   upload: <T>(path: string, files: readonly File[]) => request<T>("POST", path, new Upload(files)),
   /** Asks for a file to save: a GET, or a POST when `body` says what the file should hold. */
   download: (path: string, body?: unknown) => request<Download>(body === undefined ? "GET" : "POST", path, body, fetchFile),
+  /** Asks for a file, saved on this PC when the backend can do that (see `Handed`). */
+  handOver: (path: string, body: unknown) => request<Handed>("POST", path, body, fetchHanded),
 };
 
 /**

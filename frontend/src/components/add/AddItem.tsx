@@ -19,7 +19,7 @@ import { ItemFormBody } from "../items/ItemForm";
 import { Modal } from "../Modal";
 import { Segmented } from "../Segmented";
 import { BUTTON_PRIMARY } from "../ui";
-import { EntryFields } from "./EntryFields";
+import { EntryFields, type EntryPart } from "./EntryFields";
 
 /** What the + Add item form can add: a one-off of some kind, or a recurring item. */
 export type AddKind = EntryKind | "recurring";
@@ -31,7 +31,8 @@ interface AddItemContext {
    */
   add: (kind: AddKind, accountId?: number, paysBack?: Entry) => void;
   /** Opens the form on a one-off that already exists, to change or delete it. */
-  editEntry: (entry: Entry) => void;
+  /** Opens a one-off for changing; `startAt` names the fields to open on, for a card's own Edit button. */
+  editEntry: (entry: Entry, startAt?: EntryPart) => void;
   menuOpen: boolean;
   setMenuOpen: (open: boolean) => void;
   /** Tells the form which pay period is on screen; `undefined` when none is. */
@@ -64,7 +65,7 @@ const EDITABLE = "input, textarea, select, [contenteditable='true']";
  * screen: Ctrl+N opens the menu, Ctrl+E goes straight to money out and Ctrl+I to money in.
  */
 export function AddItemProvider({ children }: { children: ReactNode }) {
-  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number; paysBack?: Entry } | null>(null);
+  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number; paysBack?: Entry; startAt?: EntryPart } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hasMenu, setHasMenu] = useState(false);
   const [period, setPeriod] = useState<PeriodDetail>();
@@ -73,7 +74,7 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
     setMenuOpen(false);
     setForm({ kind, accountId, paysBack });
   }, []);
-  const editEntry = useCallback((entry: Entry) => setForm({ kind: entry.kind, entry }), []);
+  const editEntry = useCallback((entry: Entry, startAt?: EntryPart) => setForm({ kind: entry.kind, entry, startAt }), []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -113,6 +114,7 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
           entry={form.entry}
           accountId={form.accountId}
           paysBack={form.paysBack}
+          startAt={form.startAt}
           period={period}
           onClose={() => setForm(null)}
         />
@@ -130,6 +132,7 @@ function AddItemForm({
   entry,
   accountId,
   paysBack,
+  startAt,
   period,
   onClose,
 }: {
@@ -137,6 +140,8 @@ function AddItemForm({
   entry?: Entry;
   /** The expense a new money-in entry pays back, when the form was opened from that expense. */
   paysBack?: Entry;
+  /** When changing: the fields to open on. */
+  startAt?: EntryPart;
   /** The account a new one-off starts on, when the form was opened for one. */
   accountId?: number;
   period?: PeriodDetail;
@@ -147,7 +152,8 @@ function AddItemForm({
   const tags = useTags();
   const [kind, setKind] = useState<AddKind>(initialKind);
   // Past its first screen, what is being added has been chosen: the switch steps aside so each screen fits the window.
-  const [step, setStep] = useState(0);
+  // A form opened on a later group starts past the first screen, so the switch never flashes.
+  const [step, setStep] = useState(startAt === undefined || startAt === "amount" ? 0 : 1);
   const choosing = step === 0;
 
   const title = entry
@@ -184,6 +190,7 @@ function AddItemForm({
             entry={entry}
             accountId={accountId}
             paysBack={paysBack}
+            startAt={startAt}
             period={period}
             accounts={accounts.data}
             categories={categories.data}
@@ -200,7 +207,7 @@ const MENU: readonly { kind: AddKind; label: string; about: string; shortcut?: s
   { kind: "money_out", label: "Money out", about: "One-time purchase, gift, donation, emergency", shortcut: "Ctrl+E", icon: Minus },
   { kind: "money_in", label: "Money in", about: "Bonus, refund, gift, reimbursement, side cash", shortcut: "Ctrl+I", icon: Plus },
   { kind: "transfer", label: "Transfer", about: "Between two of your accounts", icon: ArrowLeftRight },
-  { kind: "recurring", label: "Recurring item", about: "Bill, budget, transfer or card payment that repeats", icon: CalendarClock },
+  { kind: "recurring", label: "Recurring item", about: "Bill, expense, budget, transfer or card payment that repeats", icon: CalendarClock },
 ];
 
 /**

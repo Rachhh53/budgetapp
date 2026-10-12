@@ -40,6 +40,8 @@ interface EntryFieldsProps {
   categories: readonly Category[];
   tags: readonly Tag[];
   onClose: () => void;
+  /** When changing: a part of the group to open on, for a form reached from the card that shows it. */
+  startAt?: EntryPart;
   /** Told which screen of the form is showing (0 is the first), so whatever frames it can make room. */
   onStep?: (step: number) => void;
 }
@@ -59,7 +61,7 @@ interface EntryFieldsProps {
  *
  * The form is shown a screen at a time (see `useFormParts`), so it never needs scrolling.
  */
-export function EntryFields({ kind, entry, accountId: startOn, paysBack, period, accounts, categories, tags, onClose, onStep }: EntryFieldsProps) {
+export function EntryFields({ kind, entry, accountId: startOn, paysBack, period, accounts, categories, tags, onClose, onStep, startAt }: EntryFieldsProps) {
   const id = useId();
   const save = useSaveEntry(entry?.id);
   const attach = useAttachToEntry();
@@ -139,31 +141,31 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
 
   // What money coming in can be said to pay back; nothing to ask when there is no such expense.
   const canPayBack = kind === "money_in" && (owedExpenses.length > 0 || paysBackId !== null);
-  // Asked only of an account that has buckets, or that checks are written on.
-  const fromTitle =
-    payingBuckets.length === 0 ? "Check number" : paidFromChecking ? "Bucket and check number" : "Which bucket it comes out of";
-  const hasFrom = payingBuckets.length > 0 || paidFromChecking;
   const adding = entry === undefined;
   const labelsTitle = kind === "money_out" ? "Paid to, tags and note" : "Category, tags and note";
   // Adding: two short steps everyone takes, and the rest behind "More options". Changing: one group at a
-  // time, chosen from a list that takes room of its own, so the two fullest screens are each shared out over two.
-  const groups: FormGroup<EntryPart>[] = [
-    { label: "Amount", parts: ["amount"] },
-    ...(adding || !hasFrom
-      ? [{ label: "When and where", parts: ["where", "from"] } as const]
-      : [{ label: "When and where", parts: ["where"] } as const, { label: fromTitle, parts: ["from"] } as const]),
-    ...(adding || kind !== "money_out"
-      ? [{ label: labelsTitle, parts: ["who", "tags"] } as const]
-      : [{ label: "Paid to and category", parts: ["who"] } as const, { label: "Tags and note", parts: ["tags"] } as const]),
-    ...(entry === undefined
-      ? [{ label: "Receipt and paying back", parts: ["extras"] } as const]
-      : canPayBack
-        ? [{ label: "Pays back", parts: ["extras"] } as const]
-        : []),
-    ...(buckets.length > 0 ? [{ label: "Set aside in a bucket", parts: ["aside"] } as const] : []),
-    ...(entry ? [{ label: "Delete", parts: ["delete"] } as const] : []),
-  ];
-  const parts = useFormParts<EntryPart>({ groups, adding, required: 2 });
+  // time, and the groups are the cards of the entry's page ("Details" holds what the Details card shows),
+  // so a form opened from a card opens on that card's fields.
+  const groups: FormGroup<EntryPart>[] = adding
+    ? [
+        { label: "Amount", parts: ["amount"] },
+        { label: "When and where", parts: ["where", "from", "check"] },
+        { label: labelsTitle, parts: ["payee", "category", "tags"] },
+        { label: "Receipt and paying back", parts: ["extras"] },
+        ...(buckets.length > 0 ? [{ label: "Set aside in a bucket", parts: ["aside"] } as const] : []),
+      ]
+    : [
+        { label: "Amount", parts: ["amount"] },
+        { label: "When and where", parts: ["where", "payee"] },
+        { label: "Details", parts: ["category", "tags", "check"] },
+        // Those that are only there once the buckets and expenses have loaded come after the ones a
+        // card opens on, so the group a form opened on does not shift under it.
+        ...(payingBuckets.length > 0 ? [{ label: BUCKET_TITLE, parts: ["from"] } as const] : []),
+        ...(canPayBack ? [{ label: "Pays back", parts: ["extras"] } as const] : []),
+        ...(buckets.length > 0 ? [{ label: "Set aside in a bucket", parts: ["aside"] } as const] : []),
+        { label: "Delete", parts: ["delete"] },
+      ];
+  const parts = useFormParts<EntryPart>({ groups, adding, required: 2, startAt });
   const step = parts.step;
   useEffect(() => {
     onStep?.(step);
@@ -290,6 +292,35 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
     );
   }
 
+  // Asked on one screen when adding and another when changing, so each is made once and placed where it shows.
+  const payeeField = kind === "money_out" && (
+    <TextPicker
+      label="Paid to (optional)"
+      noun="payee"
+      placeholder="Type to search or add new"
+      suggestions={names.data?.payees ?? []}
+      value={payee}
+      onChange={setPayee}
+    />
+  );
+  const checkField = paidFromChecking && (
+    <div>
+      <label htmlFor={`${id}-check-number`} className={LABEL}>
+        {/* Beside the note on the Details screen, where half a phone's width has no room for "(optional)". */}
+        {parts.shows("tags") ? "Check number" : "Check number (optional)"}
+      </label>
+      <input
+        id={`${id}-check-number`}
+        value={checkNumber}
+        onChange={(event) => setCheckNumber(event.target.value)}
+        maxLength={20}
+        inputMode="numeric"
+        autoComplete="off"
+        className={INPUT}
+      />
+    </div>
+  );
+
   const preview = entry ? null : previewEnding(period, accounts, kind, date, accountId, amountCents);
   const failure = parts.problem ?? save.error?.message;
   const saving = save.isPending || attach.isPending;
@@ -331,60 +362,42 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
       )}
 
       {(parts.shows("where") || parts.shows("from")) && (
-        <FormSection title={parts.shows("where") ? SECTION_TITLES[kind] : fromTitle}>
-          {(parts.shows("where") || paidFromChecking) && (
+        <FormSection title={parts.shows("where") ? SECTION_TITLES[kind] : BUCKET_TITLE}>
+          {parts.shows("where") && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {parts.shows("where") && (
-                <>
-                  <div>
-                    <label htmlFor={`${id}-date`} className={LABEL}>
-                      Date
-                    </label>
-                    <input
-                      id={`${id}-date`}
-                      type="date"
-                      value={date}
-                      onChange={(event) => setDate(event.target.value)}
-                      required
-                      className={INPUT}
-                    />
-                  </div>
-                  <Picker
-                    label={ACCOUNT_LABELS[kind]}
-                    noun="account"
-                    placeholder="Choose or type an account"
-                    options={accountOptions}
-                    value={accountId}
-                    onChange={setAccountId}
-                  />
-                  {kind === "transfer" && (
-                    <Picker
-                      label="To"
-                      noun="account"
-                      placeholder="Choose or type an account"
-                      options={accountOptions}
-                      value={toAccountId}
-                      onChange={setToAccountId}
-                    />
-                  )}
-                </>
+              <div>
+                <label htmlFor={`${id}-date`} className={LABEL}>
+                  Date
+                </label>
+                <input
+                  id={`${id}-date`}
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  required
+                  className={INPUT}
+                />
+              </div>
+              <Picker
+                label={ACCOUNT_LABELS[kind]}
+                noun="account"
+                placeholder="Choose or type an account"
+                options={accountOptions}
+                value={accountId}
+                onChange={setAccountId}
+              />
+              {kind === "transfer" && (
+                <Picker
+                  label="To"
+                  noun="account"
+                  placeholder="Choose or type an account"
+                  options={accountOptions}
+                  value={toAccountId}
+                  onChange={setToAccountId}
+                />
               )}
-              {parts.shows("from") && paidFromChecking && (
-                <div>
-                  <label htmlFor={`${id}-check-number`} className={LABEL}>
-                    Check number (optional)
-                  </label>
-                  <input
-                    id={`${id}-check-number`}
-                    value={checkNumber}
-                    onChange={(event) => setCheckNumber(event.target.value)}
-                    maxLength={20}
-                    inputMode="numeric"
-                    autoComplete="off"
-                    className={INPUT}
-                  />
-                </div>
-              )}
+              {parts.shows("payee") && payeeField}
+              {parts.shows("check") && checkField}
             </div>
           )}
 
@@ -418,42 +431,30 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
         </FormSection>
       )}
 
-      {(parts.shows("who") || parts.shows("tags")) && (
-        <FormSection title={!parts.shows("tags") ? "Paid to and category" : !parts.shows("who") ? "Tags and note" : labelsTitle}>
-          {parts.shows("who") && (
-            // Two side by side only when there are two: a lone picker gets the full width.
-            <div className={`grid grid-cols-1 gap-4 ${kind === "money_out" ? "sm:grid-cols-2" : ""}`}>
-              {kind === "money_out" && (
-                <TextPicker
-                  label="Paid to (optional)"
-                  noun="payee"
-                  placeholder="Type to search or add new"
-                  suggestions={names.data?.payees ?? []}
-                  value={payee}
-                  onChange={setPayee}
-                />
-              )}
-              <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
+      {parts.shows("tags") && (
+        <FormSection title={adding ? labelsTitle : "Details"}>
+          {/* Two side by side only when there are two: a lone picker gets the full width. */}
+          <div className={`grid grid-cols-1 gap-4 ${parts.shows("payee") && payeeField ? "sm:grid-cols-2" : ""}`}>
+            {parts.shows("payee") && payeeField}
+            <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
+          </div>
+          <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+          <div className={`grid gap-4 ${parts.shows("check") && checkField ? "grid-cols-2" : "grid-cols-1"}`}>
+            <div>
+              <label htmlFor={`${id}-note`} className={LABEL}>
+                Note (optional)
+              </label>
+              <input
+                id={`${id}-note`}
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                maxLength={500}
+                autoComplete="off"
+                className={INPUT}
+              />
             </div>
-          )}
-          {parts.shows("tags") && (
-            <>
-              <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
-              <div>
-                <label htmlFor={`${id}-note`} className={LABEL}>
-                  Note (optional)
-                </label>
-                <input
-                  id={`${id}-note`}
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  maxLength={500}
-                  autoComplete="off"
-                  className={INPUT}
-                />
-              </div>
-            </>
-          )}
+            {parts.shows("check") && checkField}
+          </div>
         </FormSection>
       )}
 
@@ -584,7 +585,10 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
 }
 
 /** The screens of the form (see `useFormParts`). */
-type EntryPart = "amount" | "where" | "from" | "who" | "tags" | "extras" | "aside" | "delete";
+export type EntryPart = "amount" | "where" | "from" | "check" | "payee" | "category" | "tags" | "extras" | "aside" | "delete";
+
+/** The heading over the one question an account with buckets adds. */
+const BUCKET_TITLE = "Which bucket it comes out of";
 
 /** How many buckets the "set aside" screen shows at once, so it fits a phone with its hints. */
 const ASIDE_PAGE_SIZE = 2;
