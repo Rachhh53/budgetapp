@@ -124,6 +124,7 @@ public final class ReportRunner {
     /**
      * A report that was run.
      *
+     * @param kind               always {@code spending}: tells it from an income report
      * @param rows               every line counted, oldest first
      * @param reimbursedCents    how much of the total has come back
      * @param waitingCents       how much was sent in and is still to come
@@ -132,6 +133,7 @@ public final class ReportRunner {
      * @param hasReimbursements  true when anything in it is, or was, to be paid back: when false the three figures say nothing
      */
     public record Report(
+            String kind,
             LocalDate from,
             LocalDate to,
             GroupBy groupBy,
@@ -208,6 +210,7 @@ public final class ReportRunner {
         SpendingReport.Result result = SpendingReport.summarize(lines, definition.groupBy(), dates.from(), dates.to());
         Labels labels = new Labels(allCategories, allTags, allAccounts);
         return new Report(
+                "spending",
                 dates.from(),
                 dates.to(),
                 definition.groupBy(),

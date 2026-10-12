@@ -22,7 +22,36 @@ final class CsvExport {
             "Date", "Description", "Paid to", "Kind", "Category", "Tags", "Paid from", "Amount", "Estimate", "Not paid yet",
             "Reimbursement", "Reimbursed", "Still owed", "Files");
 
+    private static final List<String> INCOME_HEADER = List.of(
+            "Date", "Description", "Kind", "Landed in", "Gross", "Taxes", "Other deductions", "Amount", "Estimate", "From a pay stub");
+
     private CsvExport() {}
+
+    /**
+     * An income report's lines. "Amount" is the take-home of a paycheck, or the money in, the
+     * interest or the match; the three before it are filled in for a paycheck whose gross is known.
+     *
+     * @param accounts the account each row landed in, by name, in the same order
+     */
+    static byte[] ofIncome(IncomeReportRunner.Report report, List<String> accounts) {
+        StringBuilder csv = new StringBuilder(BYTE_ORDER_MARK);
+        line(csv, INCOME_HEADER);
+        for (int i = 0; i < report.rows().size(); i++) {
+            IncomeReportRunner.Row row = report.rows().get(i);
+            line(csv, List.of(
+                    row.date().toString(),
+                    text(row.description()),
+                    IncomeReportRunner.kind(row.kind()),
+                    text(accounts.get(i)),
+                    row.grossCents() == null ? "" : dollars(row.grossCents()),
+                    row.taxesCents() == null ? "" : dollars(row.taxesCents()),
+                    row.deductionsCents() == null ? "" : dollars(row.deductionsCents()),
+                    dollars(row.amountCents()),
+                    row.estimate() ? "yes" : "",
+                    row.fromStub() ? "yes" : ""));
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
 
     /** @param names the names for each of the report's rows, in the same order */
     static byte[] of(Report report, List<Named> names) {

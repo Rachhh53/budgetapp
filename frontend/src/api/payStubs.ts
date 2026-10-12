@@ -161,6 +161,21 @@ export function useSaveStub(stubId: number) {
   });
 }
 
+/**
+ * Opens a saved stub to be changed. What it changed when it was saved stays until it is saved
+ * again, so nothing about the paychecks moves just by opening it.
+ */
+export function useReopenStub(stubId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<PayStub>(`/api/pay-stubs/${stubId}/reopen`, undefined),
+    onSuccess: (stub) => {
+      queryClient.setQueryData([...STUBS_KEY, stubId], stub);
+      return queryClient.invalidateQueries({ queryKey: [...STUBS_KEY, "source"] });
+    },
+  });
+}
+
 /** Removes a stub. What it changed when it was saved stays; Undo straight afterwards brings the stub back. */
 export function useDeleteStub() {
   const queryClient = useQueryClient();

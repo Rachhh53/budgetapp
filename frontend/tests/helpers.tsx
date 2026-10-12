@@ -79,7 +79,7 @@ const nothingToCompare: Handler = () => ({ status: 200, data: { thisYear: null, 
 const NO_YEAR = /^GET \/api\/income-sources\/\d+\/this-year$/;
 const nothingThisYear: Handler = () => ({
   status: 200,
-  data: { year: 2026, soFarCents: 0, paychecksSoFar: 0, wholeYearCents: 0, paychecksInYear: 0, estimate: false },
+  data: { year: 2026, soFarCents: 0, paychecksSoFar: 0, wholeYearCents: 0, paychecksInYear: 0, estimate: false, grossSoFarCents: 0, grossPaychecksSoFar: 0, grossWholeYearCents: 0, grossPaychecksInYear: 0 },
 });
 
 /** Any income source before a pay stub is added. */

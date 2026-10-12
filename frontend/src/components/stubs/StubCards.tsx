@@ -105,7 +105,7 @@ export function TaxesAndBenefitsCard({ source }: { source: IncomeSource }) {
               <li key={index} className="flex items-center justify-between gap-3 py-2">
                 <span className="min-w-0">
                   {line.label}
-                  <span className="block text-sm text-muted">{line.tracksAs === "tax" ? "Tax" : "Benefit or fee"}</span>
+                  <span className="block text-sm text-muted">{line.tracksAs === "tax" ? "Tax" : "Insurance, benefit or fee"}</span>
                 </span>
                 <span className="shrink-0 text-right">
                   <span data-amount className="block font-semibold tabular-nums">

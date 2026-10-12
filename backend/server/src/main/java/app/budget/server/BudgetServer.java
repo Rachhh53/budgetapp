@@ -47,6 +47,7 @@ import app.budget.server.loans.LoansRepository;
 import app.budget.server.loans.LoansRoutes;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import app.budget.server.reports.IncomeReportRunner;
 import app.budget.server.reports.ReportRunner;
 import app.budget.server.reports.ReportsRepository;
 import app.budget.server.reports.ReportsRoutes;
@@ -149,6 +150,8 @@ public final class BudgetServer {
         fileStore.sweep(attachments.forgetUnused());
         ReportsRepository reports = new ReportsRepository(database.jdbi(), clock, jsonMapper());
         ReportRunner reportRunner = new ReportRunner(entries, items, itemCalendar, payCalendar, accounts, categories, tags, attachments);
+        PayStubsRepository payStubs = new PayStubsRepository(database.jdbi(), clock);
+        IncomeReportRunner incomeReportRunner = new IncomeReportRunner(payCalendar, income, payStubs, entries, accounts, ledger);
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
@@ -191,9 +194,9 @@ public final class BudgetServer {
             SavedCopies savedCopies = new SavedCopies(config.downloadsDir());
             StoredFiles storedFiles = new StoredFiles(fileStore, savedCopies);
             new AttachmentsRoutes(attachments, storedFiles, entries, items, itemCalendar, cards, accounts, clock).register(routes);
-            new PayStubsRoutes(new PayStubsRepository(database.jdbi(), clock), storedFiles, income, payCalendar, accounts, clock)
+            new PayStubsRoutes(payStubs, storedFiles, income, payCalendar, accounts, clock)
                     .register(routes);
-            new ReportsRoutes(reports, reportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
+            new ReportsRoutes(reports, reportRunner, incomeReportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
                     .register(routes);
             new DataRoutes(database, sessions).register(routes);
             new BackupRoutes(backups, folders, settings, sessions).register(routes);

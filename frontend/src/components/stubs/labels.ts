@@ -18,10 +18,10 @@ export const SECTION_LABELS: Record<StubSection, string> = {
 export const LINE_KINDS = [
   { value: "earnings:gross", label: "Earnings · adds to your gross pay" },
   { value: "pre_tax:contribution", label: "Before tax · into one of your accounts" },
-  { value: "pre_tax:benefit", label: "Before tax · a benefit or fee" },
+  { value: "pre_tax:benefit", label: "Before tax · insurance, benefit or fee" },
   { value: "tax:tax", label: "Tax" },
   { value: "after_tax:contribution", label: "After tax · into one of your accounts" },
-  { value: "after_tax:benefit", label: "After tax · a benefit or fee" },
+  { value: "after_tax:benefit", label: "After tax · insurance, benefit or fee" },
   { value: "net:net", label: "Net pay (paid to you)" },
   { value: "employer:match", label: "From employer · match into your account" },
   { value: "employer:ignore", label: "From employer · not followed" },
@@ -52,7 +52,7 @@ export function tracksAsText(line: StubLine, accounts: readonly Account[], depos
     case "contribution":
       return account ? `Contribution → ${account}` : "Contribution · no account chosen";
     case "benefit":
-      return "Benefit or fee";
+      return "Insurance, benefit or fee";
     case "tax":
       return "Taxes";
     case "net":

@@ -134,6 +134,16 @@ public final class PayStubsRepository {
     }
 
     /**
+     * Puts a saved stub back in review, to be changed and saved again. What it changed when it
+     * was saved stays as it is until then.
+     */
+    public void reopen(long id) {
+        jdbi.useHandle(handle -> handle.createUpdate("UPDATE pay_stubs SET status = 'review', applied = NULL WHERE id = :id")
+                .bind("id", id)
+                .execute());
+    }
+
+    /**
      * Marks a stub saved, and remembers how each of its lines was filed for the next stub from
      * the same source. A line filed differently this time replaces what was remembered.
      */

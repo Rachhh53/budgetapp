@@ -169,6 +169,18 @@ function Figures({ source }: { source: IncomeSource }) {
                   : "Adding it up…"
               }
             />
+            {/* The year's gross, added as figures of their own under the take-home they go with (Rachel, 2026-10-12). */}
+            <Stat
+              label="Gross so far this year"
+              className="lg:col-start-3"
+              cents={year.data && year.data.grossPaychecksSoFar > 0 ? year.data.grossSoFarCents : undefined}
+              note={year.data ? grossNote(year.data.grossPaychecksSoFar, year.data.paychecksSoFar, year.data.year) : "Adding it up…"}
+            />
+            <Stat
+              label="Gross whole year"
+              cents={year.data && year.data.grossPaychecksInYear > 0 ? year.data.grossWholeYearCents : undefined}
+              note={year.data ? grossNote(year.data.grossPaychecksInYear, year.data.paychecksInYear, year.data.year) : "Adding it up…"}
+            />
           </>
         )}
       </div>
@@ -180,9 +192,22 @@ function paychecks(count: number): string {
   return count === 1 ? "1 paycheck" : `${count} paychecks`;
 }
 
-function Stat({ label, cents, note }: { label: string; cents: number | undefined; note: string }) {
+/**
+ * Says which paychecks a year's gross is made of. A paycheck from before a gross amount was
+ * entered has none, and is left out rather than guessed at, so the note says how many count.
+ */
+function grossNote(counted: number, all: number, year: number): string {
+  if (counted === 0) {
+    return "Enter the gross amount per paycheck and it is added up here.";
+  }
+  return counted === all
+    ? `before anything comes out, from ${paychecks(all)} in ${year}`
+    : `before anything comes out, from ${counted} of ${paychecks(all)} in ${year}; the others have no gross amount entered`;
+}
+
+function Stat({ label, cents, note, className }: { label: string; cents: number | undefined; note: string; className?: string }) {
   return (
-    <div>
+    <div className={className}>
       <p className="text-muted">{label}</p>
       <p data-amount className="text-2xl font-bold tabular-nums">
         {cents === undefined ? "—" : formatCents(cents)}
@@ -230,6 +255,9 @@ function DeductionsCard({ source, accountName }: { source: IncomeSource; account
 /** The employer's match, with a nudge when some of it is going unclaimed. */
 function MatchCard({ source, accountName }: { source: IncomeSource; accountName: AccountName }) {
   const { match, matchFigures } = source;
+  // What is put in is whatever the deductions send to the account the match goes to. With none
+  // pointed there, nothing can be said about the cap: it is not that nothing is being put in.
+  const seesContribution = match !== null && source.deductions.some((deduction) => deduction.toAccountId === match.toAccountId);
   return (
     <Card title="Employer match">
       {match === null ? (
@@ -258,7 +286,14 @@ function MatchCard({ source, accountName }: { source: IncomeSource; accountName:
             </p>
           )}
           {/* Said in words with the amounts: money the employer would add that is not being claimed. */}
-          {matchFigures && matchFigures.contributeMoreCents > 0 && (
+          {match.mode === "formula" && matchFigures && !seesContribution && (
+            <p role="status" className="rounded-lg border-l-4 border-warn-line bg-bg px-4 py-3">
+              <span className="font-semibold">Budget can't see what you put in.</span> None of the deductions on this income go to{" "}
+              {accountName(match.toAccountId) ?? "the account the match goes to"}, so the match shows as nothing. Choose Edit income
+              source, open your retirement deduction under Deductions and match, and set "Goes into" to that account.
+            </p>
+          )}
+          {matchFigures && matchFigures.contributeMoreCents > 0 && seesContribution && (
             <p role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-3">
               <span className="font-semibold">Under the cap.</span> Putting in{" "}
               <span data-amount className="font-semibold tabular-nums">

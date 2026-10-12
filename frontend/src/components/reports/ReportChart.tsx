@@ -1,5 +1,5 @@
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { Report, ReportGroup } from "../../api/reports";
+import type { IncomeGroupBy, ReportGroupBy } from "../../api/reports";
 import { isHexColor } from "../../lib/color";
 import { formatCents } from "../../lib/money";
 
@@ -13,6 +13,22 @@ function shortMonth(key: string, withYear: boolean): string {
   return withYear ? `${name} '${year.slice(2)}` : name;
 }
 
+/** `2026-10-01` → `Oct 1`: a pay period, by the day it starts. */
+function shortDay(key: string): string {
+  const [, month = "1", day = "1"] = key.split("-");
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(
+    Date.UTC(2000, Number(month) - 1, Number(day)),
+  );
+}
+
+/** What the chart draws of a report: its groups, each with the one amount its bar stands for. */
+export interface Charted {
+  from: string;
+  to: string;
+  groupBy: ReportGroupBy | IncomeGroupBy;
+  groups: readonly { key: string | null; label: string; color: string | null; totalCents: number }[];
+}
+
 /** `24000000` → `"$240k"`: short enough for an axis. */
 function shortDollars(cents: number): string {
   const dollars = cents / 100;
@@ -24,13 +40,22 @@ function shortDollars(cents: number): string {
  * with a name (a category, a payee) is a bar beside its name, largest first, so the names can be
  * read. A bar takes the color the user gave its category, tag or account, and the accent
  * color otherwise. The table beside it says the same in figures.
+ *
+ * @param said what a bar's amount is, in the tooltip: "Spent", or "Received" for an income report
  */
-export function ReportChart({ report }: { report: Report }) {
-  const overTime = report.groupBy === "month" || report.groupBy === "year";
+export function ReportChart({ report, said = "Spent" }: { report: Charted; said?: string }) {
+  const overTime = report.groupBy === "month" || report.groupBy === "year" || report.groupBy === "pay_period";
   const severalYears = report.from.slice(0, 4) !== report.to.slice(0, 4);
   const groups = overTime ? report.groups : report.groups.slice(0, MOST_NAMED_BARS);
   const data = groups.map((group) => ({
-    name: report.groupBy === "month" && group.key !== null ? shortMonth(group.key, severalYears) : group.label,
+    name:
+      group.key === null
+        ? group.label
+        : report.groupBy === "month"
+          ? shortMonth(group.key, severalYears)
+          : report.groupBy === "pay_period"
+            ? shortDay(group.key)
+            : group.label,
     label: group.label,
     total: group.totalCents,
     color: color(group),
@@ -39,7 +64,7 @@ export function ReportChart({ report }: { report: Report }) {
   const tooltip = (
     <Tooltip
       cursor={{ fill: "var(--bg)" }}
-      formatter={(value) => [formatCents(Number(value)), "Spent"]}
+      formatter={(value) => [formatCents(Number(value)), said]}
       labelFormatter={(_, payload) => String(payload[0]?.payload?.label ?? "")}
       contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
     />
@@ -87,7 +112,7 @@ export function ReportChart({ report }: { report: Report }) {
 }
 
 /** The user's own color for a category, tag or account; the accent color for anything else. */
-function color(group: ReportGroup): string {
+function color(group: Charted["groups"][number]): string {
   return group.color !== null && isHexColor(group.color) ? group.color : "var(--accent)";
 }
 

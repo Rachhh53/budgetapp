@@ -14,9 +14,11 @@ import {
   useChangeStub,
   useDeleteStub,
   usePayStub,
+  useReopenStub,
   useSaveStubCopy,
 } from "../api/payStubs";
 import { Card } from "../components/Card";
+import { EditPageButton } from "../components/EditButton";
 import { FilePreview } from "../components/files/Receipts";
 import { APPLIED_LABELS, SECTION_LABELS, tracksAsText } from "../components/stubs/labels";
 import { SaveStubDialog } from "../components/stubs/SaveStubDialog";
@@ -45,6 +47,10 @@ export function PayStubPage() {
   const sources = useIncomeSources().data ?? [];
   const change = useChangeStub(stubId);
   const remove = useDeleteStub();
+  const reopen = useReopenStub(stubId);
+  // What the stub changed the last time it was saved, kept while it is open again so the save
+  // dialog starts on the same choice.
+  const [lastApplied, setLastApplied] = useState<StubApply>();
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   // The lines as they were just sent, shown until the answer comes back, so a row never flickers
@@ -109,7 +115,7 @@ export function PayStubPage() {
           <p className="text-muted">
             {inReview
               ? "Nothing changes until you save it."
-              : `Saved · ${data.applied ? APPLIED_LABELS[data.applied].toLowerCase() : ""}. To change it, remove it and add the PDF again.`}
+              : `Saved · ${data.applied ? APPLIED_LABELS[data.applied].toLowerCase() : ""}. Choose Edit stub to change it; what it changed stays until you save it again.`}
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
@@ -121,19 +127,27 @@ export function PayStubPage() {
           >
             {remove.isPending ? "Removing…" : inReview ? "Discard" : "Remove stub"}
           </button>
-          {inReview && (
+          {inReview ? (
             <button type="button" onClick={() => setSaving(true)} className={BUTTON_PRIMARY}>
               Save stub…
             </button>
+          ) : (
+            <EditPageButton
+              label={reopen.isPending ? "Opening…" : "Edit stub"}
+              onClick={() => {
+                setLastApplied(data.applied ?? undefined);
+                reopen.mutate();
+              }}
+            />
           )}
         </div>
       </div>
 
       <div className="space-y-4">
         <CheckBanner stub={data} />
-        {(remove.isError || change.isError) && (
+        {(remove.isError || change.isError || reopen.isError) && (
           <p role="alert" className="text-danger">
-            {remove.error?.message ?? change.error?.message}
+            {remove.error?.message ?? change.error?.message ?? reopen.error?.message}
           </p>
         )}
 
@@ -173,7 +187,7 @@ export function PayStubPage() {
         </div>
       </div>
 
-      {saving && <SaveStubDialog stub={data} startOn={asked} onSaved={() => navigate(back)} onClose={() => setSaving(false)} />}
+      {saving && <SaveStubDialog stub={data} startOn={asked ?? lastApplied} onSaved={() => navigate(back)} onClose={() => setSaving(false)} />}
     </>
   );
 }

@@ -126,7 +126,7 @@ describe("pay stub page", () => {
     expect(within(earnings).getByText("Earnings · part of gross pay")).toBeInTheDocument();
     const beforeTax = screen.getByRole("region", { name: "Before tax" });
     expect(within(beforeTax).getByText("Contribution → Retirement")).toBeInTheDocument();
-    expect(within(beforeTax).getByText("Benefit or fee")).toBeInTheDocument();
+    expect(within(beforeTax).getByText("Insurance, benefit or fee")).toBeInTheDocument();
     expect(within(beforeTax).getByText("$180.00")).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Taxes" })).getAllByRole("listitem")).toHaveLength(2);
     expect(within(screen.getByRole("region", { name: "Paid to you" })).getByText("Paycheck → Everyday Checking")).toBeInTheDocument();
@@ -377,6 +377,30 @@ describe("pay stub page", () => {
     expect(screen.queryByRole("button", { name: "Remove Parking" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add a line" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Paid on")).not.toBeInTheDocument();
+  });
+
+  it("opens a saved stub again to be changed, and offers the same choice when it is saved once more", async () => {
+    let current: PayStub = SAVED;
+    const fetchMock = withStub(SAVED, {
+      "GET /api/pay-stubs/7": () => ({ status: 200, data: current }),
+      "POST /api/pay-stubs/7/reopen": () => {
+        current = { ...SAVED, status: "review", applied: null };
+        return { status: 200, data: current, changed: true };
+      },
+    });
+    renderApp("/income/1/stubs/7");
+
+    expect(await screen.findByText(/Choose Edit stub to change it; what it changed stays until you save it again./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Edit stub" }));
+
+    expect(await screen.findByRole("heading", { name: /^Review pay stub/ })).toBeInTheDocument();
+    expect(calls(fetchMock)).toContain("POST /api/pay-stubs/7/reopen");
+    // Every line can be changed again.
+    expect(screen.getByRole("button", { name: "Edit Parking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Parking" })).toBeInTheDocument();
+    // It corrected the amounts the first time, so that is where the save dialog starts.
+    await userEvent.click(screen.getByRole("button", { name: "Save stub…" }));
+    expect(screen.getByRole("radio", { name: /Correct Northwind Health's amounts/ })).toBeChecked();
   });
 
   it("says so when no pay lines could be found", async () => {

@@ -14,6 +14,12 @@ export const REPORT_RANGE_LABELS: Record<ReportRange, string> = {
   custom: "Custom dates",
 };
 
+/** What a report is of: one or the other, never both (Rachel, 2026-10-12). */
+export const REPORT_KINDS = ["spending", "income"] as const;
+export type ReportKind = (typeof REPORT_KINDS)[number];
+
+export const REPORT_KIND_LABELS: Record<ReportKind, string> = { spending: "Spending", income: "Income" };
+
 /** What kinds of spending a report counts. Transfers and card payments move money; they are not spending. */
 export const REPORT_INCLUDES = ["one_offs", "bills", "budgets"] as const;
 export type ReportInclude = (typeof REPORT_INCLUDES)[number];
@@ -34,6 +40,28 @@ export const REPORT_GROUP_LABELS: Record<ReportGroupBy, string> = {
   tag: "Tag",
   payee: "Payee",
   account: "Account",
+};
+
+/** What counts as income in an income report. Money that pays back an expense never does. */
+export const INCOME_INCLUDES = ["paychecks", "one_offs", "match", "interest"] as const;
+export type IncomeInclude = (typeof INCOME_INCLUDES)[number];
+
+export const INCOME_INCLUDE_LABELS: Record<IncomeInclude, string> = {
+  paychecks: "Paychecks",
+  one_offs: "One-off money in",
+  match: "Employer match",
+  interest: "Interest",
+};
+
+export const INCOME_GROUPS = ["month", "year", "source", "account", "pay_period"] as const;
+export type IncomeGroupBy = (typeof INCOME_GROUPS)[number];
+
+export const INCOME_GROUP_LABELS: Record<IncomeGroupBy, string> = {
+  month: "Month",
+  year: "Year",
+  source: "Income source",
+  account: "Account it landed in",
+  pay_period: "Pay period",
 };
 
 export const REPORT_SHOWS = ["chart_and_table", "table"] as const;
@@ -62,6 +90,13 @@ export interface ReportDefinition {
   reimbursement: ReimbursementStatus[];
   groupBy: ReportGroupBy;
   show: ReportShow;
+  /** For an income report the spending-only parts above (include, tags, categories, payees, reimbursement, groupBy) say nothing. */
+  kind: ReportKind;
+  /** For an income report: what counts. Never empty then. */
+  incomeInclude: IncomeInclude[];
+  /** For an income report: only these income sources; what has no source is then left out. */
+  sourceIds: number[];
+  incomeGroupBy: IncomeGroupBy;
 }
 
 export interface SavedReport {
@@ -108,8 +143,9 @@ export interface ReportGroup {
   totalCents: number;
 }
 
-/** A report that was run. */
+/** A spending report that was run. */
 export interface Report {
+  kind: "spending";
   from: string;
   to: string;
   groupBy: ReportGroupBy;
@@ -128,6 +164,69 @@ export interface Report {
   hasReimbursements: boolean;
 }
 
+/** One thing that came in, as an income report lists it. */
+export interface IncomeRow {
+  kind: "paycheck" | "one_off" | "interest" | "match";
+  date: string;
+  description: string;
+  /** The income source of a paycheck or a match; `null` for anything else. */
+  sourceId: number | null;
+  /** The account it landed in. */
+  accountId: number;
+  /** The take-home, the money in, the interest or the match. */
+  amountCents: number;
+  /** A paycheck's gross pay; `null` when not known, and for anything else. */
+  grossCents: number | null;
+  taxesCents: number | null;
+  deductionsCents: number | null;
+  /** True when a paycheck's figures are a saved pay stub's. */
+  fromStub: boolean;
+  estimate: boolean;
+}
+
+export interface IncomeGroup {
+  /** `2026-03`, `2026`, an id, or a pay period's first day; `null` for what has no source or period. */
+  key: string | null;
+  label: string;
+  /** The account's color; `null` for anything else. */
+  color: string | null;
+  count: number;
+  grossCents: number;
+  taxesCents: number;
+  deductionsCents: number;
+  takeHomeCents: number;
+  oneOffsCents: number;
+  interestCents: number;
+  /** What an employer added: beside what was received, not in it. */
+  matchCents: number;
+  /** Take-home, one-offs and interest together. */
+  receivedCents: number;
+}
+
+/** An income report that was run. */
+export interface IncomeReport {
+  kind: "income";
+  from: string;
+  to: string;
+  groupBy: IncomeGroupBy;
+  groups: IncomeGroup[];
+  /** Every line counted, oldest first. */
+  rows: IncomeRow[];
+  count: number;
+  grossCents: number;
+  taxesCents: number;
+  deductionsCents: number;
+  takeHomeCents: number;
+  oneOffsCents: number;
+  interestCents: number;
+  matchCents: number;
+  receivedCents: number;
+  /** How much of what was received is an estimate, or dated after today. */
+  estimatedCents: number;
+  /** Paychecks with no gross amount to count: the gross and taxes are then of fewer paychecks than the take-home. */
+  paychecksWithoutGross: number;
+}
+
 /** What a new report starts as: this year's one-off spending, month by month. */
 export const NEW_REPORT: ReportDefinition = {
   range: "this_year",
@@ -141,6 +240,18 @@ export const NEW_REPORT: ReportDefinition = {
   reimbursement: [],
   groupBy: "month",
   show: "chart_and_table",
+  kind: "spending",
+  incomeInclude: [],
+  sourceIds: [],
+  incomeGroupBy: "month",
+};
+
+/** What a new income report starts as: this year's paychecks and other money in, month by month. */
+export const NEW_INCOME_REPORT: ReportDefinition = {
+  ...NEW_REPORT,
+  include: [],
+  kind: "income",
+  incomeInclude: ["paychecks", "one_offs", "match", "interest"],
 };
 
 /** Under the pay key: a report follows every entry, bill and receipt it counts. */
@@ -155,7 +266,7 @@ export function useSavedReports() {
 export function useReport(definition: ReportDefinition | null) {
   return useQuery({
     queryKey: [...REPORTS_KEY, definition],
-    queryFn: () => api.post<Report>("/api/reports/run", { definition }),
+    queryFn: () => api.post<Report | IncomeReport>("/api/reports/run", { definition }),
     enabled: definition !== null,
     // The figures on screen stay while a changed report is worked out, instead of blinking away.
     placeholderData: (previous) => previous,

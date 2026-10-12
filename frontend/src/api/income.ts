@@ -253,6 +253,13 @@ export interface IncomeThisYear {
   paychecksInYear: number;
   /** At least one paycheck still to come is an estimate. */
   estimate: boolean;
+  /** Gross pay of the paychecks that have arrived and have a gross amount entered. */
+  grossSoFarCents: number;
+  /** How many of them that is: fewer than `paychecksSoFar` when some have none. */
+  grossPaychecksSoFar: number;
+  /** Gross pay of every paycheck of the year that has a gross amount entered. */
+  grossWholeYearCents: number;
+  grossPaychecksInYear: number;
 }
 
 /** Kept under the pay key, so it follows every change to a schedule, an amount or a single paycheck. */

@@ -101,6 +101,7 @@ class PayStubsApiTest extends ApiTestBase {
             assertThat(server.get("/api/pay-stubs/" + id, null).status()).isEqualTo(401);
             assertThat(server.put("/api/pay-stubs/" + id, "{\"lines\":[]}", null).status()).isEqualTo(401);
             assertThat(server.post("/api/pay-stubs/" + id + "/save", "{\"apply\":\"none\"}", null).status()).isEqualTo(401);
+            assertThat(server.post("/api/pay-stubs/" + id + "/reopen", "", null).status()).isEqualTo(401);
             assertThat(server.delete("/api/pay-stubs/" + id, null).status()).isEqualTo(401);
             assertThat(server.download("/api/pay-stubs/" + id + "/file", null, null).status()).isEqualTo(401);
             assertThat(server.download("/api/pay-stubs/" + id + "/preview", null, null).status()).isEqualTo(401);
@@ -386,6 +387,30 @@ class PayStubsApiTest extends ApiTestBase {
         }
 
         @Test
+        void aRetirementContributionGoesWhereTheMatchGoesWhenTheStubWordsItDifferently() throws Exception {
+            // Entered by hand as "Retirement savings"; the stub calls it "401(k)". Left with no account,
+            // nothing would count as put in, and the whole match would look unclaimed.
+            server.put("/api/income-sources/" + salary, """
+                    {"name":"Acme Corp","depositAccountId":%d,"grossCents":360000,"netCents":248620,"primary":true,
+                     "schedule":{"frequency":"semi_monthly","day1":1,"day2":15,"startDate":"2026-01-01","weekendRule":"none"},
+                     "deductions":[{"name":"Retirement savings","amountCents":21600,"toAccountId":%d}],
+                     "match":{"toAccountId":%d,"mode":"formula","matchBp":5000,"capBpOfGross":600}}"""
+                    .formatted(checking, retirement, retirement), cookie);
+
+            JsonNode stub = uploaded(OCTOBER_1);
+            assertThat(line(stub, "401(k)").get("accountId").asLong()).isEqualTo(retirement);
+            // Not every contribution is to the plan that is matched: the HSA is left for her to place.
+            assertThat(line(stub, "HSA").get("accountId").isNull()).isTrue();
+
+            save(stub.get("id").asLong(), "correct");
+
+            // $150.00 of $3,600.00 is under the 6% that is matched: half of it is matched, and it says how much more would be.
+            JsonNode figures = source().get("matchFigures");
+            assertThat(figures.get("perPaycheckCents").asLong()).isEqualTo(7_500);
+            assertThat(figures.get("contributeMoreCents").asLong()).isEqualTo(6_600);
+        }
+
+        @Test
         void aMatchWorkedOutByARuleIsNotReplacedByOneStubsAmount() throws Exception {
             server.put("/api/income-sources/" + salary, """
                     {"name":"Acme Corp","depositAccountId":%d,"grossCents":360000,"netCents":248620,"primary":true,
@@ -426,6 +451,54 @@ class PayStubsApiTest extends ApiTestBase {
             assertThat(noNet.status()).isEqualTo(400);
             assertThat(noNet.error()).contains("no net pay line");
             assertThat(source().get("grossCents").isNull()).isTrue();
+        }
+
+        @Test
+        void aSavedStubIsOpenedAgainToBeChangedAndSavedOnceMore() throws Exception {
+            long id = reviewed();
+            save(id, "none");
+            assertThat(source().get("deductions")).isEmpty();
+            assertThat(server.post("/api/pay-stubs/999/reopen", "", cookie).status()).isEqualTo(404);
+
+            Reply reopened = server.post("/api/pay-stubs/" + id + "/reopen", "", cookie);
+
+            assertThat(reopened.status()).isEqualTo(200);
+            assertThat(reopened.data().get("status").asText()).isEqualTo("review");
+            assertThat(reopened.data().get("applied").isNull()).isTrue();
+            // Every line is still there, filed as it was, and can be changed again.
+            assertThat(reopened.data().get("lines")).hasSize(12);
+            assertThat(line(reopened.data(), "401(k)").get("accountId").asLong()).isEqualTo(retirement);
+            assertThat(server.put("/api/pay-stubs/" + id, linesWithAccounts(reopened.data()), cookie).status()).isEqualTo(200);
+
+            // Saved again, this time onto the income: the choice made the first time does not bind the second.
+            assertThat(save(id, "correct").status()).isEqualTo(200);
+            assertThat(source().get("grossCents").asLong()).isEqualTo(360_000);
+            assertThat(source().get("deductions")).extracting(each -> each.get("name").asText()).contains("401(k)");
+
+            // The year's gross is known once every paycheck has a gross amount: 24 paychecks, 19 of them arrived.
+            JsonNode year = server.get("/api/income-sources/" + salary + "/this-year", cookie).data();
+            assertThat(year.get("grossSoFarCents").asLong()).isEqualTo(19 * 360_000L);
+            assertThat(year.get("grossPaychecksSoFar").asInt()).isEqualTo(19);
+            assertThat(year.get("grossWholeYearCents").asLong()).isEqualTo(24 * 360_000L);
+            assertThat(year.get("grossPaychecksInYear").asInt()).isEqualTo(24);
+        }
+
+        @Test
+        void theYearsGrossCountsOnlyThePaychecksThatHaveAGrossAmount() throws Exception {
+            JsonNode before = server.get("/api/income-sources/" + salary + "/this-year", cookie).data();
+            assertThat(before.get("grossPaychecksInYear").asInt()).isZero();
+            assertThat(before.get("grossWholeYearCents").asLong()).isZero();
+            assertThat(before.get("soFarCents").asLong()).isEqualTo(19 * 248_620L);
+
+            // A pay change from October 1 on brings a gross amount; the eighteen paychecks before it still have none.
+            save(reviewed(), "pay_change");
+
+            JsonNode year = server.get("/api/income-sources/" + salary + "/this-year", cookie).data();
+            assertThat(year.get("paychecksSoFar").asInt()).isEqualTo(19);
+            assertThat(year.get("grossPaychecksSoFar").asInt()).isEqualTo(1);
+            assertThat(year.get("grossSoFarCents").asLong()).isEqualTo(360_000L);
+            assertThat(year.get("grossPaychecksInYear").asInt()).isEqualTo(6);
+            assertThat(year.get("grossWholeYearCents").asLong()).isEqualTo(6 * 360_000L);
         }
 
         @Test

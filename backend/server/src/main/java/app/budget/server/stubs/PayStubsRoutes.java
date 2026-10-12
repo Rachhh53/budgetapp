@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -102,6 +103,7 @@ public final class PayStubsRoutes {
         routes.get("/api/pay-stubs/{id}", ctx -> ApiResponse.ok(ctx, view(found(ctx))));
         routes.put("/api/pay-stubs/{id}", this::change);
         routes.post("/api/pay-stubs/{id}/save", this::save);
+        routes.post("/api/pay-stubs/{id}/reopen", this::reopen);
         routes.delete("/api/pay-stubs/{id}", this::delete);
         routes.get("/api/pay-stubs/{id}/file", this::download);
         routes.post("/api/pay-stubs/{id}/copy", this::saveCopy);
@@ -250,6 +252,19 @@ public final class PayStubsRoutes {
         // Applied before the stub is marked saved, so a refusal leaves it in review with nothing changed.
         apply(stub, source, applied);
         stubs.save(stub, applied);
+        ApiResponse.ok(ctx, view(stubs.find(stub.id()).orElseThrow()));
+    }
+
+    /**
+     * Opens a saved stub to be changed (Rachel, 2026-10-12: a line filed wrongly is noticed after
+     * saving, and removing the stub to add its PDF again loses every line already put right).
+     * Nothing it changed is taken back: saving it again puts its figures where that save says.
+     */
+    private void reopen(Context ctx) {
+        Stub stub = found(ctx);
+        if (stub.status() == Status.SAVED) {
+            stubs.reopen(stub.id());
+        }
         ApiResponse.ok(ctx, view(stubs.find(stub.id()).orElseThrow()));
     }
 
@@ -454,9 +469,17 @@ public final class PayStubsRoutes {
         return StubReader.read(rows, remembered);
     }
 
+    /** A contribution to a retirement plan, by its label: the kind of saving an employer matches. */
+    private static final Pattern RETIREMENT = Pattern.compile(
+            "(?<![\\p{L}\\p{N}])(401 ?\\(?k\\)?|403 ?\\(?b\\)?|457|roth|retirement|tsp|pension|deferred comp)(?![\\p{L}\\p{N}])",
+            Pattern.CASE_INSENSITIVE);
+
     /**
      * Gives each line its account: the one it went to on the last stub saved, or, the first
      * time, the one a deduction of the same name (or the match) already goes to on the source.
+     * A retirement contribution nothing else places goes where the employer's match goes: the
+     * stub rarely words it as the person did ("401K EE PRETAX" for their "401(k)"), and left
+     * with no account it looks as though nothing is put in and the whole match is going unclaimed.
      */
     private List<StubLine> withAccounts(List<PayStub.Line> lines, Map<String, Layout> layout, Source source) {
         Pay pay = source.termsOn(LocalDate.now(clock)).pay();
@@ -472,7 +495,7 @@ public final class PayStubsRoutes {
                                         && PayStub.key(deduction.name()).equals(PayStub.key(line.label())))
                                 .map(Deduction::toAccountId)
                                 .findFirst()
-                                .orElse(null);
+                                .orElse(pay.match() != null && RETIREMENT.matcher(line.label()).find() ? pay.match().toAccountId() : null);
             } else if (line.tracking() == Tracking.MATCH) {
                 accountId = filed != null ? filed.accountId() : pay.match() == null ? null : pay.match().toAccountId();
             }
@@ -569,11 +592,11 @@ public final class PayStubsRoutes {
         return stub;
     }
 
-    /** A saved stub is a record of what was paid; it is removed and added again, not changed. */
+    /** A saved stub is changed by opening it again first, so nothing about it shifts by accident. */
     private Stub inReview(Context ctx) {
         Stub stub = found(ctx);
         if (stub.status() != Status.REVIEW) {
-            throw ApiException.conflict("This stub has been saved. To change it, remove it and add the PDF again.");
+            throw ApiException.conflict("This stub has been saved. To change it, choose Edit stub first.");
         }
         return stub;
     }

@@ -5,12 +5,24 @@ import { type Account, useAccounts } from "../api/accounts";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { savedMessage } from "../api/client";
 import { REIMBURSEMENT_LABELS, REIMBURSEMENT_STATUSES, type ReimbursementStatus, useNames } from "../api/entries";
+import { type IncomeSource, useIncomeSources } from "../api/income";
 import {
+  INCOME_GROUP_LABELS,
+  INCOME_GROUPS,
+  INCOME_INCLUDE_LABELS,
+  INCOME_INCLUDES,
+  type IncomeGroup,
+  type IncomeGroupBy,
+  type IncomeReport,
+  type IncomeRow,
+  NEW_INCOME_REPORT,
   NEW_REPORT,
   REPORT_GROUP_LABELS,
   REPORT_GROUPS,
   REPORT_INCLUDE_LABELS,
   REPORT_INCLUDES,
+  REPORT_KIND_LABELS,
+  REPORT_KINDS,
   REPORT_RANGE_LABELS,
   REPORT_RANGES,
   REPORT_SHOW_LABELS,
@@ -18,6 +30,7 @@ import {
   type Report,
   type ReportDefinition,
   type ReportGroupBy,
+  type ReportKind,
   type ReportRange,
   type ReportRow,
   type ReportShow,
@@ -36,6 +49,7 @@ import { ReimbursementBadge } from "../components/expenses/ReimbursementBadge";
 import { Modal } from "../components/Modal";
 import { Picker } from "../components/Picker";
 import { ReportChart } from "../components/reports/ReportChart";
+import { Segmented } from "../components/Segmented";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
@@ -46,8 +60,14 @@ const NEW = "new";
 /** A report with a great many lines lists the first of them; the exports always have every one. */
 const MOST_LINES_SHOWN = 200;
 
-const FILTER_KINDS = ["tag", "category", "account", "payee", "reimbursement"] as const;
+const FILTER_KINDS = ["tag", "category", "account", "payee", "reimbursement", "source"] as const;
 type FilterKind = (typeof FILTER_KINDS)[number];
+
+/** What each kind of report can be narrowed by: income has no tags, categories or payees to go by. */
+const FILTERS_OF: Record<ReportKind, readonly FilterKind[]> = {
+  spending: ["tag", "category", "account", "payee", "reimbursement"],
+  income: ["source", "account"],
+};
 
 const FILTER_LABELS: Record<FilterKind, string> = {
   tag: "Tag",
@@ -55,7 +75,15 @@ const FILTER_LABELS: Record<FilterKind, string> = {
   account: "Paid from",
   payee: "Paid to",
   reimbursement: "Reimbursement",
+  source: "Income source",
 };
+
+/** A filter's name. An account is where spending was paid from, and where income landed. */
+function filterLabel(kind: FilterKind, report: ReportKind): string {
+  return kind === "account" && report === "income" ? "Landed in" : FILTER_LABELS[kind];
+}
+
+const KIND_OPTIONS = REPORT_KINDS.map((kind) => ({ value: kind, label: REPORT_KIND_LABELS[kind] }));
 
 /** Everything a filter can be chosen from, and the names the chosen ones go by. */
 interface Lists {
@@ -63,6 +91,7 @@ interface Lists {
   categories: readonly Category[];
   accounts: readonly Account[];
   payees: readonly string[];
+  sources: readonly IncomeSource[];
 }
 
 /** One filter in force, as its chip says it: "Tag is Medical". */
@@ -77,7 +106,8 @@ interface Chip {
  * Reports (design/reports.png): the ones saved, and a builder for what a report shows — its
  * dates, what it counts, its filters, how it is grouped. The figures follow the builder as it
  * changes; nothing is kept until Save. A report can be taken away as a CSV or a PDF, and the
- * PDF can carry every receipt.
+ * PDF can carry every receipt. A report is of spending or of income, one or the other: the
+ * switch at the top of the builder says which, and the choices under it follow.
  *
  * The saved ones are a picker at the top, not a column of their own (Rachel, 2026-10-12: beside
  * the app's own side bar the column took a large part of the screen), and a saved report opens
@@ -89,11 +119,13 @@ export function ReportsPage() {
   const categories = useCategories();
   const accounts = useAccounts();
   const names = useNames();
+  const sources = useIncomeSources();
   const lists: Lists = {
     tags: tags.data ?? [],
     categories: categories.data ?? [],
     accounts: accounts.data ?? [],
     payees: names.data?.payees ?? [],
+    sources: sources.data ?? [],
   };
 
   // The saved report on screen; `null` for one not saved yet.
@@ -106,7 +138,7 @@ export function ReportsPage() {
   const changed = open === null || JSON.stringify(open.definition) !== JSON.stringify(definition);
 
   // A new report exactly as the screen opens on it: nothing in it to clear.
-  const untouched = open === null && JSON.stringify(definition) === JSON.stringify(NEW_REPORT);
+  const untouched = open === null && JSON.stringify(definition) === JSON.stringify(newReport(definition.kind));
   // "Clear the form" asks once before it throws away what was chosen (Rachel, 2026-10-12).
   const [clearing, setClearing] = useState(false);
 
@@ -116,12 +148,13 @@ export function ReportsPage() {
   const exporting = useExportReport();
   const name = open?.name ?? "New report";
 
-  const show = (next: SavedReport | null) => {
+  /** @param kind what a new report is of: clearing an income report leaves an empty income report */
+  const show = (next: SavedReport | null, kind: ReportKind = "spending") => {
     setOpenId(next?.id ?? null);
     setBuilding(next === null);
     setClearing(false);
-    // A tag, category or account deleted since the report was saved is dropped from its filters.
-    setDefinition(next === null ? NEW_REPORT : withoutMissing(next.definition, lists));
+    // A tag, category, account or income source deleted since the report was saved is dropped from its filters.
+    setDefinition(next === null ? newReport(kind) : withoutMissing(next.definition, lists));
     save.reset();
     exporting.reset();
   };
@@ -198,14 +231,17 @@ export function ReportsPage() {
                 <button type="button" disabled={datesProblem !== null || exporting.isPending} onClick={() => exportAs("pdf")} className={BUTTON_SECONDARY}>
                   Export PDF
                 </button>
-                <button
-                  type="button"
-                  disabled={datesProblem !== null || exporting.isPending}
-                  onClick={() => exportAs("pdf", true)}
-                  className={BUTTON_SECONDARY}
-                >
-                  Export PDF with receipts
-                </button>
+                {/* Income has no receipts: a pay stub is kept with its income source. */}
+                {definition.kind === "spending" && (
+                  <button
+                    type="button"
+                    disabled={datesProblem !== null || exporting.isPending}
+                    onClick={() => exportAs("pdf", true)}
+                    className={BUTTON_SECONDARY}
+                  >
+                    Export PDF with receipts
+                  </button>
+                )}
               </div>
             </div>
             {exporting.isPending && (
@@ -245,7 +281,7 @@ export function ReportsPage() {
                 {open === null && !untouched && clearing && (
                   <div role="group" aria-label="Clear the form?" className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
                     <p className="font-medium sm:mr-2">Clear everything chosen here and start again?</p>
-                    <button type="button" onClick={() => show(null)} className={BUTTON_DANGER_OUTLINE}>
+                    <button type="button" onClick={() => show(null, definition.kind)} className={BUTTON_DANGER_OUTLINE}>
                       Yes, clear it
                     </button>
                     <button type="button" data-autofocus onClick={() => setClearing(false)} className={BUTTON_SECONDARY}>
@@ -284,7 +320,13 @@ export function ReportsPage() {
               </p>
             </Card>
           )}
-          {datesProblem === null && report.data && <Results report={report.data} show={definition.show} lists={lists} />}
+          {datesProblem === null &&
+            report.data &&
+            (report.data.kind === "income" ? (
+              <IncomeResults report={report.data} show={definition.show} lists={lists} />
+            ) : (
+              <Results report={report.data} show={definition.show} lists={lists} />
+            ))}
         </div>
       </div>
 
@@ -312,13 +354,19 @@ function problemWithDates(definition: ReportDefinition): string | null {
   return definition.to < definition.from ? "The last day is before the first. Please check the two dates." : null;
 }
 
-/** `definition` without the filters whose tag, category or account is no longer there. */
+/** What a new report of `kind` starts as. */
+function newReport(kind: ReportKind): ReportDefinition {
+  return kind === "income" ? NEW_INCOME_REPORT : NEW_REPORT;
+}
+
+/** `definition` without the filters whose tag, category, account or income source is no longer there. */
 function withoutMissing(definition: ReportDefinition, lists: Lists): ReportDefinition {
   return {
     ...definition,
     tagIds: definition.tagIds.filter((id) => lists.tags.some((tag) => tag.id === id)),
     categoryIds: definition.categoryIds.filter((id) => lists.categories.some((category) => category.id === id)),
     accountIds: definition.accountIds.filter((id) => lists.accounts.some((account) => account.id === id)),
+    sourceIds: definition.sourceIds.filter((id) => lists.sources.some((source) => source.id === id)),
   };
 }
 
@@ -330,9 +378,11 @@ function summaryOf(definition: ReportDefinition, lists: Lists): string {
       : REPORT_RANGE_LABELS[definition.range];
   return [
     dates,
-    definition.include.map((include) => REPORT_INCLUDE_LABELS[include].toLowerCase()).join(", "),
-    ...chipsOf(definition, lists).map((chip) => `${FILTER_LABELS[chip.kind]} is ${chip.label}`),
-    `by ${REPORT_GROUP_LABELS[definition.groupBy].toLowerCase()}`,
+    definition.kind === "income"
+      ? `income from ${definition.incomeInclude.map((include) => INCOME_INCLUDE_LABELS[include].toLowerCase()).join(", ")}`
+      : definition.include.map((include) => REPORT_INCLUDE_LABELS[include].toLowerCase()).join(", "),
+    ...chipsOf(definition, lists).map((chip) => `${filterLabel(chip.kind, definition.kind)} is ${chip.label}`),
+    `by ${(definition.kind === "income" ? INCOME_GROUP_LABELS[definition.incomeGroupBy] : REPORT_GROUP_LABELS[definition.groupBy]).toLowerCase()}`,
   ].join(" · ");
 }
 
@@ -351,9 +401,21 @@ function Builder({
   const id = useId();
   const set = (change: Partial<ReportDefinition>) => onChange({ ...definition, ...change });
   const chips = chipsOf(definition, lists);
+  const income = definition.kind === "income";
 
   return (
     <div className="mt-4 space-y-4 border-t border-line pt-4">
+      <div className="sm:max-w-xs">
+        <Segmented
+          legend="Report on"
+          options={KIND_OPTIONS}
+          value={definition.kind}
+          // The dates and how it is shown carry over; what is counted and filtered belongs to one kind, so it starts again.
+          onChange={(kind) =>
+            onChange({ ...newReport(kind), range: definition.range, from: definition.from, to: definition.to, show: definition.show })
+          }
+        />
+      </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div>
           <label htmlFor={`${id}-range`} className={LABEL}>
@@ -407,13 +469,28 @@ function Builder({
           <label htmlFor={`${id}-group`} className={LABEL}>
             Group by
           </label>
-          <select id={`${id}-group`} value={definition.groupBy} onChange={(event) => set({ groupBy: event.target.value as ReportGroupBy })} className={INPUT}>
-            {REPORT_GROUPS.map((group) => (
-              <option key={group} value={group}>
-                {REPORT_GROUP_LABELS[group]}
-              </option>
-            ))}
-          </select>
+          {income ? (
+            <select
+              id={`${id}-group`}
+              value={definition.incomeGroupBy}
+              onChange={(event) => set({ incomeGroupBy: event.target.value as IncomeGroupBy })}
+              className={INPUT}
+            >
+              {INCOME_GROUPS.map((group) => (
+                <option key={group} value={group}>
+                  {INCOME_GROUP_LABELS[group]}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select id={`${id}-group`} value={definition.groupBy} onChange={(event) => set({ groupBy: event.target.value as ReportGroupBy })} className={INPUT}>
+              {REPORT_GROUPS.map((group) => (
+                <option key={group} value={group}>
+                  {REPORT_GROUP_LABELS[group]}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
         <div>
           <label htmlFor={`${id}-show`} className={LABEL}>
@@ -434,30 +511,62 @@ function Builder({
         </p>
       )}
 
-      <fieldset>
-        <legend className={LABEL}>Include</legend>
-        <div className="flex flex-col gap-x-6 sm:flex-row sm:flex-wrap">
-          {REPORT_INCLUDES.map((include) => {
-            const on = definition.include.includes(include);
-            return (
-              <label key={include} className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={on}
-                  // A report of nothing is not a report: the last one ticked stays ticked.
-                  disabled={on && definition.include.length === 1}
-                  onChange={() =>
-                    set({ include: REPORT_INCLUDES.filter((other) => (other === include ? !on : definition.include.includes(other))) })
-                  }
-                  className="size-5 accent-(--accent)"
-                />
-                <span>{REPORT_INCLUDE_LABELS[include]}</span>
-              </label>
-            );
-          })}
-        </div>
-        <p className="text-sm text-muted">Transfers and card payments are never counted: they move money that was counted when it was spent.</p>
-      </fieldset>
+      {income ? (
+        <fieldset>
+          <legend className={LABEL}>Include</legend>
+          <div className="flex flex-col gap-x-6 sm:flex-row sm:flex-wrap">
+            {INCOME_INCLUDES.map((include) => {
+              const on = definition.incomeInclude.includes(include);
+              return (
+                <label key={include} className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    // A report of nothing is not a report: the last one ticked stays ticked.
+                    disabled={on && definition.incomeInclude.length === 1}
+                    onChange={() =>
+                      set({
+                        incomeInclude: INCOME_INCLUDES.filter((other) => (other === include ? !on : definition.incomeInclude.includes(other))),
+                      })
+                    }
+                    className="size-5 accent-(--accent)"
+                  />
+                  <span>{INCOME_INCLUDE_LABELS[include]}</span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-sm text-muted">
+            Money that pays back an expense is never counted: it is that expense coming back. An employer's match is shown beside the
+            total, not in it.
+          </p>
+        </fieldset>
+      ) : (
+        <fieldset>
+          <legend className={LABEL}>Include</legend>
+          <div className="flex flex-col gap-x-6 sm:flex-row sm:flex-wrap">
+            {REPORT_INCLUDES.map((include) => {
+              const on = definition.include.includes(include);
+              return (
+                <label key={include} className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    // A report of nothing is not a report: the last one ticked stays ticked.
+                    disabled={on && definition.include.length === 1}
+                    onChange={() =>
+                      set({ include: REPORT_INCLUDES.filter((other) => (other === include ? !on : definition.include.includes(other))) })
+                    }
+                    className="size-5 accent-(--accent)"
+                  />
+                  <span>{REPORT_INCLUDE_LABELS[include]}</span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-sm text-muted">Transfers and card payments are never counted: they move money that was counted when it was spent.</p>
+        </fieldset>
+      )}
 
       <div>
         <p className={LABEL}>Only where</p>
@@ -468,11 +577,11 @@ function Builder({
             {chips.map((chip) => (
               <li key={`${chip.kind}-${chip.value}`} className="flex items-center gap-1 rounded-full border border-line bg-bg py-1 pr-1 pl-3 text-sm font-semibold">
                 <span className="wrap-break-word">
-                  {FILTER_LABELS[chip.kind]} is {chip.label}
+                  {filterLabel(chip.kind, definition.kind)} is {chip.label}
                 </span>
                 <button
                   type="button"
-                  aria-label={`Remove filter: ${FILTER_LABELS[chip.kind]} is ${chip.label}`}
+                  aria-label={`Remove filter: ${filterLabel(chip.kind, definition.kind)} is ${chip.label}`}
                   onClick={() => onChange(withoutChip(definition, chip))}
                   className="flex size-8 shrink-0 items-center justify-center rounded-full"
                 >
@@ -482,7 +591,8 @@ function Builder({
             ))}
           </ul>
         )}
-        <AddFilter definition={definition} onChange={onChange} lists={lists} />
+        {/* A fresh one for each kind of report: what it can be filtered by is different. */}
+        <AddFilter key={definition.kind} definition={definition} onChange={onChange} lists={lists} />
       </div>
     </div>
   );
@@ -491,7 +601,9 @@ function Builder({
 /** "+ Filter": what to filter by, then which one. Choosing the second adds the filter. */
 function AddFilter({ definition, onChange, lists }: { definition: ReportDefinition; onChange: (definition: ReportDefinition) => void; lists: Lists }) {
   const id = useId();
-  const [kind, setKind] = useState<FilterKind>("tag");
+  const kinds = FILTERS_OF[definition.kind];
+  const [kind, setKind] = useState<FilterKind>(kinds[0] ?? "account");
+  const label = filterLabel(kind, definition.kind);
   const inForce = chipsOf(definition, lists).filter((chip) => chip.kind === kind);
   const options = choices(kind, lists).filter((option) => !inForce.some((chip) => chip.value === option.id));
 
@@ -502,9 +614,9 @@ function AddFilter({ definition, onChange, lists }: { definition: ReportDefiniti
           Add a filter by
         </label>
         <select id={`${id}-kind`} value={kind} onChange={(event) => setKind(event.target.value as FilterKind)} className={INPUT}>
-          {FILTER_KINDS.map((option) => (
+          {kinds.map((option) => (
             <option key={option} value={option}>
-              {FILTER_LABELS[option]}
+              {filterLabel(option, definition.kind)}
             </option>
           ))}
         </select>
@@ -512,7 +624,7 @@ function AddFilter({ definition, onChange, lists }: { definition: ReportDefiniti
       <Picker
         // A fresh picker for each kind, so what was typed for one does not carry to the next.
         key={kind}
-        label={`${FILTER_LABELS[kind]} is`}
+        label={`${label} is`}
         noun={FILTER_LABELS[kind].toLowerCase()}
         placeholder={options.length === 0 ? "Nothing more to choose" : "Type to search"}
         options={options}
@@ -539,6 +651,8 @@ function choices(kind: FilterKind, lists: Lists): { id: string; label: string; c
       return lists.payees.map((payee) => ({ id: payee, label: payee }));
     case "reimbursement":
       return REIMBURSEMENT_STATUSES.map((status) => ({ id: status, label: REIMBURSEMENT_LABELS[status] }));
+    case "source":
+      return lists.sources.map((source) => ({ id: String(source.id), label: source.name }));
   }
 }
 
@@ -554,6 +668,7 @@ function chipsOf(definition: ReportDefinition, lists: Lists): Chip[] {
     ...definition.accountIds.map((id) => named("account", String(id))),
     ...definition.payees.map((payee) => named("payee", payee)),
     ...definition.reimbursement.map((status) => named("reimbursement", status)),
+    ...definition.sourceIds.map((id) => named("source", String(id))),
   ];
 }
 
@@ -569,6 +684,8 @@ function withChip(definition: ReportDefinition, kind: FilterKind, value: string)
       return { ...definition, payees: [...definition.payees, value] };
     case "reimbursement":
       return { ...definition, reimbursement: [...definition.reimbursement, value as ReimbursementStatus] };
+    case "source":
+      return { ...definition, sourceIds: [...definition.sourceIds, Number(value)] };
   }
 }
 
@@ -584,6 +701,8 @@ function withoutChip(definition: ReportDefinition, chip: Chip): ReportDefinition
       return { ...definition, payees: definition.payees.filter((payee) => payee !== chip.value) };
     case "reimbursement":
       return { ...definition, reimbursement: definition.reimbursement.filter((status) => status !== chip.value) };
+    case "source":
+      return { ...definition, sourceIds: definition.sourceIds.filter((id) => String(id) !== chip.value) };
   }
 }
 
@@ -649,6 +768,222 @@ function Figure({ label, cents, main = false }: { label: string; cents: number; 
         {formatCents(cents)}
       </p>
     </div>
+  );
+}
+
+/**
+ * What an income report came to. A paycheck is told three ways — what was earned, what came out,
+ * what came home — so the figures and every group carry all three. What an employer adds is beside
+ * the total and never in it: it does not reach an account to spend from.
+ */
+function IncomeResults({ report, show, lists }: { report: IncomeReport; show: ReportShow; lists: Lists }) {
+  const heading = `By ${INCOME_GROUP_LABELS[report.groupBy].toLowerCase()}`;
+  const nothing = report.count === 0;
+  const without = report.paychecksWithoutGross;
+
+  return (
+    <>
+      <Card>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 xl:auto-cols-fr xl:grid-flow-col xl:grid-cols-none">
+          <Figure label="Received" cents={report.receivedCents} main />
+          <Figure label="Gross pay" cents={report.grossCents} />
+          <Figure label="Taxes" cents={report.taxesCents} />
+          <Figure label="Other deductions" cents={report.deductionsCents} />
+          {report.matchCents > 0 && <Figure label="Employer match" cents={report.matchCents} />}
+          {report.estimatedCents > 0 && (
+            <div className="min-w-0">
+              <p className="text-sm text-muted">Estimated or still to come</p>
+              <Amount cents={report.estimatedCents} estimate className="-ml-2 text-xl font-bold" />
+            </div>
+          )}
+        </div>
+        <p className="mt-2 text-sm text-muted">
+          {report.count === 1 ? "1 line" : `${report.count} lines`} · {formatDate(report.from)} – {formatDate(report.to)}
+        </p>
+        <p className="text-sm text-muted">
+          Received is take-home pay, one-off money in and interest together.
+          {report.matchCents > 0 && " An employer's match is beside it, not in it."}
+        </p>
+        {without > 0 && (
+          <p className="text-sm text-muted">
+            {without === 1 ? "1 paycheck has" : `${without} paychecks have`} no gross amount entered, so {without === 1 ? "it is" : "they are"} in
+            the take-home but not in the gross or the taxes.
+          </p>
+        )}
+      </Card>
+
+      {nothing ? (
+        <Card>
+          <p className="font-medium">No income matches this report.</p>
+          <p className="mt-1 text-muted">Try other dates, include more, or remove a filter.</p>
+        </Card>
+      ) : (
+        <>
+          {show === "chart_and_table" && (
+            <Card title={heading}>
+              <ReportChart
+                said="Received"
+                report={{ ...report, groups: report.groups.map((group) => ({ ...group, totalCents: group.receivedCents })) }}
+              />
+            </Card>
+          )}
+          <Card title="Table">
+            <IncomeGroupTable report={report} />
+          </Card>
+          <IncomeLines rows={report.rows} lists={lists} />
+        </>
+      )}
+    </>
+  );
+}
+
+/** One column of the income table: its heading, and what a group or the whole report has under it. */
+interface IncomeColumn {
+  label: string;
+  of: (sums: IncomeGroup | IncomeReport) => number;
+}
+
+/** The columns worth showing: one that would be nothing all the way down is left out. */
+function incomeColumns(report: IncomeReport): IncomeColumn[] {
+  const paid = report.takeHomeCents !== 0 || report.grossCents !== 0;
+  const other = report.oneOffsCents + report.interestCents !== 0;
+  return [
+    ...(paid
+      ? [
+          { label: "Gross", of: (sums: IncomeGroup | IncomeReport) => sums.grossCents },
+          { label: "Taxes", of: (sums: IncomeGroup | IncomeReport) => sums.taxesCents },
+          { label: "Other deductions", of: (sums: IncomeGroup | IncomeReport) => sums.deductionsCents },
+          { label: "Take-home", of: (sums: IncomeGroup | IncomeReport) => sums.takeHomeCents },
+        ]
+      : []),
+    ...(other ? [{ label: "Other money in", of: (sums: IncomeGroup | IncomeReport) => sums.oneOffsCents + sums.interestCents }] : []),
+    ...(report.matchCents !== 0 ? [{ label: "Employer match", of: (sums: IncomeGroup | IncomeReport) => sums.matchCents }] : []),
+    { label: "Received", of: (sums: IncomeGroup | IncomeReport) => sums.receivedCents },
+  ];
+}
+
+/** Up to eight columns: a table from a wide screen up, and a card for each group below that. */
+function IncomeGroupTable({ report }: { report: IncomeReport }) {
+  const columns = incomeColumns(report);
+  return (
+    <>
+      <table className="hidden w-full lg:table">
+        <thead>
+          <tr className="border-b border-line text-left text-sm text-muted">
+            <th scope="col" className="py-2 font-semibold">
+              {INCOME_GROUP_LABELS[report.groupBy]}
+            </th>
+            {columns.map((column) => (
+              <th key={column.label} scope="col" className="py-2 pl-3 text-right font-semibold">
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {report.groups.map((group) => (
+            <tr key={group.key ?? ""} className="border-b border-line">
+              <th scope="row" className="py-2 pr-2 text-left font-normal wrap-break-word">
+                {group.label}
+              </th>
+              {columns.map((column) => (
+                <td
+                  key={column.label}
+                  data-amount
+                  className={`py-2 pl-3 text-right tabular-nums ${column.label === "Received" ? "font-semibold" : ""}`}
+                >
+                  {formatCents(column.of(group))}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row" className="py-2 text-left font-bold">
+              Total
+            </th>
+            {columns.map((column) => (
+              <td key={column.label} data-amount className="py-2 pl-3 text-right font-bold tabular-nums">
+                {formatCents(column.of(report))}
+              </td>
+            ))}
+          </tr>
+        </tfoot>
+      </table>
+
+      <ul className="divide-y divide-line lg:hidden">
+        {[...report.groups, null].map((group) => (
+          <li key={group === null ? "total" : (group.key ?? "")} className="py-3 first:pt-0 last:pb-0">
+            <p className={group === null ? "font-bold" : "font-semibold wrap-break-word"}>{group === null ? "Total" : group.label}</p>
+            <dl className="mt-1 grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
+              {columns.map((column) => (
+                <div key={column.label} className="contents">
+                  <dt className="text-muted">{column.label}</dt>
+                  <dd data-amount className={`text-right tabular-nums ${column.label === "Received" ? "font-semibold" : ""}`}>
+                    {formatCents(column.of(group ?? report))}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+const INCOME_KIND_LABELS: Record<IncomeRow["kind"], string> = {
+  paycheck: "Paycheck",
+  one_off: "One-off money in",
+  interest: "Interest",
+  match: "Employer match",
+};
+
+/** Every line an income report counted, with what came out of a paycheck when that is known. */
+function IncomeLines({ rows, lists }: { rows: readonly IncomeRow[]; lists: Lists }) {
+  const shown = rows.slice(0, MOST_LINES_SHOWN);
+  return (
+    <Card title="Every line">
+      <ul className="divide-y divide-line">
+        {shown.map((row, index) => {
+          const account = lists.accounts.find((candidate) => candidate.id === row.accountId)?.name ?? "an account that was removed";
+          return (
+            // Nothing else tells two lines apart: the same paycheck twice in a day is two lines.
+            <li key={index} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-center sm:gap-3">
+              <span className="shrink-0 text-muted sm:w-28">{formatDate(row.date)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold wrap-break-word">{row.description}</span>
+                <span className="block text-sm text-muted">
+                  {INCOME_KIND_LABELS[row.kind]} · {row.kind === "match" ? "into" : "landed in"} {account}
+                  {row.kind === "match" && " · not in the total"}
+                  {row.fromStub && " · from a pay stub"}
+                </span>
+                {row.grossCents !== null && (
+                  <span data-amount className="block text-sm text-muted">
+                    Gross {formatCents(row.grossCents)} · taxes {formatCents(row.taxesCents ?? 0)} · other deductions{" "}
+                    {formatCents(row.deductionsCents ?? 0)}
+                  </span>
+                )}
+              </span>
+              <span className="flex shrink-0 justify-end">
+                <Amount cents={row.amountCents} estimate={row.estimate} className="font-semibold" />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {rows.length > MOST_LINES_SHOWN && (
+        <p className="mt-3 text-muted">
+          The first {MOST_LINES_SHOWN} of {rows.length} lines. Export the report to have every one.
+        </p>
+      )}
+      {shown.some((row) => row.estimate) && (
+        <div className="mt-3">
+          <EstimateKey />
+        </div>
+      )}
+    </Card>
   );
 }
 
