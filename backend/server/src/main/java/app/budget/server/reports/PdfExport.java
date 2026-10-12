@@ -219,6 +219,85 @@ final class PdfExport {
         }
     }
 
+    /**
+     * A projected vs. actual report (spec §5.10): what was projected, what it was and the
+     * difference, for spending and for paychecks apart, then every line.
+     */
+    static byte[] ofProjected(String title, List<String> about, ProjectedVsActualRunner.Report report,
+            List<ProjectedVsActualRunner.Named> names, Optional<Path> fontsDir) {
+        try (PDDocument document = new PDDocument()) {
+            Sheet sheet = new Sheet(document, fontsDir);
+            sheet.title(title);
+            for (String line : about) {
+                sheet.note(line);
+            }
+            sheet.gap(10);
+
+            String grouping = switch (report.groupBy()) {
+                case MONTH -> "by month";
+                case YEAR -> "by year";
+                case CATEGORY -> "by category";
+                case ITEM -> "by item";
+            };
+            if (report.spending().count() == 0 && report.paychecks().count() == 0) {
+                sheet.note("Nothing matches this report.");
+            }
+            projectedSide(sheet, "Spending", grouping, report.spending());
+            projectedSide(sheet, "Paychecks", grouping, report.paychecks());
+
+            if (!report.rows().isEmpty()) {
+                sheet.heading("Every line");
+                sheet.note("A line still to come is shaded light blue.");
+                float[] widths = {62, WIDTH - 62 - 100 - 3 * 70, 100, 70, 70, 70};
+                boolean[] right = {false, false, false, true, true, true};
+                sheet.tableHeader(widths, right, "Date", "What", "Account", "Projected", "Actual", "Difference");
+                for (int i = 0; i < report.rows().size(); i++) {
+                    ProjectedVsActualRunner.Row row = report.rows().get(i);
+                    sheet.tableRow(widths, right, row.toCome() ? 4 : -1,
+                            row.date().format(DAY), row.description(), names.get(i).account(),
+                            money(row.projectedCents()), money(row.actualCents()), signed(row.differenceCents()));
+                }
+            }
+            sheet.finish();
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not write the report PDF", e);
+        }
+    }
+
+    /** One side of a projected vs. actual report: its three figures, then its groups. Left out when it holds nothing. */
+    private static void projectedSide(Sheet sheet, String name, String grouping, ProjectedVsActualRunner.Side side) throws IOException {
+        if (side.count() == 0) {
+            return;
+        }
+        sheet.heading(name + ", " + grouping);
+        sheet.figures(List.of(
+                new String[] {"Projected", money(side.projectedCents())},
+                new String[] {"Actual", money(side.actualCents())},
+                new String[] {"Difference", signed(side.differenceCents())}));
+        sheet.note(side.changed() == 1
+                ? "1 of " + side.count() + " amounts was typed over."
+                : side.changed() + " of " + side.count() + " amounts were typed over.");
+        float[] widths = {WIDTH - 3 * 86 - 60, 60, 86, 86, 86};
+        boolean[] right = {false, true, true, true, true};
+        sheet.tableHeader(widths, right, "", "Typed over", "Projected", "Actual", "Difference");
+        for (ProjectedVsActualRunner.GroupView group : side.groups()) {
+            sheet.tableRow(widths, right, -1, group.label(), group.changed() + " of " + group.count(),
+                    money(group.projectedCents()), money(group.actualCents()), signed(group.differenceCents()));
+        }
+        sheet.totalRow(widths, right, "Total", side.changed() + " of " + side.count(),
+                money(side.projectedCents()), money(side.actualCents()), signed(side.differenceCents()));
+        sheet.gap(14);
+    }
+
+    /** A difference with its sign said: "+$12.50" for more than projected, a minus sign for less. */
+    private static String signed(long cents) {
+        return cents > 0 ? "+" + money(cents) : money(cents);
+    }
+
     private static void totals(Sheet sheet, Report report) throws IOException {
         List<String[]> figures = new ArrayList<>();
         figures.add(new String[] {"Total", money(report.totalCents())});

@@ -12,9 +12,11 @@ import { useAutoLock } from "./components/security/useAutoLock";
 import { NAV_ITEMS } from "./nav";
 import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { AnnualCostsPage } from "./pages/AnnualCostsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { ExpenseDetailPage } from "./pages/ExpenseDetailPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
@@ -30,11 +32,11 @@ import { useApplyTheme } from "./theme/useApplyTheme";
 /** The screens built so far, by path. Every other sidebar entry shows "on its way". */
 const PAGES: Record<string, ReactNode> = {
   "/": <PayPeriodPage />,
+  "/dashboard": <DashboardPage />,
   "/recurring": <RecurringItemsPage />,
   "/accounts": <AccountsPage />,
   "/income": <IncomePage />,
   "/expenses": <ExpensesPage />,
-  "/reports": <ReportsPage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
 };
@@ -133,6 +135,11 @@ function Screens() {
           <Route key={path} path={path} element={PAGES[path] ?? <ComingSoonPage title={label} />} />
         ))}
         <Route path="/periods/:start" element={<PayPeriodPage />} />
+        <Route path="/dashboard/reports" element={<ReportsPage />} />
+        <Route path="/dashboard/annual" element={<AnnualCostsPage />} />
+        {/* Where these two lived before they became tabs of the Dashboard. */}
+        <Route path="/reports" element={<Navigate to="/dashboard/reports" replace />} />
+        <Route path="/annual" element={<Navigate to="/dashboard/annual" replace />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
         {/* Cards live under Accounts; an address that names a card still lands on its page. */}
         <Route path="/cards" element={<Navigate to="/accounts" replace />} />

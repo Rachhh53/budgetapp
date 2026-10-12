@@ -47,6 +47,7 @@ public final class ReportsRoutes {
     private final ReportsRepository reports;
     private final ReportRunner runner;
     private final IncomeReportRunner incomeRunner;
+    private final ProjectedVsActualRunner projectedRunner;
     private final AttachmentsRepository attachments;
     private final FileStore store;
     private final AccountsRepository accounts;
@@ -59,6 +60,7 @@ public final class ReportsRoutes {
             ReportsRepository reports,
             ReportRunner runner,
             IncomeReportRunner incomeRunner,
+            ProjectedVsActualRunner projectedRunner,
             AttachmentsRepository attachments,
             FileStore store,
             AccountsRepository accounts,
@@ -69,6 +71,7 @@ public final class ReportsRoutes {
         this.reports = reports;
         this.runner = runner;
         this.incomeRunner = incomeRunner;
+        this.projectedRunner = projectedRunner;
         this.attachments = attachments;
         this.store = store;
         this.accounts = accounts;
@@ -139,8 +142,12 @@ public final class ReportsRoutes {
 
     private void run(Context ctx) {
         ReportDefinition definition = ReportDefinition.of(Inputs.body(ctx, RunInput.class).definition());
-        // The two kinds answer with different figures; each says which it is in its {@code kind}.
-        ApiResponse.ok(ctx, definition.kind() == ReportDefinition.Kind.INCOME ? incomeRunner.run(definition) : runner.run(definition));
+        // Each kind answers with its own figures, and says which it is in its {@code kind}.
+        ApiResponse.ok(ctx, switch (definition.kind()) {
+            case SPENDING -> runner.run(definition);
+            case INCOME -> incomeRunner.run(definition);
+            case PROJECTED_VS_ACTUAL -> projectedRunner.run(definition);
+        });
     }
 
     private void exportCsv(Context ctx) {
@@ -150,6 +157,11 @@ public final class ReportsRoutes {
         if (definition.kind() == ReportDefinition.Kind.INCOME) {
             IncomeReportRunner.Report income = incomeRunner.run(definition);
             hand(ctx, input, "text/csv; charset=utf-8", name + ".csv", CsvExport.ofIncome(income, incomeRunner.accountNames(income)));
+            return;
+        }
+        if (definition.kind() == ReportDefinition.Kind.PROJECTED_VS_ACTUAL) {
+            ProjectedVsActualRunner.Report projected = projectedRunner.run(definition);
+            hand(ctx, input, "text/csv; charset=utf-8", name + ".csv", CsvExport.ofProjected(projected, projectedRunner.names(projected)));
             return;
         }
         Report report = runner.run(definition);
@@ -164,6 +176,13 @@ public final class ReportsRoutes {
             // Income has no receipts to add: a pay stub is kept with its income, and saved from there.
             IncomeReportRunner.Report income = incomeRunner.run(definition);
             byte[] pdf = PdfExport.ofIncome(name, aboutIncome(definition, income), income, incomeRunner.accountNames(income), fontsDir);
+            hand(ctx, input, "application/pdf", name + ".pdf", pdf);
+            return;
+        }
+        if (definition.kind() == ReportDefinition.Kind.PROJECTED_VS_ACTUAL) {
+            ProjectedVsActualRunner.Report projected = projectedRunner.run(definition);
+            byte[] pdf = PdfExport.ofProjected(
+                    name, aboutProjected(definition, projected), projected, projectedRunner.names(projected), fontsDir);
             hand(ctx, input, "application/pdf", name + ".pdf", pdf);
             return;
         }
@@ -253,6 +272,40 @@ public final class ReportsRoutes {
         return lines;
     }
 
+    /** The lines under a projected vs. actual report's title: the dates, what is compared, and each filter in words. */
+    private List<String> aboutProjected(ReportDefinition definition, ProjectedVsActualRunner.Report report) {
+        List<String> lines = new ArrayList<>();
+        lines.add(PdfExport.day(report.from()) + " – " + PdfExport.day(report.to()));
+        lines.add("What Budget projected beside what it was, for "
+                + definition.compareInclude().stream().map(ProjectedVsActualRunner::words).collect(Collectors.joining(", ")) + ".");
+        List<String> only = new ArrayList<>();
+        if (definition.changedOnly()) {
+            only.add("typed over");
+        }
+        if (!definition.tagIds().isEmpty()) {
+            only.add("tagged " + tags.all().stream()
+                    .filter(tag -> definition.tagIds().contains(tag.id()))
+                    .map(Tag::name)
+                    .collect(Collectors.joining(" or ")));
+        }
+        if (!definition.categoryIds().isEmpty()) {
+            only.add("in " + categories.all().stream()
+                    .filter(category -> definition.categoryIds().contains(category.id()))
+                    .map(Category::name)
+                    .collect(Collectors.joining(" or ")));
+        }
+        if (!definition.accountIds().isEmpty()) {
+            only.add("paid from or into " + accounts.all().stream()
+                    .filter(account -> definition.accountIds().contains(account.id()))
+                    .map(Account::name)
+                    .collect(Collectors.joining(" or ")));
+        }
+        if (!only.isEmpty()) {
+            lines.add("Only what is " + String.join("; ", only) + ".");
+        }
+        return lines;
+    }
+
     private static String words(Include include) {
         return switch (include) {
             case ONE_OFFS -> "one-off spending";
@@ -276,10 +329,10 @@ public final class ReportsRoutes {
     /** A definition whose tags, categories and accounts all exist, so nothing unusable is ever saved. */
     private ReportDefinition checked(ReportDefinition.Input input) {
         ReportDefinition definition = ReportDefinition.of(input);
-        if (definition.kind() == ReportDefinition.Kind.INCOME) {
-            incomeRunner.run(definition);
-        } else {
-            runner.run(definition);
+        switch (definition.kind()) {
+            case SPENDING -> runner.run(definition);
+            case INCOME -> incomeRunner.run(definition);
+            case PROJECTED_VS_ACTUAL -> projectedRunner.run(definition);
         }
         return definition;
     }
@@ -299,7 +352,7 @@ public final class ReportsRoutes {
         download(ctx, contentType, fileName, bytes);
     }
 
-    private static void download(Context ctx, String contentType, String fileName, byte[] bytes) {
+    static void download(Context ctx, String contentType, String fileName, byte[] bytes) {
         String safe = fileName.replaceAll("[\\p{Cntrl}<>:\"/\\\\|?*]", " ").strip();
         ctx.contentType(contentType);
         ctx.header("Content-Disposition",

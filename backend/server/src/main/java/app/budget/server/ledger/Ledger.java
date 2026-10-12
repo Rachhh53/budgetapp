@@ -55,6 +55,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -645,9 +646,62 @@ public final class Ledger {
         return next;
     }
 
+    /** What every account held (or owed) at the end of one day. */
+    public record DayBalances(LocalDate date, List<AccountBalance> balances) {}
+
+    /**
+     * Every account at the end of each of {@code days}, which must be in date order: the same
+     * figures as {@link #balancesOn(LocalDate)}, worked out in one pass in place of one per day.
+     * A day before an account's first balance has no entry for that account.
+     */
+    public List<DayBalances> balancesOn(List<LocalDate> days) {
+        if (days.isEmpty()) {
+            return List.of();
+        }
+        // Stretches that follow on from each other, each ending on one of the days asked for.
+        List<PayPeriod> stretches = new ArrayList<>();
+        for (int i = 0; i < days.size(); i++) {
+            LocalDate start = i == 0 ? days.getFirst() : days.get(i - 1).plusDays(1);
+            stretches.add(new PayPeriod(start, days.get(i), start));
+        }
+        Workings workings = workings(stretches);
+        Map<LocalDate, List<AccountBalance>> byDay = new LinkedHashMap<>();
+        days.forEach(day -> byDay.put(day, new ArrayList<>()));
+        for (Account account : accounts.all()) {
+            List<PeriodBalance> balances = workings.projection(account.id()).balances();
+            List<AccountPeriod> figures = accountPeriods(workings, account);
+            for (int i = 0; i < balances.size(); i++) {
+                LocalDate day = balances.get(i).period().end();
+                byDay.get(day).add(new AccountBalance(account.id(), day, figures.get(i).endingCents(), figures.get(i).availableCents()));
+            }
+        }
+        List<DayBalances> held = new ArrayList<>();
+        byDay.forEach((day, balances) -> held.add(new DayBalances(day, balances)));
+        return held;
+    }
+
+    /**
+     * Every account at the end of each pay period overlapping {@code from}–{@code through}, by
+     * account id: {@link #accountSeries} for all of them in one pass. An account with no balance has no entry.
+     */
+    public Map<Long, List<AccountPoint>> allSeries(LocalDate from, LocalDate through) {
+        Workings workings = workings(pay.payPeriods(from, through));
+        Map<Long, List<AccountPoint>> series = new LinkedHashMap<>();
+        for (Account account : accounts.all()) {
+            List<AccountPoint> points = points(workings, account);
+            if (!points.isEmpty()) {
+                series.put(account.id(), points);
+            }
+        }
+        return series;
+    }
+
     /** One account at the end of each pay period overlapping {@code from}–{@code through}; empty until it has a balance. */
     public List<AccountPoint> accountSeries(Account account, LocalDate from, LocalDate through) {
-        Workings workings = workings(pay.payPeriods(from, through));
+        return points(workings(pay.payPeriods(from, through)), account);
+    }
+
+    private static List<AccountPoint> points(Workings workings, Account account) {
         List<PeriodBalance> balances = workings.projection(account.id()).balances();
         List<AccountPeriod> figures = accountPeriods(workings, account);
         List<AccountPoint> points = new ArrayList<>();

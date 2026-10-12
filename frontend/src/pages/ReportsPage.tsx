@@ -7,6 +7,11 @@ import { savedMessage } from "../api/client";
 import { REIMBURSEMENT_LABELS, REIMBURSEMENT_STATUSES, type ReimbursementStatus, useNames } from "../api/entries";
 import { type IncomeSource, useIncomeSources } from "../api/income";
 import {
+  COMPARE_GROUP_LABELS,
+  COMPARE_GROUPS,
+  COMPARE_INCLUDE_LABELS,
+  COMPARE_INCLUDES,
+  type CompareGroupBy,
   INCOME_GROUP_LABELS,
   INCOME_GROUPS,
   INCOME_INCLUDE_LABELS,
@@ -16,6 +21,7 @@ import {
   type IncomeReport,
   type IncomeRow,
   NEW_INCOME_REPORT,
+  NEW_PROJECTED_REPORT,
   NEW_REPORT,
   REPORT_GROUP_LABELS,
   REPORT_GROUPS,
@@ -48,6 +54,8 @@ import { EditButton } from "../components/EditButton";
 import { ReimbursementBadge } from "../components/expenses/ReimbursementBadge";
 import { Modal } from "../components/Modal";
 import { Picker } from "../components/Picker";
+import { DashboardTabs } from "../components/dashboard/DashboardTabs";
+import { ProjectedResults } from "../components/reports/ProjectedResults";
 import { ReportChart } from "../components/reports/ReportChart";
 import { Segmented } from "../components/Segmented";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
@@ -67,6 +75,7 @@ type FilterKind = (typeof FILTER_KINDS)[number];
 const FILTERS_OF: Record<ReportKind, readonly FilterKind[]> = {
   spending: ["tag", "category", "account", "payee", "reimbursement"],
   income: ["source", "account"],
+  projected_vs_actual: ["tag", "category", "account"],
 };
 
 const FILTER_LABELS: Record<FilterKind, string> = {
@@ -78,9 +87,12 @@ const FILTER_LABELS: Record<FilterKind, string> = {
   source: "Income source",
 };
 
-/** A filter's name. An account is where spending was paid from, and where income landed. */
+/** A filter's name. An account is where spending was paid from, and where income landed; a comparison can hold both. */
 function filterLabel(kind: FilterKind, report: ReportKind): string {
-  return kind === "account" && report === "income" ? "Landed in" : FILTER_LABELS[kind];
+  if (kind !== "account" || report === "spending") {
+    return FILTER_LABELS[kind];
+  }
+  return report === "income" ? "Landed in" : "Account";
 }
 
 const KIND_OPTIONS = REPORT_KINDS.map((kind) => ({ value: kind, label: REPORT_KIND_LABELS[kind] }));
@@ -106,8 +118,9 @@ interface Chip {
  * Reports (design/reports.png): the ones saved, and a builder for what a report shows — its
  * dates, what it counts, its filters, how it is grouped. The figures follow the builder as it
  * changes; nothing is kept until Save. A report can be taken away as a CSV or a PDF, and the
- * PDF can carry every receipt. A report is of spending or of income, one or the other: the
- * switch at the top of the builder says which, and the choices under it follow.
+ * PDF can carry every receipt. A report is of spending, of income, or of what was projected
+ * against what it was, never a mix: the switch at the top of the builder says which, and the
+ * choices under it follow.
  *
  * The saved ones are a picker at the top, not a column of their own (Rachel, 2026-10-12: beside
  * the app's own side bar the column took a large part of the screen), and a saved report opens
@@ -175,6 +188,7 @@ export function ReportsPage() {
 
   return (
     <>
+      <DashboardTabs />
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Your reports</p>
@@ -322,7 +336,9 @@ export function ReportsPage() {
           )}
           {datesProblem === null &&
             report.data &&
-            (report.data.kind === "income" ? (
+            (report.data.kind === "projected_vs_actual" ? (
+              <ProjectedResults report={report.data} accounts={lists.accounts} />
+            ) : report.data.kind === "income" ? (
               <IncomeResults report={report.data} show={definition.show} lists={lists} />
             ) : (
               <Results report={report.data} show={definition.show} lists={lists} />
@@ -356,7 +372,27 @@ function problemWithDates(definition: ReportDefinition): string | null {
 
 /** What a new report of `kind` starts as. */
 function newReport(kind: ReportKind): ReportDefinition {
-  return kind === "income" ? NEW_INCOME_REPORT : NEW_REPORT;
+  return kind === "income" ? NEW_INCOME_REPORT : kind === "projected_vs_actual" ? NEW_PROJECTED_REPORT : NEW_REPORT;
+}
+
+/** What a report counts, in a few words, and how it is grouped: the two parts of its one-line summary that differ by kind. */
+function countedAndGrouped(definition: ReportDefinition): [string, string] {
+  switch (definition.kind) {
+    case "income":
+      return [
+        `income from ${definition.incomeInclude.map((include) => INCOME_INCLUDE_LABELS[include].toLowerCase()).join(", ")}`,
+        INCOME_GROUP_LABELS[definition.incomeGroupBy],
+      ];
+    case "projected_vs_actual":
+      return [
+        `projected vs. actual for ${definition.compareInclude.map((include) => COMPARE_INCLUDE_LABELS[include].toLowerCase()).join(", ")}${
+          definition.changedOnly ? ", only what was typed over" : ""
+        }`,
+        COMPARE_GROUP_LABELS[definition.compareGroupBy],
+      ];
+    case "spending":
+      return [definition.include.map((include) => REPORT_INCLUDE_LABELS[include].toLowerCase()).join(", "), REPORT_GROUP_LABELS[definition.groupBy]];
+  }
 }
 
 /** `definition` without the filters whose tag, category, account or income source is no longer there. */
@@ -376,13 +412,12 @@ function summaryOf(definition: ReportDefinition, lists: Lists): string {
     definition.range === "custom" && definition.from !== null && definition.to !== null
       ? `${formatDate(definition.from)} – ${formatDate(definition.to)}`
       : REPORT_RANGE_LABELS[definition.range];
+  const [counted, grouped] = countedAndGrouped(definition);
   return [
     dates,
-    definition.kind === "income"
-      ? `income from ${definition.incomeInclude.map((include) => INCOME_INCLUDE_LABELS[include].toLowerCase()).join(", ")}`
-      : definition.include.map((include) => REPORT_INCLUDE_LABELS[include].toLowerCase()).join(", "),
+    counted,
     ...chipsOf(definition, lists).map((chip) => `${filterLabel(chip.kind, definition.kind)} is ${chip.label}`),
-    `by ${(definition.kind === "income" ? INCOME_GROUP_LABELS[definition.incomeGroupBy] : REPORT_GROUP_LABELS[definition.groupBy]).toLowerCase()}`,
+    `by ${grouped.toLowerCase()}`,
   ].join(" · ");
 }
 
@@ -402,14 +437,17 @@ function Builder({
   const set = (change: Partial<ReportDefinition>) => onChange({ ...definition, ...change });
   const chips = chipsOf(definition, lists);
   const income = definition.kind === "income";
+  const comparing = definition.kind === "projected_vs_actual";
 
   return (
     <div className="mt-4 space-y-4 border-t border-line pt-4">
-      <div className="sm:max-w-xs">
+      <div className="sm:max-w-md">
         <Segmented
           legend="Report on"
           options={KIND_OPTIONS}
           value={definition.kind}
+          // Three to a row on a phone: two and one left over would look like a mistake.
+          dense
           // The dates and how it is shown carry over; what is counted and filtered belongs to one kind, so it starts again.
           onChange={(kind) =>
             onChange({ ...newReport(kind), range: definition.range, from: definition.from, to: definition.to, show: definition.show })
@@ -469,7 +507,20 @@ function Builder({
           <label htmlFor={`${id}-group`} className={LABEL}>
             Group by
           </label>
-          {income ? (
+          {comparing ? (
+            <select
+              id={`${id}-group`}
+              value={definition.compareGroupBy}
+              onChange={(event) => set({ compareGroupBy: event.target.value as CompareGroupBy })}
+              className={INPUT}
+            >
+              {COMPARE_GROUPS.map((group) => (
+                <option key={group} value={group}>
+                  {COMPARE_GROUP_LABELS[group]}
+                </option>
+              ))}
+            </select>
+          ) : income ? (
             <select
               id={`${id}-group`}
               value={definition.incomeGroupBy}
@@ -492,18 +543,21 @@ function Builder({
             </select>
           )}
         </div>
-        <div>
-          <label htmlFor={`${id}-show`} className={LABEL}>
-            Show
-          </label>
-          <select id={`${id}-show`} value={definition.show} onChange={(event) => set({ show: event.target.value as ReportShow })} className={INPUT}>
-            {REPORT_SHOWS.map((show) => (
-              <option key={show} value={show}>
-                {REPORT_SHOW_LABELS[show]}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Two figures a group are read side by side in a table; a comparison has no chart to choose. */}
+        {!comparing && (
+          <div>
+            <label htmlFor={`${id}-show`} className={LABEL}>
+              Show
+            </label>
+            <select id={`${id}-show`} value={definition.show} onChange={(event) => set({ show: event.target.value as ReportShow })} className={INPUT}>
+              {REPORT_SHOWS.map((show) => (
+                <option key={show} value={show}>
+                  {REPORT_SHOW_LABELS[show]}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       {datesProblem && (
         <p role="status" className="text-muted">
@@ -511,7 +565,46 @@ function Builder({
         </p>
       )}
 
-      {income ? (
+      {comparing ? (
+        <fieldset>
+          <legend className={LABEL}>Compare</legend>
+          <div className="flex flex-col gap-x-6 sm:flex-row sm:flex-wrap">
+            {COMPARE_INCLUDES.map((include) => {
+              const on = definition.compareInclude.includes(include);
+              return (
+                <label key={include} className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    // A report of nothing is not a report: the last one ticked stays ticked.
+                    disabled={on && definition.compareInclude.length === 1}
+                    onChange={() =>
+                      set({
+                        compareInclude: COMPARE_INCLUDES.filter((other) => (other === include ? !on : definition.compareInclude.includes(other))),
+                      })
+                    }
+                    className="size-5 accent-(--accent)"
+                  />
+                  <span>{COMPARE_INCLUDE_LABELS[include]}</span>
+                </label>
+              );
+            })}
+          </div>
+          <label className="flex min-h-11 items-center gap-3">
+            <input
+              type="checkbox"
+              checked={definition.changedOnly}
+              onChange={() => set({ changedOnly: !definition.changedOnly })}
+              className="size-5 accent-(--accent)"
+            />
+            <span>Only what was typed over</span>
+          </label>
+          <p className="text-sm text-muted">
+            Projected is what Budget showed before an amount was typed over; anything never typed over came to what was projected. For a
+            budget, what you typed over it is what was spent. Spending and paychecks are added up apart.
+          </p>
+        </fieldset>
+      ) : income ? (
         <fieldset>
           <legend className={LABEL}>Include</legend>
           <div className="flex flex-col gap-x-6 sm:flex-row sm:flex-wrap">

@@ -1,6 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import type { CostsByMonth } from "../../src/api/annual";
 import type { Account } from "../../src/api/accounts";
 import type { Bucket } from "../../src/api/buckets";
 import type { Category, Tag } from "../../src/api/categories";
@@ -964,5 +965,75 @@ describe("recurring items screen", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Recurring items" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls(fetchMock)).toContain("DELETE /api/items/1");
+  });
+});
+
+/** Electric's 2026: $140.00 a month, July typed over at $212.00, beside $133.00 a month the year before. */
+const ELECTRIC_BY_MONTH: CostsByMonth = {
+  year: 2026,
+  months: Array.from({ length: 12 }, (_, index) => ({
+    month: `2026-${String(index + 1).padStart(2, "0")}`,
+    amountCents: index === 6 ? 21200 : 14000,
+    beforeCents: 13300,
+    toCome: index > 9,
+  })),
+  highest: { month: "2026-07", amountCents: 21200 },
+  lowest: { month: "2026-01", amountCents: 14000 },
+  totalCents: 175200,
+  averageCents: 14600,
+  budgetCents: 14000,
+  budgetTooLow: true,
+};
+
+describe("A recurring item's year by month", () => {
+  it("shows the highest and lowest month, the average, and says when the amount is below it", async () => {
+    withItems([ELECTRIC], { "GET /api/items/2/by-month": () => ({ status: 200, data: ELECTRIC_BY_MONTH }) });
+    renderApp("/recurring/2");
+
+    const card = await screen.findByRole("region", { name: "By month" });
+    expect((await within(card).findByText("Highest 2026")).parentElement).toHaveTextContent("Jul · $212.00");
+    expect(within(card).getByText("Lowest 2026").parentElement).toHaveTextContent("Jan · $140.00");
+    expect(within(card).getByText("Average").parentElement).toHaveTextContent("$146.00 / month");
+    expect(within(card).getByText("Your amount now").parentElement).toHaveTextContent("$140.00 / month");
+    expect(within(card).getByRole("status")).toHaveTextContent(
+      "Your $140.00 a month is below this year's average of $146.00. Use Change the amount if it should be higher.",
+    );
+    // The lines are told apart in words, not only by how they are drawn.
+    expect(card).toHaveTextContent("Solid: 2026 so far. Dotted: the months still to come, as budgeted. Grey dashes: 2025.");
+  });
+
+  it("says nothing about the amount when the year comes to it, and calls a budget a budget", async () => {
+    withItems([GROCERIES], {
+      "GET /api/items/3/by-month": () => ({
+        status: 200,
+        data: { ...ELECTRIC_BY_MONTH, averageCents: 14000, totalCents: 168000, budgetTooLow: false },
+      }),
+    });
+    renderApp("/recurring/3");
+
+    const card = await screen.findByRole("region", { name: "By month" });
+    expect(await within(card).findByText("Your budget now")).toBeInTheDocument();
+    expect(within(card).queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("has words for a year with nothing in it yet, and is left off anything that is not a cost", async () => {
+    const fetchMock = withItems([RENT, TO_SAVINGS]);
+    renderApp("/recurring/1");
+
+    expect(await screen.findByText(/Nothing falls in 2026 yet/)).toBeInTheDocument();
+
+    cleanup();
+    renderApp("/recurring/4");
+    await screen.findByRole("heading", { level: 1, name: "To savings" });
+    expect(screen.queryByRole("region", { name: "By month" })).not.toBeInTheDocument();
+    expect(calls(fetchMock)).not.toContain("GET /api/items/4/by-month");
+  });
+
+  it("shows the backend's message when the months cannot be added up", async () => {
+    withItems([ELECTRIC], { "GET /api/items/2/by-month": () => ({ status: 500, error: "Something went wrong on our side. Please try again." }) });
+    renderApp("/recurring/2");
+
+    const card = await screen.findByRole("region", { name: "By month" });
+    expect(await within(card).findByRole("alert")).toHaveTextContent("Something went wrong on our side. Please try again.");
   });
 });

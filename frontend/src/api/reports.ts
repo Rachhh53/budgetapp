@@ -14,11 +14,15 @@ export const REPORT_RANGE_LABELS: Record<ReportRange, string> = {
   custom: "Custom dates",
 };
 
-/** What a report is of: one or the other, never both (Rachel, 2026-10-12). */
-export const REPORT_KINDS = ["spending", "income"] as const;
+/** What a report is of: one of these, never a mix (Rachel, 2026-10-12). */
+export const REPORT_KINDS = ["spending", "income", "projected_vs_actual"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
-export const REPORT_KIND_LABELS: Record<ReportKind, string> = { spending: "Spending", income: "Income" };
+export const REPORT_KIND_LABELS: Record<ReportKind, string> = {
+  spending: "Spending",
+  income: "Income",
+  projected_vs_actual: "Projected vs. actual",
+};
 
 /** What kinds of spending a report counts. Transfers and card payments move money; they are not spending. */
 export const REPORT_INCLUDES = ["one_offs", "bills", "budgets"] as const;
@@ -64,6 +68,29 @@ export const INCOME_GROUP_LABELS: Record<IncomeGroupBy, string> = {
   pay_period: "Pay period",
 };
 
+/**
+ * What a projected vs. actual report sets side by side: the things whose amount Budget works out
+ * and that can be typed over. A one-off is entered as what it was, so it has no projection.
+ */
+export const COMPARE_INCLUDES = ["bills", "budgets", "paychecks"] as const;
+export type CompareInclude = (typeof COMPARE_INCLUDES)[number];
+
+export const COMPARE_INCLUDE_LABELS: Record<CompareInclude, string> = {
+  bills: "Bills & expenses",
+  budgets: "Budgets",
+  paychecks: "Paychecks",
+};
+
+export const COMPARE_GROUPS = ["month", "year", "category", "item"] as const;
+export type CompareGroupBy = (typeof COMPARE_GROUPS)[number];
+
+export const COMPARE_GROUP_LABELS: Record<CompareGroupBy, string> = {
+  month: "Month",
+  year: "Year",
+  category: "Category",
+  item: "Item",
+};
+
 export const REPORT_SHOWS = ["chart_and_table", "table"] as const;
 export type ReportShow = (typeof REPORT_SHOWS)[number];
 
@@ -97,6 +124,11 @@ export interface ReportDefinition {
   /** For an income report: only these income sources; what has no source is then left out. */
   sourceIds: number[];
   incomeGroupBy: IncomeGroupBy;
+  /** For a projected vs. actual report: what to compare. Never empty then. */
+  compareInclude: CompareInclude[];
+  compareGroupBy: CompareGroupBy;
+  /** For a projected vs. actual report: leave out whatever came to exactly what was projected. */
+  changedOnly: boolean;
 }
 
 export interface SavedReport {
@@ -227,6 +259,64 @@ export interface IncomeReport {
   paychecksWithoutGross: number;
 }
 
+/** One amount, as projected and as it was. */
+export interface ProjectedRow {
+  kind: "bill" | "budget" | "paycheck";
+  /** The recurring item it is one time of; `null` for a paycheck. */
+  itemId: number | null;
+  /** The income source of a paycheck; `null` for anything else. */
+  sourceId: number | null;
+  scheduledDate: string;
+  date: string;
+  description: string;
+  categoryId: number | null;
+  /** The account it is paid from, or the one a paycheck lands in. */
+  accountId: number;
+  /** What Budget showed before the amount was typed over; the same as `actualCents` when it never was. */
+  projectedCents: number;
+  actualCents: number;
+  /** What it was, less what was projected. */
+  differenceCents: number;
+  changed: boolean;
+  /** True while its day has not come (and a bill has not been marked paid). */
+  toCome: boolean;
+}
+
+export interface ProjectedGroup {
+  key: string | null;
+  label: string;
+  /** The category's color; `null` for anything else. */
+  color: string | null;
+  count: number;
+  /** How many of its lines came to something other than projected. */
+  changed: number;
+  projectedCents: number;
+  actualCents: number;
+  differenceCents: number;
+}
+
+/** Money going out, or paychecks coming in: never added to each other. */
+export interface ProjectedSide {
+  groups: ProjectedGroup[];
+  count: number;
+  changed: number;
+  projectedCents: number;
+  actualCents: number;
+  differenceCents: number;
+}
+
+/** A projected vs. actual report that was run. */
+export interface ProjectedReport {
+  kind: "projected_vs_actual";
+  from: string;
+  to: string;
+  groupBy: CompareGroupBy;
+  spending: ProjectedSide;
+  paychecks: ProjectedSide;
+  /** Every line counted, oldest first. */
+  rows: ProjectedRow[];
+}
+
 /** What a new report starts as: this year's one-off spending, month by month. */
 export const NEW_REPORT: ReportDefinition = {
   range: "this_year",
@@ -244,6 +334,9 @@ export const NEW_REPORT: ReportDefinition = {
   incomeInclude: [],
   sourceIds: [],
   incomeGroupBy: "month",
+  compareInclude: [],
+  compareGroupBy: "month",
+  changedOnly: false,
 };
 
 /** What a new income report starts as: this year's paychecks and other money in, month by month. */
@@ -252,6 +345,14 @@ export const NEW_INCOME_REPORT: ReportDefinition = {
   include: [],
   kind: "income",
   incomeInclude: ["paychecks", "one_offs", "match", "interest"],
+};
+
+/** What a new projected vs. actual report starts as: this year's bills, budgets and paychecks, month by month. */
+export const NEW_PROJECTED_REPORT: ReportDefinition = {
+  ...NEW_REPORT,
+  include: [],
+  kind: "projected_vs_actual",
+  compareInclude: ["bills", "budgets", "paychecks"],
 };
 
 /** Under the pay key: a report follows every entry, bill and receipt it counts. */
@@ -266,7 +367,7 @@ export function useSavedReports() {
 export function useReport(definition: ReportDefinition | null) {
   return useQuery({
     queryKey: [...REPORTS_KEY, definition],
-    queryFn: () => api.post<Report | IncomeReport>("/api/reports/run", { definition }),
+    queryFn: () => api.post<Report | IncomeReport | ProjectedReport>("/api/reports/run", { definition }),
     enabled: definition !== null,
     // The figures on screen stay while a changed report is worked out, instead of blinking away.
     placeholderData: (previous) => previous,

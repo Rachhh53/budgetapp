@@ -1,7 +1,5 @@
 import {
   CalendarRange,
-  ChartPie,
-  FileChartColumn,
   Landmark,
   LayoutDashboard,
   type LucideIcon,
@@ -22,7 +20,10 @@ export interface NavItem {
   primaryOnPhone?: boolean;
 }
 
-/** Every screen, in sidebar order (spec §8). */
+/**
+ * Every screen, in sidebar order (spec §8). Reports and Annual costs are not here: they are tabs
+ * of the Dashboard (Rachel, 2026-10-12), at `/dashboard/reports` and `/dashboard/annual`.
+ */
 export const NAV_ITEMS: readonly NavItem[] = [
   { path: "/", label: "Pay periods", icon: CalendarRange, primaryOnPhone: true },
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, primaryOnPhone: true },
@@ -30,8 +31,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: "/accounts", label: "Accounts", icon: Landmark, primaryOnPhone: true },
   { path: "/income", label: "Income", icon: Wallet },
   { path: "/expenses", label: "Expenses & receipts", icon: Receipt },
-  { path: "/reports", label: "Reports", icon: FileChartColumn },
-  { path: "/annual", label: "Annual costs", icon: ChartPie },
   { path: "/plan", label: "Plan next year", icon: NotebookPen },
   { path: "/planner", label: "Debt & decisions", icon: Scale },
   { path: "/categories", label: "Categories & tags", icon: Tags },
