@@ -846,7 +846,7 @@ Still open from Phase 0: the uninstall check has never been run by hand, and the
 
 ### Phase 10 — Plan next year, start-up speed and the CI build (`milestone/10-plan-next-year`)
 
-**Status: built; waiting for Rachel to try the installer and confirm.** Branched from `milestone/9-dashboard-annual`, not `main` (Rachel, 2026-10-12: the merges take too long to wait for).
+**Status: complete; confirmed by Rachel on 2026-10-13 after trying the installer.** Branched from `milestone/9-dashboard-annual`, not `main` (Rachel, 2026-10-12: the merges take too long to wait for).
 
 Decided with Rachel before building (2026-10-12): one branch for the plan, the start-up speed and the CI build; Plan next year is its own sidebar entry; an item with under 12 months of history is suggested at the amount set now over a year, marked "not enough history yet"; first-time setup is in this phase and reuses the wizard.
 
