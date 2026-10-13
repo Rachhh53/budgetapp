@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.jdbi.v3.core.Handle;
@@ -17,8 +20,9 @@ import org.jdbi.v3.core.statement.Update;
  * touched, and the way back.
  *
  * <p>Rows are captured by database triggers, not by each repository, so nothing that
- * changes data can forget to be undoable. The triggers are rebuilt from the live schema
- * every time the database is opened, so they always list every column of every table.
+ * changes data can forget to be undoable. The triggers are checked against the live schema
+ * every time the database is opened, and any that no longer match are rebuilt, so they
+ * always list every column of every table.
  *
  * <p>Table and column names cannot be bound as parameters. Wherever one appears in SQL
  * here it was read from the database's own schema, never from a request; every value is
@@ -56,21 +60,32 @@ public final class ChangeLog {
      */
     public static void installTracking(Jdbi jdbi) {
         jdbi.useTransaction(handle -> {
-            List<String> stale = handle
-                    .createQuery("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE :prefix ESCAPE '\\'")
-                    .bind("prefix", TRIGGER_PREFIX.replace("_", "\\_") + "%")
-                    .mapTo(String.class)
-                    .list();
-            for (String trigger : stale) {
-                handle.execute("DROP TRIGGER " + quoted(trigger));
-            }
+            Map<String, String> wanted = new LinkedHashMap<>();
             for (Table table : tables(handle)) {
                 String oldRow = rowAsJson(table, "OLD");
                 String newRow = rowAsJson(table, "NEW");
-                createTrigger(handle, table, "insert", "INSERT", "NULL", newRow);
-                createTrigger(handle, table, "update", "UPDATE", oldRow, newRow);
-                createTrigger(handle, table, "delete", "DELETE", oldRow, "NULL");
+                wanted.put(triggerName(table, "insert"), triggerSql(table, "insert", "INSERT", "NULL", newRow));
+                wanted.put(triggerName(table, "update"), triggerSql(table, "update", "UPDATE", oldRow, newRow));
+                wanted.put(triggerName(table, "delete"), triggerSql(table, "delete", "DELETE", oldRow, "NULL"));
             }
+            // SQLite keeps a trigger's statement exactly as it was written, so one that still
+            // reads the same is left alone. On an ordinary start nothing has changed, and
+            // rebuilding them all was a noticeable part of how long the app took to open.
+            Map<String, String> existing = new HashMap<>();
+            handle.createQuery("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE :prefix ESCAPE '\\'")
+                    .bind("prefix", TRIGGER_PREFIX.replace("_", "\\_") + "%")
+                    .map((rs, ctx) -> existing.put(rs.getString("name"), rs.getString("sql")))
+                    .list();
+            existing.forEach((name, sql) -> {
+                if (!sql.equals(wanted.get(name))) {
+                    handle.execute("DROP TRIGGER " + quoted(name));
+                }
+            });
+            wanted.forEach((name, sql) -> {
+                if (!sql.equals(existing.get(name))) {
+                    handle.execute(sql);
+                }
+            });
         });
     }
 
@@ -284,13 +299,17 @@ public final class ChangeLog {
         return tables;
     }
 
-    private static void createTrigger(Handle handle, Table table, String op, String event, String before, String after) {
-        handle.execute("CREATE TRIGGER " + quoted(TRIGGER_PREFIX + table.name() + "_" + op)
+    private static String triggerName(Table table, String op) {
+        return TRIGGER_PREFIX + table.name() + "_" + op;
+    }
+
+    private static String triggerSql(Table table, String op, String event, String before, String after) {
+        return "CREATE TRIGGER " + quoted(triggerName(table, op))
                 + " AFTER " + event + " ON " + quoted(table.name())
                 + " WHEN (SELECT group_id FROM change_recording WHERE id = 1) IS NOT NULL"
                 + " BEGIN INSERT INTO change_log (group_id, table_name, op, before, after)"
                 + " VALUES ((SELECT group_id FROM change_recording WHERE id = 1), " + literal(table.name()) + ", "
-                + literal(op) + ", " + before + ", " + after + "); END");
+                + literal(op) + ", " + before + ", " + after + "); END";
     }
 
     /** {@code json_object('id', NEW."id", 'name', NEW."name", …)} */

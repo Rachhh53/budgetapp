@@ -32,7 +32,7 @@ import org.sqlite.SQLiteDataSource;
  * <p>If an existing database is about to be migrated (the app was upgraded), a full copy is
  * taken first, so an upgrade can never be the reason someone loses their data.
  */
-public final class Database {
+public final class Database implements AutoCloseable {
 
     public static final String DB_FILE = "budget.db";
     public static final String BACKUP_DIR = "backups";
@@ -51,11 +51,11 @@ public final class Database {
     private static final List<String> DB_FILE_SUFFIXES = List.of("", "-wal", "-shm");
 
     private final Path dataDir;
-    private final DataSource dataSource;
+    private final KeptOpenDataSource dataSource;
     private final Flyway flyway;
     private final Jdbi jdbi;
 
-    private Database(Path dataDir, DataSource dataSource, Flyway flyway) {
+    private Database(Path dataDir, KeptOpenDataSource dataSource, Flyway flyway) {
         this.dataDir = dataDir;
         this.dataSource = dataSource;
         this.flyway = flyway;
@@ -70,8 +70,9 @@ public final class Database {
     static Database open(Path dataDir, Clock clock, String... migrationLocations) {
         Path dbFile = dataDir.resolve(DB_FILE);
         boolean existed = Files.exists(dbFile);
-        DataSource dataSource = dataSource(dbFile);
+        KeptOpenDataSource dataSource = new KeptOpenDataSource(dataSource(dbFile));
 
+        long started = System.nanoTime();
         Flyway flyway = Flyway.configure()
                 .dataSource(dataSource)
                 .locations(migrationLocations)
@@ -80,9 +81,12 @@ public final class Database {
             backupBeforeMigration(dataSource, dataDir.resolve(BACKUP_DIR), clock);
         }
         flyway.migrate();
+        long migratedMs = (System.nanoTime() - started) / 1_000_000;
         Database database = new Database(dataDir, dataSource, flyway);
         // After every migration, so Undo covers the tables and columns as they are now.
         ChangeLog.installTracking(database.jdbi);
+        log.info("Database opened: migrations {} ms, change tracking {} ms",
+                migratedMs, (System.nanoTime() - started) / 1_000_000 - migratedMs);
         return database;
     }
 
@@ -92,6 +96,12 @@ public final class Database {
 
     public Path dataDir() {
         return dataDir;
+    }
+
+    /** Lets go of the database file, when the app is closing. */
+    @Override
+    public void close() {
+        dataSource.close();
     }
 
     /** The newest migration this version of the app knows: the schema it leaves a database at. */
@@ -162,6 +172,7 @@ public final class Database {
      * @param newFiles the attachments that go with it, or {@code null} when it has none
      */
     public synchronized void replaceWith(Path newDatabase, Path newFiles) {
+        dataSource.closeIdle();
         try {
             // The main file first, as in eraseEverything: if it cannot be removed, nothing has changed.
             for (String suffix : DB_FILE_SUFFIXES) {
@@ -191,9 +202,10 @@ public final class Database {
     public synchronized void eraseEverything() {
         // Delete the database files outright and rebuild from the migrations, rather than
         // emptying tables: deleted rows otherwise linger in the file's free pages and in the
-        // write-ahead log. Connections are opened per request and closed again, so nothing
-        // holds the file open here. The main file goes first — if it cannot be deleted,
-        // nothing has changed yet.
+        // write-ahead log. The connections kept open between requests are closed first, so
+        // nothing holds the file open here. The main file goes first — if it cannot be
+        // deleted, nothing has changed yet.
+        dataSource.closeIdle();
         try {
             for (String suffix : DB_FILE_SUFFIXES) {
                 Files.deleteIfExists(dataDir.resolve(DB_FILE + suffix));

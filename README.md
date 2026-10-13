@@ -88,12 +88,14 @@ separate apps: every install is "Budget" to Windows, and every install uses the 
 
 ## How it runs
 
-1. The Tauri shell starts the bundled backend, passing its own process id, the data folder and
-   a one-time shutdown token.
+1. The Tauri shell opens its window at once on a bundled "Opening your budget…" page and starts
+   the bundled backend, passing its own process id, the data folder and a one-time shutdown token.
+   (A `BUDGET_DATA_DIR` already in the shell's environment is passed on as it is, so a build can
+   be tried on a throwaway folder.)
 2. The backend takes a lock on the data folder (one instance only), backs up the database if an
    upgrade is pending, runs Flyway migrations, binds `127.0.0.1` on port 4873 (or the next free
    one) and prints `READY port=NNNN`.
-3. The shell opens its window on that address. The backend serves both the API and the UI, so
+3. The shell moves its window to that address. The backend serves both the API and the UI, so
    there is a single origin and no CORS.
 4. Closing the window sends `POST /api/shutdown`; the backend also exits by itself if the shell dies.
 
@@ -195,10 +197,19 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | PUT, DELETE | `/api/reports/{id}` | rename or change; delete |
 | POST | `/api/reports/run` | work a report out without saving it `{ definition }`: `{ from, to, groups, rows, count, totalCents, reimbursedCents, waitingCents, notSubmittedCents, estimatedCents, hasReimbursements }`. `definition` is `{ range, from?, to?, include, groupBy, show, tagIds, categoryIds, accountIds, payees, reimbursement }` (`spec.md` §4.11). With `kind: "income"` the definition is `{ kind, range, from?, to?, show, incomeInclude, incomeGroupBy, sourceIds, accountIds }` and the answer is `{ kind: "income", from, to, groupBy, groups, rows, count, grossCents, taxesCents, deductionsCents, takeHomeCents, oneOffsCents, interestCents, matchCents, receivedCents, estimatedCents, paychecksWithoutGross }`; a spending answer carries `kind: "spending"`. With `kind: "projected_vs_actual"` the definition is `{ kind, range, from?, to?, compareInclude, compareGroupBy, changedOnly, tagIds, categoryIds, accountIds }` (`compareInclude`: any of `bills`, `budgets`, `paychecks`, at least one; `compareGroupBy`: `month`, `year`, `category` or `item`; `changedOnly`: only amounts that were typed over) and the answer is `{ kind: "projected_vs_actual", from, to, groupBy, spending, paychecks, rows }`, where `spending` and `paychecks` are each `{ groups, count, changed, projectedCents, actualCents, differenceCents }` and are never added together. Running a report records nothing for Undo |
 | POST | `/api/reports/export/csv`, `/api/reports/export/pdf` | the report as a file `{ name, definition, withReceipts?, save? }`; the PDF can end with every receipt's pages (at most 300, else 413). With `save: true` from this PC the file is put in the Downloads folder and the answer is `{ saved: { fileName, folder } }`; otherwise the answer is the file itself. A line not paid yet says so in words ("Not paid yet"); only an estimated amount is shaded. An income report exports the same way, with gross, taxes and other deductions beside each paycheck and no receipts; so does a projected vs. actual one, with what was projected, what it was and the difference on each line |
-| GET | `/api/dashboard?range=` | the Dashboard's Overview in one answer. `range` is the dates of the spending card: `period` (this pay period), `three_months` (the default) or `year`; anything else is 400. `{ today, range, netWorth: { cents, changeCents, since }, lowestAhead: { cents, periodStart, accountId, accountName, low } or null, saved: { totalCents, transfersCents, contributionsCents, matchCents }, debt: { totalCents, cardsCents, loansCents }, spending: { from, to, totalCents, categories }, netWorthOverTime: [{ date, netWorthCents, projected }], attention }`. Each `attention` line has a `kind` (`past_due`, `low_balance`, `promo_ending`, `due_soon`, `stub_review`, `goal_short`, `price_up`, `balance_stale`), in that order, with the ids the screen links it by |
+| GET | `/api/dashboard?range=` | the Dashboard's Overview in one answer. `range` is the dates of the spending card: `period` (this pay period), `three_months` (the default) or `year`; anything else is 400. `{ today, range, netWorth: { cents, changeCents, since }, lowestAhead: { cents, periodStart, accountId, accountName, low } or null, saved: { totalCents, transfersCents, contributionsCents, matchCents }, debt: { totalCents, cardsCents, loansCents }, spending: { from, to, totalCents, categories }, netWorthOverTime: [{ date, netWorthCents, projected }], attention }`. Each `attention` line has a `kind` (`past_due`, `low_balance`, `promo_ending`, `due_soon`, `stub_review`, `goal_short`, `price_up`, `balance_stale`, `plan_reminder`, `plan_active`), in that order, with the ids the screen links it by. `plan_reminder` is there from the plan reminder day until next year has a plan; `plan_active` for 14 days after a plan takes effect |
 | GET | `/api/annual-costs?basis=` | every bill and budget over three years: `basis` is `calendar` (the default) or `rolling` (twelve months ending last month). `{ basis, windows: [{ from, to, label }], rows: [{ itemId, name, kind, categoryId, categoryName, color, totalsCents, changeBp, perMonthCents }], totalsCents, changeBp, perMonthCents, biggestIncrease, budgetedFrom }`. Archived items are left out |
 | GET | `/api/items/{id}/by-month` | one bill's or budget's year, month by month, beside the year before: `{ year, months: [{ month, amountCents, beforeCents, toCome }], highest, lowest, totalCents, averageCents, budgetCents, budgetTooLow }`. 400 for a transfer or a card payment |
 | POST | `/api/annual-costs/export/csv` | the annual costs table as a file `{ basis, save? }`, saved or sent like a report's ("Annual costs.csv"). Records nothing for Undo |
+| GET | `/api/plans` | yearly plans, the latest first: `{ plans: [{ id, year, status, basis, startsOn, endsOn, setup, suggestedAsOf, activatedOn }], nextYear, nextStartsOn, canPlan, canSetUp, reminderDue }`. `status` is `draft`, `active` or `closed`; `canSetUp` is true only while nothing is set up yet |
+| POST | `/api/plans` | start a plan `{ kind }`: `next_year` (a draft of the coming budget year; needs an income source) or `setup` (first-time setup, the year under way). 201 `{ id }`; 409 while there is already a draft, or a plan of that year |
+| GET | `/api/plans/{id}` | one plan: `{ plan, historyFrom, historyTo, stale, paydays, steps: [{ step, rows, last12Cents, trendBp, suggestedCents, chosenCents, currentCents, yours, changes }], incomeCents, outCents }`. Steps are `income`, `bills`, `annual`, `budgets` and `saving`; each row has what the last 12 months came to, the trend in basis points, the suggestion and why (`history`, `fixed`, `not_enough_history`), the plan's amount and whether it was typed (`yours`). An item's amounts are totals for the year; an income source's are take-home pay for one paycheck |
+| PUT | `/api/plans/{id}` | change what a draft's suggestions are worked out from `{ basis, refresh? }`: `last_12`, `last_12_trend` or `prior_year`; `refresh: true` also moves them on to the latest full months. 409 for a plan that is not a draft |
+| PUT | `/api/plans/{id}/amounts` | type one amount into a draft `{ kind: "item" \| "income", id, amountCents }`; `amountCents: null` goes back to the suggestion. 409 for first-time setup, or a plan that is not a draft |
+| POST | `/api/plans/{id}/accept-suggestions` | drop every typed amount of a draft, or of one step `{ step? }` |
+| POST | `/api/plans/{id}/finish` | finish first-time setup: the plan becomes active at once. 409 for any other plan |
+| DELETE | `/api/plans/{id}` | delete a draft before it starts; body `{ "confirm": "delete-draft" }`. 409 for an active or closed plan |
+| GET | `/api/items/{id}/plan-suggestion` | what next year's plan would suggest for one bill or budget: `{ suggestion: { year, basis, perYearCents, perMonthCents, reason, trendBp } }`, or `{ suggestion: null }` when there is nothing to suggest |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | GET | `/api/undo` | `{ available }`: whether there is a change to undo |
@@ -215,8 +226,10 @@ Amounts are whole cents (`amountCents`, `netCents`); dates are `YYYY-MM-DD`. Ite
 `accent_color`, `projection_horizon_months` (6, 12, 18, 24 or 36), `promo_warning_days` (30, 45, 60, 90 or 120: how long
 before a card's promotional rate ends the warnings start), `unpaid_highlight_days` (0, 1, 2, 3, 5, 7, 10 or 14: how soon
 before it is due a bill you pay by hand is pointed out; 0 is never), `auto_lock_minutes` (1, 5, 15, 30 or 60),
-`start_amounts_hidden` (`true` or `false`), `backup_keep_count` (7, 14, 30, 60 or 90) and `default_date` (empty for
-today, or a day that is today or earlier: the date forms for new things open on). `backup_folder` is read here
+`start_amounts_hidden` (`true` or `false`), `backup_keep_count` (7, 14, 30, 60 or 90), `default_date` (empty for
+today, or a day that is today or earlier: the date forms for new things open on), `budget_year_start` (`MM-DD`, the
+day a yearly plan takes effect; `01-01` unless changed) and `plan_reminder` (`MM-DD`, the day the Dashboard starts
+suggesting next year's plan; `10-01` unless changed). Neither takes Feb 29. `backup_folder` is read here
 but set with `PUT /api/backups/folder`.
 
 ## CI and dependency checks
@@ -227,11 +240,13 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to a branch:
 - **Dependency checks:** OSV-Scanner fails the build on any known vulnerability in a Maven, npm or
   Cargo dependency, and `check-dependency-age.ps1` fails it if a dependency version is less than
   14 days old. Both also run weekly.
-- On `main` only the **installer** is built (kept as a workflow artifact for 30 days). The checks above
-  are not repeated there, since the branch already passed them; `build-installer.ps1` runs the
-  tests itself before packaging, so the merged code is still tested once. To save time, the Tauri
-  command-line tool and Cargo's package downloads are kept between runs; the app's own compiled
-  output is not, so what ships is always compiled from clean.
+- Once the tests pass, the **installer** is built from the same push (kept as a workflow artifact
+  for 30 days) with `build-installer.ps1 -SkipTests`, since both suites have just run on that
+  commit. To save time, the Tauri command-line tool, Cargo's package downloads and the compiled
+  Rust dependencies are kept between runs; the shell's own crate is deleted first, so the app
+  itself is always compiled from clean.
+- **Nothing runs on a push to `main`.** Work only reaches main through a pull request whose branch
+  already passed everything above and built its installer.
 
 To run the dependency age check yourself (it needs the network; the app itself never does):
 

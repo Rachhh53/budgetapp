@@ -189,12 +189,13 @@ public final class AnnualCostsRunner {
                 .toList();
     }
 
-    private static boolean counts(Occurrence occurrence) {
+    /** True for an occurrence that is a cost: a bill or a budget that was not skipped. */
+    public static boolean counts(Occurrence occurrence) {
         return (occurrence.kind() == ItemKind.BILL || occurrence.kind() == ItemKind.BUDGET) && !occurrence.skipped();
     }
 
     /** The day it counts on: the day a bill was paid once it has been, its due date until then. */
-    private static LocalDate date(Occurrence occurrence) {
+    public static LocalDate date(Occurrence occurrence) {
         return occurrence.paid() && occurrence.paidDate() != null ? occurrence.paidDate() : occurrence.dueDate();
     }
 

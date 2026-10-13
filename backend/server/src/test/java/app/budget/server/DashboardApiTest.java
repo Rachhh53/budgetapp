@@ -255,8 +255,9 @@ class DashboardApiTest extends ApiTestBase {
 
             JsonNode dashboard = dashboard("");
 
+            // "Today" is the day the plan reminder starts by default, so it closes the list.
             assertThat(dashboard.get("attention").findValuesAsText("kind"))
-                    .containsExactly("past_due", "low_balance", "due_soon", "goal_short", "balance_stale");
+                    .containsExactly("past_due", "low_balance", "due_soon", "goal_short", "balance_stale", "plan_reminder");
         }
 
         @Test

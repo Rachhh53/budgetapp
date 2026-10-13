@@ -33,6 +33,8 @@ public final class TestServer implements AutoCloseable {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String CRLF = "\r\n";
+    /** A request that is never answered fails its test, rather than holding the whole run up for good. */
+    private static final Duration ANSWER_WITHIN = Duration.ofSeconds(60);
 
     /** A clock the test can move forward, to exercise session expiry without waiting. */
     public static final class MutableClock extends Clock {
@@ -77,6 +79,7 @@ public final class TestServer implements AutoCloseable {
     public final MutableClock clock = new MutableClock();
     public final AtomicBoolean shutdownRequested = new AtomicBoolean();
 
+    private final Database database;
     private final BudgetServer server;
     private final HttpClient http = HttpClient.newHttpClient();
     private final String baseUrl;
@@ -91,9 +94,10 @@ public final class TestServer implements AutoCloseable {
                 "BUDGET_DATA_DIR", dataDir.toString(),
                 "BUDGET_DOWNLOADS_DIR", downloads.toString(),
                 "BUDGET_SHUTDOWN_TOKEN", SHUTDOWN_TOKEN));
+        database = Database.open(dataDir);
         server = new BudgetServer(
                 config,
-                Database.open(dataDir),
+                database,
                 clock,
                 () -> shutdownRequested.set(true));
         baseUrl = "http://" + config.bindHost() + ":" + server.start();
@@ -102,6 +106,11 @@ public final class TestServer implements AutoCloseable {
     /** The backup service itself, for what only the daily timer calls. */
     public BackupService backups() {
         return server.backups();
+    }
+
+    /** What the timer does on the hour: puts next year's plan into force if its first day has come. */
+    public boolean activateDuePlan() {
+        return server.activateDuePlan();
     }
 
     public URI uri(String path) {
@@ -117,6 +126,7 @@ public final class TestServer implements AutoCloseable {
     public Reply send(String method, String path, String jsonBody, Map<String, String> headers)
             throws IOException, InterruptedException {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + path))
+                .timeout(ANSWER_WITHIN)
                 .method(method, jsonBody == null
                         ? HttpRequest.BodyPublishers.noBody()
                         : HttpRequest.BodyPublishers.ofString(jsonBody));
@@ -163,6 +173,7 @@ public final class TestServer implements AutoCloseable {
         }
         body.write(("--" + boundary + "--" + CRLF).getBytes(StandardCharsets.UTF_8));
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + path))
+                .timeout(ANSWER_WITHIN)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary);
         cookieHeader(cookie).forEach(request::header);
@@ -180,7 +191,7 @@ public final class TestServer implements AutoCloseable {
 
     /** Asks for a file: a GET when {@code jsonBody} is null, a POST otherwise. */
     public Download download(String path, String jsonBody, String cookie) throws IOException, InterruptedException {
-        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + path));
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(ANSWER_WITHIN);
         if (jsonBody == null) {
             request.GET();
         } else {
@@ -198,5 +209,6 @@ public final class TestServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop();
+        database.close();
     }
 }

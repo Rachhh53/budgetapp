@@ -9,6 +9,7 @@ import { type Category, type Tag, useCategories, useTags } from "../api/categori
 import { type Entry, useEditEntry } from "../api/entries";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
+import { usePlans } from "../api/plans";
 import { useSettings } from "../api/settings";
 import {
   type AccountPeriod,
@@ -30,7 +31,7 @@ import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { PaycheckForm } from "../components/period/PaycheckForm";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
-import { INPUT } from "../components/ui";
+import { BUTTON_PRIMARY, INPUT } from "../components/ui";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
@@ -341,9 +342,25 @@ function sortIntoLists(period: PeriodDetail): Lists {
 }
 
 function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
+  const plans = usePlans();
+  // Offered only in an app with nothing in it yet, or to carry on a setup already begun.
+  const settingUp = plans.data?.plans.find((plan) => plan.setup && plan.status === "draft");
   return (
     <>
       <h1 className="mb-4 text-2xl font-bold md:text-3xl">Pay periods</h1>
+      {(plans.data?.canSetUp || settingUp) && (
+        <div className="mb-4">
+          <Card>
+            <p className="font-medium">{settingUp ? "You are part-way through setting up Budget." : "New here? Budget can walk you through setting up."}</p>
+            <p className="mt-1 text-muted">
+              Six short steps: your accounts and income, your bills, what comes once a year, your spending budgets, and what you save.
+            </p>
+            <Link to={settingUp ? `/plan/${settingUp.id}/income` : "/plan"} className={`${BUTTON_PRIMARY} mt-4 flex items-center justify-center`}>
+              {settingUp ? "Carry on setting up" : "Set up Budget"}
+            </Link>
+          </Card>
+        </div>
+      )}
       <Card>
         {hasIncome ? (
           <>

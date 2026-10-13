@@ -49,6 +49,9 @@ import app.budget.server.loans.LoansRepository;
 import app.budget.server.loans.LoansRoutes;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import app.budget.server.plans.PlanService;
+import app.budget.server.plans.PlansRepository;
+import app.budget.server.plans.PlansRoutes;
 import app.budget.server.reports.AnnualCostsRoutes;
 import app.budget.server.reports.AnnualCostsRunner;
 import app.budget.server.reports.IncomeReportRunner;
@@ -119,6 +122,8 @@ public final class BudgetServer {
     private final Config config;
     private final Javalin app;
     private final BackupService backups;
+    private final PlanService plans;
+    private final ChangeRoutes changes;
 
     public BudgetServer(Config config, Database database, Clock clock, Runnable onShutdown) {
         this.config = config;
@@ -159,8 +164,12 @@ public final class BudgetServer {
         IncomeReportRunner incomeReportRunner = new IncomeReportRunner(payCalendar, income, payStubs, entries, accounts, ledger);
         ProjectedVsActualRunner projectedRunner = new ProjectedVsActualRunner(items, itemCalendar, payCalendar, accounts, categories, tags);
         AnnualCostsRunner annualCosts = new AnnualCostsRunner(itemCalendar, payCalendar, categories);
+        plans = new PlanService(
+                database.jdbi(), new PlansRepository(database.jdbi(), clock), items, itemCalendar, payCalendar, income, accounts, settings);
         DashboardService dashboard = new DashboardService(
-                database.jdbi(), ledger, netWorth, payCalendar, accounts, categories, buckets, income, payStubs, settings, reportRunner, annualCosts);
+                database.jdbi(), ledger, netWorth, payCalendar, accounts, categories, buckets, income, payStubs, settings, reportRunner,
+                annualCosts, plans);
+        changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock));
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
@@ -186,7 +195,7 @@ public final class BudgetServer {
             // Registers the session gate first, so it runs ahead of every route added below.
             new SessionRoutes(sessions, pins).register(routes);
             // Straight after the gate: everything a signed-in request changes from here on can be undone.
-            new ChangeRoutes(new ChangeLog(database.jdbi(), clock)).register(routes);
+            changes.register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
             new SettingsRoutes(settings, clock).register(routes);
             new AccountsRoutes(accounts, interest, buckets, ledger, clock).register(routes);
@@ -209,6 +218,7 @@ public final class BudgetServer {
                     .register(routes);
             new AnnualCostsRoutes(annualCosts, items, savedCopies).register(routes);
             new DashboardRoutes(dashboard).register(routes);
+            new PlansRoutes(plans, items).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new BackupRoutes(backups, folders, settings, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
@@ -241,6 +251,26 @@ public final class BudgetServer {
     /** The backup service, for the daily timer (started by {@code Main}, not by tests). */
     public BackupService backups() {
         return backups;
+    }
+
+    /**
+     * Puts next year's plan into force if its first day has come (spec §4.10). Called by the
+     * same timer as the daily backup, so it happens when the app is opened on or after that
+     * day, or is open as the day arrives. Waits its turn behind any change being made.
+     *
+     * @return true when a plan was made active
+     */
+    public boolean activateDuePlan() {
+        boolean[] activated = new boolean[1];
+        try {
+            changes.betweenChanges(() -> activated[0] = plans.activateDue());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException e) {
+            // The plan stays a draft and is tried again on the next check; nothing was half done.
+            log.error("Next year's plan could not be made active", e);
+        }
+        return activated[0];
     }
 
     private static ObjectMapper jsonMapper() {

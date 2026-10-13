@@ -3,13 +3,15 @@
 name: CI
 
 on:
-  # Every branch. A pull request shows the checks of its latest commit, so there is no
-  # separate pull_request trigger running everything twice.
+  # Every branch but main. A pull request shows the checks of its latest commit, so there is
+  # no separate pull_request trigger running everything twice.
   #
   # Work reaches main only through a pull request whose branch has already passed the tests
-  # and the dependency checks, so a push to main does not repeat them: it runs the installer
-  # job alone, and build-installer.ps1 runs the full test suites itself before it packages.
+  # and the dependency checks and had its installer built, so a push to main runs nothing:
+  # it would only repeat, for an hour, what the branch has just done.
   push:
+    branches-ignore:
+      - main
   # New vulnerabilities are published without anyone touching the code: re-scan weekly.
   schedule:
     - cron: "17 6 * * 1" # Mondays 06:17 UTC
@@ -28,7 +30,7 @@ concurrency:
 jobs:
   backend:
     name: Backend tests
-    if: ${{ github.event_name != 'schedule' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name != 'schedule' }}
     # The app only ships on Windows, so its tests (file locks, data folder, lifecycle) run there.
     runs-on: windows-latest
     steps:
@@ -46,7 +48,7 @@ jobs:
 
   frontend:
     name: Frontend tests
-    if: ${{ github.event_name != 'schedule' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -67,8 +69,7 @@ jobs:
 
   dependencies:
     name: Dependency checks
-    # Branch pushes, the weekly run and manual runs; not repeated on main (see `on` above).
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    # Branch pushes, the weekly run and manual runs.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -107,9 +108,11 @@ jobs:
 
   installer:
     name: Windows installer
-    # Only for main. The script runs the frontend and backend tests before it packages, so
-    # main is still tested once, on the merged code.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # On the branch, once its tests have passed: this is the installer to try before merging.
+    # The two test jobs have just run both suites on this same commit, so the script is told
+    # not to run them a second time.
+    if: ${{ github.event_name != 'schedule' }}
+    needs: [backend, frontend]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -125,18 +128,21 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      # A fresh runner would compile the Tauri command-line tool from source every time (about a
-      # third of this job). Two things are kept between runs, and neither can hide a failure:
-      # the tool itself, which is one fixed version, and Cargo's package downloads, which
-      # Cargo.lock checksums. desktop/src-tauri/target is deliberately NOT cached, so the app
-      # that ships is always compiled from clean.
-      - name: Read the Tauri CLI version from the build script
+      # A fresh runner would compile the Tauri command-line tool and every Rust library the
+      # shell uses from source every time, which was nearly all of this job's hour. Three
+      # things are kept between runs: the tool itself, which is one fixed version; Cargo's
+      # package downloads, which Cargo.lock checksums; and the compiled libraries, which
+      # depend only on Cargo.lock and the compiler. The shell's own code is never reused: its
+      # compiled output is removed below, so what ships is always compiled from this commit.
+      - name: Read the Tauri CLI and Rust versions
         id: tauri
         shell: pwsh
         run: |
           $line = Select-String -Path build-installer.ps1 -Pattern "^\`$TauriCli\s*=\s*'([^']+)'"
           if (-not $line) { throw 'Could not find $TauriCli in build-installer.ps1.' }
           "version=$($line.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+          $rust = (rustc --version) -replace '[^0-9A-Za-z.]+', '-'
+          "rust=$rust" >> $env:GITHUB_OUTPUT
       # No restore-keys on either cache: a new version or a changed Cargo.lock starts from nothing.
       - name: Cache the Tauri CLI
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -150,10 +156,26 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
           key: cargo-registry-${{ runner.os }}-${{ steps.tauri.outputs.version }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      # A new compiler or a changed Cargo.lock starts from nothing, like the two caches above.
+      - name: Cache the compiled Rust libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: desktop/src-tauri/target
+          key: cargo-target-${{ runner.os }}-${{ steps.tauri.outputs.rust }}-${{ steps.tauri.outputs.version }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      # Whatever the cache brought back of the shell itself, and any installer built before, goes.
+      - name: Remove the shell's own compiled output
+        shell: pwsh
+        working-directory: desktop/src-tauri
+        run: |
+          if (Test-Path target) {
+            cargo clean --release --package budget-desktop
+            if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed.' }
+            Remove-Item -Recurse -Force target/release/bundle -ErrorAction SilentlyContinue
+          }
       # The Rust toolchain and the Visual Studio C++ Build Tools are already on the runner.
       - name: Build the installer
         shell: pwsh
-        run: .\build-installer.ps1
+        run: .\build-installer.ps1 -SkipTests
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: budget-installer

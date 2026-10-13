@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { type CostsByMonth, useCostsByMonth } from "../../api/annual";
 import type { Item } from "../../api/items";
+import { useItemSuggestion } from "../../api/plans";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
 
@@ -46,6 +48,8 @@ export function ByMonthCard({ item }: { item: Item }) {
 }
 
 function Year({ costs, item }: { costs: CostsByMonth; item: Item }) {
+  // Asked for only when the amount is too low: that is the one place it is mentioned.
+  const suggestion = useItemSuggestion(item.id, costs.budgetTooLow).data?.suggestion ?? null;
   if (costs.highest === null || costs.lowest === null) {
     return <p className="text-muted">Nothing falls in {costs.year} yet. Once it does, each month shows here beside the year before.</p>;
   }
@@ -113,6 +117,16 @@ function Year({ costs, item }: { costs: CostsByMonth; item: Item }) {
           <p role="status" className="mt-3 rounded-lg border border-warn-line bg-warn px-3 py-2 text-warn-ink">
             Your <span data-amount>{formatCents(costs.budgetCents)}</span> a month is below this year's average of{" "}
             <span data-amount>{formatCents(costs.averageCents)}</span>. Use Change the amount if it should be higher.
+            {suggestion !== null && suggestion.reason === "history" && (
+              <>
+                {" "}
+                For {suggestion.year},{" "}
+                <Link to="/plan" className="font-semibold underline">
+                  Plan next year
+                </Link>{" "}
+                suggests <span data-amount>{formatCents(suggestion.perMonthCents)}</span> a month.
+              </>
+            )}
           </p>
         )}
       </figcaption>

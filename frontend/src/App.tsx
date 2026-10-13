@@ -23,6 +23,7 @@ import { IncomeDetailPage } from "./pages/IncomeDetailPage";
 import { PayStubPage } from "./pages/PayStubPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodPage } from "./pages/PayPeriodPage";
+import { PlanYearPage } from "./pages/PlanYearPage";
 import { RecurringItemDetailPage } from "./pages/RecurringItemDetailPage";
 import { RecurringItemsPage } from "./pages/RecurringItemsPage";
 import { ReportsPage } from "./pages/ReportsPage";
@@ -37,6 +38,7 @@ const PAGES: Record<string, ReactNode> = {
   "/accounts": <AccountsPage />,
   "/income": <IncomePage />,
   "/expenses": <ExpensesPage />,
+  "/plan": <PlanYearPage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
 };
@@ -149,6 +151,7 @@ function Screens() {
         <Route path="/income/:id/stubs/:stubId" element={<PayStubPage />} />
         <Route path="/expenses/:id" element={<ExpenseDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
+        <Route path="/plan/:id/:step?" element={<PlanYearPage />} />
         <Route path="*" element={<ComingSoonPage title="We couldn't find that screen" />} />
       </Route>
     </Routes>

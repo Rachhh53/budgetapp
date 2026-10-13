@@ -36,9 +36,9 @@ describe("app shell", () => {
 
   it("shows a screen that is not built yet as on its way", async () => {
     fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
-    renderApp("/plan");
+    renderApp("/planner");
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Plan next year" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Debt & decisions" })).toBeInTheDocument();
     expect(screen.getByText("This screen is on its way.")).toBeInTheDocument();
   });
 

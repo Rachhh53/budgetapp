@@ -82,6 +82,11 @@ public final class ItemsRepository {
             Long saveUpBucketId,
             Long fromBucketId) {
 
+        Terms withAmount(long cents) {
+            return new Terms(cents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
+                    autopay, placement, schedule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId);
+        }
+
         Terms withSchedule(ScheduleRule rule) {
             return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
                     autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId);
@@ -216,6 +221,37 @@ public final class ItemsRepository {
                 }
             }
             insertVersion(handle, id, effectiveFrom, terms);
+        });
+    }
+
+    /**
+     * Sets what an item's amount is from {@code from} on and changes nothing else about it: how
+     * a yearly plan's amount takes effect on the day its year starts. A version that starts that
+     * very day has its amount changed; otherwise one is added that day, a copy of the one in
+     * force then. A version that starts later is left alone, so a change already set for later
+     * in the year stands. For an item that only begins after {@code from}, the version it begins
+     * with is the one changed. The caller has checked that the item exists.
+     */
+    public void changeAmountFrom(long id, LocalDate from, long amountCents) {
+        jdbi.useTransaction(handle -> {
+            List<Version> versions = versions(handle, id);
+            Version inForce = versions.getFirst();
+            for (Version version : versions) {
+                if (!version.effectiveFrom().isAfter(from)) {
+                    inForce = version;
+                }
+            }
+            if (inForce.terms().amountCents() == amountCents) {
+                return;
+            }
+            if (inForce.effectiveFrom().isBefore(from)) {
+                insertVersion(handle, id, from, inForce.terms().withAmount(amountCents));
+                return;
+            }
+            handle.createUpdate("UPDATE item_versions SET amount = :amount WHERE id = :id")
+                    .bind("id", inForce.id())
+                    .bind("amount", amountCents)
+                    .execute();
         });
     }
 
