@@ -240,13 +240,15 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to a branch:
 - **Dependency checks:** OSV-Scanner fails the build on any known vulnerability in a Maven, npm or
   Cargo dependency, and `check-dependency-age.ps1` fails it if a dependency version is less than
   14 days old. Both also run weekly.
-- Once the tests pass, the **installer** is built from the same push (kept as a workflow artifact
-  for 30 days) with `build-installer.ps1 -SkipTests`, since both suites have just run on that
-  commit. To save time, the Tauri command-line tool, Cargo's package downloads and the compiled
+- The **installer** is built in CI only when asked for by hand ("Run workflow" on the Actions tab;
+  kept as a workflow artifact for 30 days). An hour on a Windows runner is billed double and used
+  most of a month's allowance in a few builds, so the installer to try is built on the PC with
+  `build-installer.ps1`. The manual job waits for the tests, then runs
+  `build-installer.ps1 -SkipTests`, since both suites have just run on that commit. To save time, the Tauri command-line tool, Cargo's package downloads and the compiled
   Rust dependencies are kept between runs; the shell's own crate is deleted first, so the app
   itself is always compiled from clean.
 - **Nothing runs on a push to `main`.** Work only reaches main through a pull request whose branch
-  already passed everything above and built its installer.
+  already passed the checks above.
 
 To run the dependency age check yourself (it needs the network; the app itself never does):
 

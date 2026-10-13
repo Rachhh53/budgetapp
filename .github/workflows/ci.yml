@@ -7,8 +7,7 @@ on:
   # no separate pull_request trigger running everything twice.
   #
   # Work reaches main only through a pull request whose branch has already passed the tests
-  # and the dependency checks and had its installer built, so a push to main runs nothing:
-  # it would only repeat, for an hour, what the branch has just done.
+  # and the dependency checks, so a push to main runs nothing.
   push:
     branches-ignore:
       - main
@@ -108,10 +107,12 @@ jobs:
 
   installer:
     name: Windows installer
-    # On the branch, once its tests have passed: this is the installer to try before merging.
-    # The two test jobs have just run both suites on this same commit, so the script is told
-    # not to run them a second time.
-    if: ${{ github.event_name != 'schedule' }}
+    # Only when asked for by hand ("Run workflow" on the Actions tab), once the tests have
+    # passed. An hour on a Windows runner is billed double, which used most of a month's
+    # allowance in a few builds; the installer to try is built on the PC with
+    # build-installer.ps1 instead. The two test jobs have just run both suites on this same
+    # commit, so the script is told not to run them a second time.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: [backend, frontend]
     runs-on: windows-latest
     steps:
