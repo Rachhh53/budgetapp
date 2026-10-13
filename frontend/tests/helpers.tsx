@@ -67,6 +67,18 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/dashboard": () => ({ status: 200, data: EMPTY_DASHBOARD }),
   "GET /api/annual-costs": () => ({ status: 200, data: NO_ANNUAL_COSTS }),
   "GET /api/plans": () => ({ status: 200, data: NO_PLANS }),
+  "POST /api/planner": () => ({ status: 200, data: NOTHING_TO_COMPARE }),
+};
+
+/** Debt & decisions before any account that could take extra money exists. */
+export const NOTHING_TO_COMPARE = {
+  today: "2026-10-09",
+  extraCents: 30000,
+  years: 5,
+  flags: [],
+  options: [],
+  payoff: { order: "highest_rate", debts: [], debtFreeDate: null, debtFreeDateBefore: null, interestSavedCents: null },
+  hidden: [],
 };
 
 /** The dashboard before anything is entered. */

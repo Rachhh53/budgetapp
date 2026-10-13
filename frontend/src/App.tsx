@@ -15,7 +15,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { AnnualCostsPage } from "./pages/AnnualCostsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
-import { ComingSoonPage } from "./pages/ComingSoonPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ExpenseDetailPage } from "./pages/ExpenseDetailPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
@@ -23,6 +23,7 @@ import { IncomeDetailPage } from "./pages/IncomeDetailPage";
 import { PayStubPage } from "./pages/PayStubPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodPage } from "./pages/PayPeriodPage";
+import { PlannerPage } from "./pages/PlannerPage";
 import { PlanYearPage } from "./pages/PlanYearPage";
 import { RecurringItemDetailPage } from "./pages/RecurringItemDetailPage";
 import { RecurringItemsPage } from "./pages/RecurringItemsPage";
@@ -30,7 +31,7 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useApplyTheme } from "./theme/useApplyTheme";
 
-/** The screens built so far, by path. Every other sidebar entry shows "on its way". */
+/** The screen behind each sidebar entry, by path. */
 const PAGES: Record<string, ReactNode> = {
   "/": <PayPeriodPage />,
   "/dashboard": <DashboardPage />,
@@ -39,6 +40,7 @@ const PAGES: Record<string, ReactNode> = {
   "/income": <IncomePage />,
   "/expenses": <ExpensesPage />,
   "/plan": <PlanYearPage />,
+  "/planner": <PlannerPage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
 };
@@ -133,8 +135,8 @@ function Screens() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        {NAV_ITEMS.map(({ path, label }) => (
-          <Route key={path} path={path} element={PAGES[path] ?? <ComingSoonPage title={label} />} />
+        {NAV_ITEMS.map(({ path }) => (
+          <Route key={path} path={path} element={PAGES[path] ?? <NotFoundPage />} />
         ))}
         <Route path="/periods/:start" element={<PayPeriodPage />} />
         <Route path="/dashboard/reports" element={<ReportsPage />} />
@@ -152,7 +154,7 @@ function Screens() {
         <Route path="/expenses/:id" element={<ExpenseDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
         <Route path="/plan/:id/:step?" element={<PlanYearPage />} />
-        <Route path="*" element={<ComingSoonPage title="We couldn't find that screen" />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );

@@ -52,6 +52,9 @@ import app.budget.server.lifecycle.ShutdownRoutes;
 import app.budget.server.plans.PlanService;
 import app.budget.server.plans.PlansRepository;
 import app.budget.server.plans.PlansRoutes;
+import app.budget.server.planner.PlannerRepository;
+import app.budget.server.planner.PlannerRoutes;
+import app.budget.server.planner.PlannerService;
 import app.budget.server.reports.AnnualCostsRoutes;
 import app.budget.server.reports.AnnualCostsRunner;
 import app.budget.server.reports.IncomeReportRunner;
@@ -169,6 +172,9 @@ public final class BudgetServer {
         DashboardService dashboard = new DashboardService(
                 database.jdbi(), ledger, netWorth, payCalendar, accounts, categories, buckets, income, payStubs, settings, reportRunner,
                 annualCosts, plans);
+        PlannerRepository plannerHidden = new PlannerRepository(database.jdbi());
+        PlannerService planner = new PlannerService(
+                database.jdbi(), plannerHidden, accounts, interest, loans, cards, income, items, ledger, payCalendar);
         changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock));
 
         app = Javalin.create(javalin -> {
@@ -219,6 +225,7 @@ public final class BudgetServer {
             new AnnualCostsRoutes(annualCosts, items, savedCopies).register(routes);
             new DashboardRoutes(dashboard).register(routes);
             new PlansRoutes(plans, items).register(routes);
+            new PlannerRoutes(planner, plannerHidden, accounts).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new BackupRoutes(backups, folders, settings, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);

@@ -37,11 +37,11 @@ public final class ChangeRoutes {
 
     /**
      * Requests that only look things up, sent as a POST because what they ask is too long for an
-     * address: running a report and exporting one, or the annual costs table. Looking up paydays can fill in a new year's
+     * address: running a report and exporting one, the annual costs table, or the Debt & decisions comparison. Looking up paydays can fill in a new year's
      * bank holidays on the way, which is not something to offer Undo for.
      */
     private static final Set<String> ASKS_ONLY = Set.of(
-            "/api/reports/run", "/api/reports/export/csv", "/api/reports/export/pdf", "/api/annual-costs/export/csv");
+            "/api/reports/run", "/api/reports/export/csv", "/api/reports/export/pdf", "/api/annual-costs/export/csv", "/api/planner");
 
     private static final String TURN_HELD = "changes.turnHeld";
     private static final String RECORDING = "changes.recording";

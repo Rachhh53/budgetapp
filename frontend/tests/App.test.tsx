@@ -34,12 +34,12 @@ describe("app shell", () => {
     expect(within(sidebar()).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows a screen that is not built yet as on its way", async () => {
+  it("says so kindly when an address leads nowhere", async () => {
     fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
-    renderApp("/planner");
+    renderApp("/no-such-screen");
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Debt & decisions" })).toBeInTheDocument();
-    expect(screen.getByText("This screen is on its way.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "We couldn't find that screen" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "back to Pay periods" })).toHaveAttribute("href", "/");
   });
 
   it("offers the remaining screens behind More on a phone", async () => {
