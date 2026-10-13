@@ -227,9 +227,12 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to a branch:
 - **Dependency checks:** OSV-Scanner fails the build on any known vulnerability in a Maven, npm or
   Cargo dependency, and `check-dependency-age.ps1` fails it if a dependency version is less than
   14 days old. Both also run weekly.
-- On `main` only the **installer** is built (kept as a workflow artifact for 30 days). The checks above
-  are not repeated there, since the branch already passed them; `build-installer.ps1` runs the
-  tests itself before packaging, so the merged code is still tested once. To save time, the Tauri
+- **Nothing runs on a push to `main`**: work only reaches it through a pull request whose branch
+  already passed the checks above.
+- The **installer** is built in CI only when asked for by hand ("Run workflow" on the Actions tab;
+  kept as a workflow artifact for 30 days). An hour on a Windows runner is billed double and used
+  most of a month's allowance in a few builds, so the installer to try is built on the PC with
+  `build-installer.ps1`, which runs the tests itself before packaging. To save time, the Tauri
   command-line tool and Cargo's package downloads are kept between runs; the app's own compiled
   output is not, so what ships is always compiled from clean.
 
