@@ -1,8 +1,9 @@
 // Budget desktop shell.
 //
 // This file does three things and nothing else:
-//   1. starts the bundled Java backend and waits for its `READY port=NNNN` line,
-//   2. opens a window on that local address,
+//   1. opens a window straight away, on a bundled "opening" page,
+//   2. starts the bundled Java backend, waits for its `READY port=NNNN` line and points the
+//      window at that local address,
 //   3. stops the backend when the app exits.
 // All business logic lives in the backend; the page talks to it over HTTP only.
 
@@ -27,6 +28,10 @@ const READY_PREFIX: &str = "READY port=";
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 const WINDOW_LABEL: &str = "main";
+/// Pages bundled with the shell (desktop/ui), and the host the web view serves them from.
+const STARTING_PAGE: &str = "starting.html";
+const ERROR_PAGE: &str = "/error.html";
+const SHELL_HOST: &str = "tauri.localhost";
 /// Windows process flag: run the console-mode backend launcher without showing a console.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -40,6 +45,9 @@ struct Backend {
 /// Empty until the backend has announced itself.
 type BackendState = Mutex<Option<Backend>>;
 
+/// Where the backend is listening, once it is: the only place the window may then show.
+type BackendOrigin = Mutex<Option<tauri::Url>>;
+
 fn main() {
     tauri::Builder::default()
         // A second launch just brings the existing window forward.
@@ -50,16 +58,20 @@ fn main() {
             }
         }))
         .manage(BackendState::default())
+        .manage(BackendOrigin::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            // The window opens at once on a page of the shell's own, so there is something to
+            // see while Java starts, and the web view gets ready at the same time, not after.
+            open_window(&handle);
             // Off the main thread: waiting for the backend must not freeze the event loop.
             thread::spawn(move || match start_backend(&handle) {
                 Ok(backend) => {
                     let port = backend.port;
                     *handle.state::<BackendState>().lock().unwrap() = Some(backend);
-                    open_app_window(&handle, port);
+                    show_app(&handle, port);
                 }
-                Err(_) => open_error_window(&handle),
+                Err(_) => show_error(&handle),
             });
             Ok(())
         })
@@ -77,7 +89,12 @@ fn main() {
 /// Starts the backend and blocks until it prints its READY line (or the timeout passes).
 fn start_backend(app: &AppHandle) -> Result<Backend, String> {
     let exe: PathBuf = app.path().resource_dir().map_err(|e| e.to_string())?.join(BACKEND_EXE);
-    let data_dir = app.path().data_dir().map_err(|e| e.to_string())?.join(DATA_FOLDER);
+    // A data folder already named in the environment wins, so a build can be tried against a
+    // throwaway folder without touching the real data.
+    let data_dir = match std::env::var_os("BUDGET_DATA_DIR") {
+        Some(folder) => PathBuf::from(folder),
+        None => app.path().data_dir().map_err(|e| e.to_string())?.join(DATA_FOLDER),
+    };
     let shutdown_token = random_token()?;
 
     let mut command = Command::new(exe);
@@ -118,10 +135,10 @@ fn start_backend(app: &AppHandle) -> Result<Backend, String> {
     }
 }
 
-fn open_app_window(app: &AppHandle, port: u16) {
-    let url: tauri::Url = format!("http://{LOOPBACK}:{port}/").parse().expect("valid local URL");
-    let backend = url.origin();
-    let _ = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
+/// Opens the app's one window on the shell's own "opening" page.
+fn open_window(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App(STARTING_PAGE.into()))
         .title("Budget")
         .inner_size(1440.0, 900.0)
         .min_inner_size(375.0, 600.0)
@@ -129,16 +146,36 @@ fn open_app_window(app: &AppHandle, port: u16) {
         .disable_drag_drop_handler()
         // Privacy: the window may only ever show the local backend, never another site. Compared by
         // origin so a report the page has just built (a blob: address of the backend's) can be saved.
-        .on_navigation(move |target| target.origin() == backend)
+        // Until the backend is up, it may only show the pages bundled with the shell.
+        .on_navigation(move |target| match handle.state::<BackendOrigin>().lock().unwrap().as_ref() {
+            Some(backend) => target.origin() == backend.origin(),
+            None => is_shell_page(target),
+        })
         .build();
 }
 
+/// The pages bundled with the shell (opening, could not start) are served from this host.
+fn is_shell_page(target: &tauri::Url) -> bool {
+    target.scheme() == "tauri" || target.host_str() == Some(SHELL_HOST)
+}
+
+/// Points the window at the backend, now that it is listening.
+fn show_app(app: &AppHandle, port: u16) {
+    let url: tauri::Url = format!("http://{LOOPBACK}:{port}/").parse().expect("valid local URL");
+    *app.state::<BackendOrigin>().lock().unwrap() = Some(url.clone());
+    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+        let _ = window.navigate(url);
+    }
+}
+
 /// Shown when the backend never became ready; a static page bundled with the shell.
-fn open_error_window(app: &AppHandle) {
-    let _ = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App("error.html".into()))
-        .title("Budget")
-        .inner_size(560.0, 420.0)
-        .build();
+fn show_error(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+        if let Ok(mut page) = window.url() {
+            page.set_path(ERROR_PAGE);
+            let _ = window.navigate(page);
+        }
+    }
 }
 
 /// Asks the backend to stop, then makes sure it is gone.

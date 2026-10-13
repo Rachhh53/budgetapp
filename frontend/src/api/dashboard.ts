@@ -14,7 +14,17 @@ export const DASHBOARD_RANGE_LABELS: Record<DashboardRange, string> = {
 
 /** One thing coming up or wanting attention. Which fields say something depends on `kind` (see `DashboardService.Attention`). */
 export interface Attention {
-  kind: "past_due" | "due_soon" | "low_balance" | "promo_ending" | "stub_review" | "goal_short" | "price_up" | "balance_stale";
+  kind:
+    | "past_due"
+    | "due_soon"
+    | "low_balance"
+    | "promo_ending"
+    | "stub_review"
+    | "goal_short"
+    | "price_up"
+    | "balance_stale"
+    | "plan_reminder"
+    | "plan_active";
   name: string;
   date: string | null;
   amountCents: number | null;

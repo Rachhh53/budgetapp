@@ -20,6 +20,7 @@ import app.budget.server.ledger.Ledger.AccountPoint;
 import app.budget.server.ledger.Ledger.PeriodDetail;
 import app.budget.server.ledger.Ledger.PeriodSummary;
 import app.budget.server.ledger.Ledger.PromoEnd;
+import app.budget.server.plans.PlanService;
 import app.budget.server.reports.AnnualCostsRunner;
 import app.budget.server.reports.ReportDefinition;
 import app.budget.server.reports.ReportRunner;
@@ -67,6 +68,7 @@ public final class DashboardService {
     private final SettingsRepository settings;
     private final ReportRunner reports;
     private final AnnualCostsRunner annualCosts;
+    private final PlanService plans;
 
     public DashboardService(
             Jdbi jdbi,
@@ -80,7 +82,9 @@ public final class DashboardService {
             PayStubsRepository stubs,
             SettingsRepository settings,
             ReportRunner reports,
-            AnnualCostsRunner annualCosts) {
+            AnnualCostsRunner annualCosts,
+            PlanService plans) {
+        this.plans = plans;
         this.jdbi = jdbi;
         this.ledger = ledger;
         this.netWorth = netWorth;
@@ -157,6 +161,8 @@ public final class DashboardService {
      *       last year, {@code itemId}.
      *   <li>{@code balance_stale}: {@code name} of the account longest without a balance, {@code date} it was last entered,
      *       {@code count} of accounts in the same state, {@code accountId}.
+     *   <li>{@code plan_reminder}: time to plan next year. {@code name} is the year, {@code date} the day it starts.
+     *   <li>{@code plan_active}: a plan has just taken effect. {@code name} is its year, {@code date} the day it did.
      * </ul>
      */
     public record Attention(
@@ -418,6 +424,13 @@ public final class DashboardService {
             Account oldest = stale.getFirst();
             list.add(Attention.of("balance_stale", oldest.name(), oldest.latestBalance().date(), null).counting(stale.size()).forAccount(oldest.id()));
         }
+
+        PlanService.Overview planning = plans.overview();
+        if (planning.reminderDue()) {
+            list.add(Attention.of("plan_reminder", String.valueOf(planning.nextYear()), planning.nextStartsOn(), null));
+        }
+        plans.newlyActive().ifPresent(plan ->
+                list.add(Attention.of("plan_active", String.valueOf(plan.year()), plan.activatedOn(), null)));
         return list;
     }
 

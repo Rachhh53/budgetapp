@@ -10,7 +10,8 @@
     the Visual Studio C++ Build Tools. Maven comes from the wrapper in backend/.
 
 .PARAMETER SkipTests
-    Skip both test suites. For quick local packaging only — never for a build you hand out.
+    Skip both test suites. Only for when they have just passed on this same code: CI passes
+    it because its two test jobs run first, on the same commit. Never for a build made by hand.
 #>
 [CmdletBinding()]
 param([switch]$SkipTests)
@@ -27,6 +28,7 @@ $BuildDir  = Join-Path $Desktop 'build'
 $AppInput  = Join-Path $Backend 'server\target\app'
 $MainJar   = 'budget-server.jar'
 $ImageName = 'budget-backend'   # must match BACKEND_EXE in desktop/src-tauri/src/main.rs
+$ClassArchive = 'budget-classes.jsa'
 $MinJava   = 21
 $TauriCli  = '2.12.0'   # keep in step with tauri in desktop/src-tauri/Cargo.toml; at least 14 days old
 
@@ -89,22 +91,32 @@ Write-Host "Modules: $Modules"
 $Runtime = Join-Path $BuildDir 'runtime'
 Invoke-Checked (Join-Path $JavaBin 'jlink.exe') @(
     '--add-modules', $Modules, '--strip-debug', '--no-header-files', '--no-man-pages',
-    '--compress', 'zip-6', '--output', $Runtime)
+    '--compress', 'zip-6', '--generate-cds-archive', '--output', $Runtime)
 
 Step 'Backend app image: jpackage'
 # --win-console so the launcher has a real stdout for the READY line; the shell hides the window.
+# Most of the backend's start is Java loading its classes. With these two options it keeps
+# them, already loaded, in one file beside the jar (class data sharing) and starts from that.
+# The file is written when the backend first closes, which is the trial start below, so it
+# ships inside the installer. $APPDIR is jpackage's own name for the image's app folder.
 Invoke-Checked (Join-Path $JavaBin 'jpackage.exe') @(
     '--type', 'app-image', '--name', $ImageName, '--input', $AppInput, '--main-jar', $MainJar,
     '--runtime-image', $Runtime, '--dest', $BuildDir, '--win-console',
-    '--java-options', '-Dfile.encoding=UTF-8')
+    '--java-options', '-Dfile.encoding=UTF-8',
+    '--java-options', '-XX:+AutoCreateSharedArchive',
+    '--java-options', ('-XX:SharedArchiveFile=$APPDIR\' + $ClassArchive))
 
 Step 'Backend app image: start it once'
 # The tests run on the full JDK, so only this catches a module missing from the trimmed
 # runtime. Starts the image exactly as the shell does, on an empty throwaway data folder, and
-# requires both the READY line and the UI to be served.
-$SmokeData = Join-Path $BuildDir 'smoke-data'
-$SmokeOut  = Join-Path $BuildDir 'smoke-out.log'
-$SmokeEnv  = @{ BUDGET_DATA_DIR = $SmokeData; BUDGET_PORT = '4990'; BUDGET_PARENT_PID = "$PID" }
+# requires both the READY line and the UI to be served. It is then asked to close the way the
+# shell asks, because closing in good order is when Java writes the class file described above.
+$SmokeData  = Join-Path $BuildDir 'smoke-data'
+$SmokeOut   = Join-Path $BuildDir 'smoke-out.log'
+$SmokeToken = [guid]::NewGuid().ToString('N')
+$SmokeEnv   = @{
+    BUDGET_DATA_DIR = $SmokeData; BUDGET_PORT = '4990'; BUDGET_PARENT_PID = "$PID"; BUDGET_SHUTDOWN_TOKEN = $SmokeToken
+}
 $Previous  = @{}
 foreach ($name in $SmokeEnv.Keys) {
     $Previous[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -128,6 +140,16 @@ try {
     $Page = Invoke-WebRequest -Uri "http://127.0.0.1:$SmokePort/" -UseBasicParsing
     if ($Page.StatusCode -ne 200) { throw "The packaged backend started but did not serve the UI (status $($Page.StatusCode))." }
     Write-Host "Started and served the UI on port $SmokePort."
+    try {
+        Invoke-WebRequest -Uri "http://127.0.0.1:$SmokePort/api/shutdown" -Method Post -UseBasicParsing `
+            -Headers @{ 'X-Budget-Shutdown-Token' = $SmokeToken } | Out-Null
+    } catch {
+        # The backend may be gone before its answer arrives; whether it closed is checked next.
+    }
+    if (-not $Smoke.WaitForExit(30000)) { throw 'The packaged backend did not close when asked to.' }
+    $Archive = Join-Path $BuildDir "$ImageName\app\$ClassArchive"
+    if (-not (Test-Path $Archive)) { throw "The packaged backend closed without writing $Archive." }
+    Write-Host "Class file written: $([math]::Round((Get-Item $Archive).Length / 1MB, 1)) MB."
 } finally {
     if (-not $Smoke.HasExited) { Stop-Process -Id $Smoke.Id -Force }
     $Smoke.WaitForExit()

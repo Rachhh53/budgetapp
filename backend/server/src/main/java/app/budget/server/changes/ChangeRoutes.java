@@ -63,6 +63,24 @@ public final class ChangeRoutes {
         routes.post("/api/undo", this::undo);
     }
 
+    /**
+     * Runs something that changes data outside any request (a plan taking effect on its day),
+     * taking a turn like a request would so it never lands in the middle of someone's change.
+     * Nothing is recorded for it: it is not a change of theirs to undo. Returns false, having
+     * run nothing, when a turn could not be had; the caller tries again later.
+     */
+    public boolean betweenChanges(Runnable work) throws InterruptedException {
+        if (!turn.tryAcquire(WAIT_SECONDS, TimeUnit.SECONDS)) {
+            return false;
+        }
+        try {
+            work.run();
+            return true;
+        } finally {
+            turn.release();
+        }
+    }
+
     /** @param available true when there is a change to undo */
     public record UndoStatus(boolean available) {}
 

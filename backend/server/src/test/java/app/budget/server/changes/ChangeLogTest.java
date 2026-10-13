@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.jdbi.v3.core.Jdbi;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,10 +25,18 @@ class ChangeLogTest {
     Jdbi jdbi;
     ChangeLog changes;
 
+    Database database;
+
     @BeforeEach
     void open() {
-        jdbi = Database.open(dataDir).jdbi();
+        database = Database.open(dataDir);
+        jdbi = database.jdbi();
         changes = new ChangeLog(jdbi, CLOCK);
+    }
+
+    @AfterEach
+    void close() {
+        database.close();
     }
 
     private void addTag(String name) {
@@ -78,6 +87,42 @@ class ChangeLogTest {
         long logged = jdbi.withHandle(handle -> handle.createQuery("SELECT COUNT(*) FROM change_log").mapTo(Long.class).one());
 
         assertThat(logged).isEqualTo(1);
+    }
+
+    @Test
+    void aTableThatGainsAColumnHasItsTriggersRebuiltToCoverIt() {
+        // What a migration does: the triggers written before it know nothing of the new column.
+        jdbi.useHandle(handle -> handle.execute("ALTER TABLE tags ADD COLUMN emoji TEXT"));
+        ChangeLog.installTracking(jdbi);
+
+        changes.begin();
+        jdbi.useHandle(handle -> handle.execute(
+                "INSERT INTO tags (name, color, created_at, emoji) VALUES ('Trips', '#0f766e', 'now', 'sun')"));
+        changes.finish();
+
+        String after = jdbi.withHandle(handle -> handle.createQuery("SELECT after FROM change_log").mapTo(String.class).one());
+        assertThat(after).contains("\"emoji\":\"sun\"");
+    }
+
+    @Test
+    void aTriggerLeftOverFromATableThatIsGoneIsRemoved() {
+        jdbi.useHandle(handle -> {
+            handle.execute("CREATE TABLE scratch (id INTEGER PRIMARY KEY)");
+        });
+        ChangeLog.installTracking(jdbi);
+        // Dropping a table takes its triggers with it; one named for it on another table would linger.
+        jdbi.useHandle(handle -> {
+            handle.execute("DROP TABLE scratch");
+            handle.execute("CREATE TRIGGER \"track_scratch_insert\" AFTER INSERT ON tags BEGIN SELECT 1; END");
+        });
+
+        ChangeLog.installTracking(jdbi);
+
+        long triggers = jdbi.withHandle(handle -> handle
+                .createQuery("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'track\\_%' ESCAPE '\\'")
+                .mapTo(Long.class)
+                .one());
+        assertThat(triggers).isEqualTo(ChangeLog.trackedTables(jdbi).size() * 3L);
     }
 
     @Test

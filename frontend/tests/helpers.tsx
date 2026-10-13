@@ -20,6 +20,18 @@ export const DEFAULT_SETTINGS = {
   backup_folder: "",
   backup_keep_count: "30",
   default_date: "",
+  budget_year_start: "01-01",
+  plan_reminder: "10-01",
+};
+
+/** Plan next year in an app with nothing in it yet: no plans, and first-time setup on offer. */
+export const NO_PLANS = {
+  plans: [],
+  nextYear: 2027,
+  nextStartsOn: "2027-01-01",
+  canPlan: false,
+  canSetUp: true,
+  reminderDue: false,
 };
 
 /** Backups before any has been made, kept in the app's own folder. */
@@ -54,6 +66,7 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/backups": () => ({ status: 200, data: NO_BACKUPS }),
   "GET /api/dashboard": () => ({ status: 200, data: EMPTY_DASHBOARD }),
   "GET /api/annual-costs": () => ({ status: 200, data: NO_ANNUAL_COSTS }),
+  "GET /api/plans": () => ({ status: 200, data: NO_PLANS }),
 };
 
 /** The dashboard before anything is entered. */

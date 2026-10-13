@@ -20,6 +20,7 @@ import { EraseAllData } from "../components/EraseAllData";
 import { SecurityCard } from "../components/security/SecurityCard";
 import { BackupsCard } from "../components/settings/BackupsCard";
 import { DefaultDateSetting } from "../components/settings/DefaultDateSetting";
+import { YearDaySetting } from "../components/settings/YearDaySetting";
 import { HolidaysCard } from "../components/settings/HolidaysCard";
 import { PAGE_TITLE } from "../components/ui";
 
@@ -97,6 +98,22 @@ export function SettingsPage() {
                       options={PROJECTION_HORIZONS.map((months) => ({ value: months, label: `${months} months` }))}
                     />
                     <DefaultDateSetting value={data.default_date} />
+                    <YearDaySetting
+                      id="budget-year-start"
+                      label="Budget year starts"
+                      hint="The day next year's plan takes effect. A plan already drawn up keeps the day it was made for."
+                      value={data.budget_year_start}
+                      disabled={update.isPending}
+                      onChange={choose("budget_year_start")}
+                    />
+                    <YearDaySetting
+                      id="plan-reminder"
+                      label="Remind me to plan next year"
+                      hint="From this day the Dashboard suggests planning, until next year has a plan."
+                      value={data.plan_reminder}
+                      disabled={update.isPending}
+                      onChange={choose("plan_reminder")}
+                    />
                   </div>
                 </Card>
 

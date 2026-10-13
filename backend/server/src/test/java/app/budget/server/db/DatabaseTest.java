@@ -9,8 +9,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,9 +25,22 @@ class DatabaseTest {
     @TempDir
     Path dataDir;
 
+    private final List<Database> opened = new ArrayList<>();
+
+    private Database track(Database database) {
+        opened.add(database);
+        return database;
+    }
+
+    /** A database keeps its file open between reads; the temporary folder cannot be removed until it lets go. */
+    @AfterEach
+    void closeDatabases() {
+        opened.forEach(Database::close);
+    }
+
     @Test
     void firstLaunchCreatesTheDatabaseWithWalAndForeignKeys() {
-        Database database = Database.open(dataDir);
+        Database database = track(Database.open(dataDir));
 
         assertThat(dataDir.resolve(Database.DB_FILE)).exists();
         assertThat(pragma(database, "journal_mode")).isEqualToIgnoringCase("wal");
@@ -35,22 +50,22 @@ class DatabaseTest {
 
     @Test
     void firstLaunchTakesNoBackupBecauseThereIsNothingToLose() {
-        Database.open(dataDir);
+        track(Database.open(dataDir));
 
         assertThat(dataDir.resolve(Database.BACKUP_DIR)).doesNotExist();
     }
 
     @Test
     void reopeningAnUpToDateDatabaseTakesNoBackup() {
-        Database.open(dataDir);
-        Database.open(dataDir);
+        track(Database.open(dataDir));
+        track(Database.open(dataDir));
 
         assertThat(dataDir.resolve(Database.BACKUP_DIR)).doesNotExist();
     }
 
     @Test
     void anUpgradeBacksUpTheDataBeforeMigrating() throws IOException {
-        Database before = Database.open(dataDir, CLOCK, MIGRATIONS);
+        Database before = track(Database.open(dataDir, CLOCK, MIGRATIONS));
         before.jdbi().useHandle(handle -> handle
                 .createUpdate("INSERT INTO settings (key, value, updated_at) VALUES (:key, :value, :now)")
                 .bind("key", "theme")
@@ -58,7 +73,7 @@ class DatabaseTest {
                 .bind("now", "2026-10-01T12:00:00Z")
                 .execute());
 
-        Database after = Database.open(dataDir, CLOCK, MIGRATIONS, UPGRADE);
+        Database after = track(Database.open(dataDir, CLOCK, MIGRATIONS, UPGRADE));
 
         List<Path> backups = backups();
         assertThat(backups).hasSize(1);
@@ -66,7 +81,7 @@ class DatabaseTest {
         // The backup is the database as it was: the user's data, without the new table.
         Path restored = Files.createDirectory(dataDir.resolve("restored"));
         Files.copy(backups.get(0), restored.resolve(Database.DB_FILE));
-        Database backup = Database.open(restored, CLOCK, MIGRATIONS);
+        Database backup = track(Database.open(restored, CLOCK, MIGRATIONS));
         assertThat(tableExists(backup, "simulated_upgrade")).isFalse();
         String restoredTheme = backup.jdbi().withHandle(handle -> handle
                 .createQuery("SELECT value FROM settings WHERE key = :key")
@@ -78,13 +93,13 @@ class DatabaseTest {
 
     @Test
     void keepsOnlyTheMostRecentUpgradeBackups() throws IOException {
-        Database.open(dataDir, CLOCK, MIGRATIONS);
+        track(Database.open(dataDir, CLOCK, MIGRATIONS));
         Path backupDir = Files.createDirectory(dataDir.resolve(Database.BACKUP_DIR));
         for (int day = 1; day <= Database.PRE_MIGRATION_BACKUPS_KEPT + 2; day++) {
             Files.createFile(backupDir.resolve(Database.PRE_MIGRATION_PREFIX + "2026090" + day + "-000000000.db"));
         }
 
-        Database.open(dataDir, Clock.offset(CLOCK, Duration.ofDays(1)), MIGRATIONS, UPGRADE);
+        track(Database.open(dataDir, Clock.offset(CLOCK, Duration.ofDays(1)), MIGRATIONS, UPGRADE));
 
         assertThat(backups())
                 .hasSize(Database.PRE_MIGRATION_BACKUPS_KEPT)
@@ -94,7 +109,7 @@ class DatabaseTest {
 
     @Test
     void erasingRemovesTheDataFromTheFileItselfNotJustFromView() throws IOException {
-        Database database = Database.open(dataDir);
+        Database database = track(Database.open(dataDir));
         String marker = "MARKER-" + "x".repeat(40);
         database.jdbi().useHandle(handle -> handle
                 .createUpdate("INSERT INTO settings (key, value, updated_at) VALUES (:key, :value, :now)")
@@ -127,7 +142,7 @@ class DatabaseTest {
 
     @Test
     void repairsEarlierVersionsOfAnItemThatWasTurnedIntoATransfer() throws IOException {
-        Database database = Database.open(dataDir);
+        Database database = track(Database.open(dataDir));
         // A bucket move inside savings (2) that was changed into a transfer from checking (1) to
         // savings on Oct 9, as the app used to save it: the earlier version kept the old accounts.
         database.jdbi().useHandle(handle -> {

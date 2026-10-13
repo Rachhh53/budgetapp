@@ -8,7 +8,7 @@ import { DashboardTabs } from "../components/dashboard/DashboardTabs";
 import { KIND_LABELS } from "../components/items/labels";
 import { signedCents } from "../components/reports/ProjectedResults";
 import { Segmented } from "../components/Segmented";
-import { BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatChange } from "../lib/rates";
@@ -45,14 +45,19 @@ export function AnnualCostsPage() {
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Year over year</p>
           <h1 className={PAGE_TITLE}>Annual costs</h1>
         </div>
-        <button
-          type="button"
-          disabled={exporting.isPending || costs.data === undefined || costs.data.rows.length === 0}
-          onClick={() => exporting.mutate(basis)}
-          className={BUTTON_SECONDARY}
-        >
-          Export CSV
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            disabled={exporting.isPending || costs.data === undefined || costs.data.rows.length === 0}
+            onClick={() => exporting.mutate(basis)}
+            className={BUTTON_SECONDARY}
+          >
+            Export CSV
+          </button>
+          <Link to="/plan" className={`${BUTTON_PRIMARY} flex items-center justify-center`}>
+            Plan next year →
+          </Link>
+        </div>
       </div>
       {exporting.isPending && (
         <p role="status" className="mb-4 text-muted">

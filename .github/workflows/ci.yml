@@ -29,7 +29,7 @@ concurrency:
 jobs:
   backend:
     name: Backend tests
-    if: ${{ github.event_name != 'schedule' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name != 'schedule' }}
     # The app only ships on Windows, so its tests (file locks, data folder, lifecycle) run there.
     runs-on: windows-latest
     steps:
@@ -47,7 +47,7 @@ jobs:
 
   frontend:
     name: Frontend tests
-    if: ${{ github.event_name != 'schedule' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -68,8 +68,7 @@ jobs:
 
   dependencies:
     name: Dependency checks
-    # Branch pushes, the weekly run and manual runs; not repeated on main (see `on` above).
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    # Branch pushes, the weekly run and manual runs.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -108,11 +107,13 @@ jobs:
 
   installer:
     name: Windows installer
-    # Only when asked for by hand ("Run workflow" on the Actions tab). An hour on a Windows
-    # runner is billed double, which used most of a month's allowance in a few builds; the
-    # installer to try is built on the PC with build-installer.ps1 instead. The script runs
-    # the frontend and backend tests itself before it packages.
-    if: github.event_name == 'workflow_dispatch'
+    # Only when asked for by hand ("Run workflow" on the Actions tab), once the tests have
+    # passed. An hour on a Windows runner is billed double, which used most of a month's
+    # allowance in a few builds; the installer to try is built on the PC with
+    # build-installer.ps1 instead. The two test jobs have just run both suites on this same
+    # commit, so the script is told not to run them a second time.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: [backend, frontend]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,18 +129,21 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      # A fresh runner would compile the Tauri command-line tool from source every time (about a
-      # third of this job). Two things are kept between runs, and neither can hide a failure:
-      # the tool itself, which is one fixed version, and Cargo's package downloads, which
-      # Cargo.lock checksums. desktop/src-tauri/target is deliberately NOT cached, so the app
-      # that ships is always compiled from clean.
-      - name: Read the Tauri CLI version from the build script
+      # A fresh runner would compile the Tauri command-line tool and every Rust library the
+      # shell uses from source every time, which was nearly all of this job's hour. Three
+      # things are kept between runs: the tool itself, which is one fixed version; Cargo's
+      # package downloads, which Cargo.lock checksums; and the compiled libraries, which
+      # depend only on Cargo.lock and the compiler. The shell's own code is never reused: its
+      # compiled output is removed below, so what ships is always compiled from this commit.
+      - name: Read the Tauri CLI and Rust versions
         id: tauri
         shell: pwsh
         run: |
           $line = Select-String -Path build-installer.ps1 -Pattern "^\`$TauriCli\s*=\s*'([^']+)'"
           if (-not $line) { throw 'Could not find $TauriCli in build-installer.ps1.' }
           "version=$($line.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+          $rust = (rustc --version) -replace '[^0-9A-Za-z.]+', '-'
+          "rust=$rust" >> $env:GITHUB_OUTPUT
       # No restore-keys on either cache: a new version or a changed Cargo.lock starts from nothing.
       - name: Cache the Tauri CLI
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -153,10 +157,26 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
           key: cargo-registry-${{ runner.os }}-${{ steps.tauri.outputs.version }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      # A new compiler or a changed Cargo.lock starts from nothing, like the two caches above.
+      - name: Cache the compiled Rust libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: desktop/src-tauri/target
+          key: cargo-target-${{ runner.os }}-${{ steps.tauri.outputs.rust }}-${{ steps.tauri.outputs.version }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      # Whatever the cache brought back of the shell itself, and any installer built before, goes.
+      - name: Remove the shell's own compiled output
+        shell: pwsh
+        working-directory: desktop/src-tauri
+        run: |
+          if (Test-Path target) {
+            cargo clean --release --package budget-desktop
+            if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed.' }
+            Remove-Item -Recurse -Force target/release/bundle -ErrorAction SilentlyContinue
+          }
       # The Rust toolchain and the Visual Studio C++ Build Tools are already on the runner.
       - name: Build the installer
         shell: pwsh
-        run: .\build-installer.ps1
+        run: .\build-installer.ps1 -SkipTests
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: budget-installer

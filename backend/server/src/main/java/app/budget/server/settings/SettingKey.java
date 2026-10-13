@@ -2,6 +2,7 @@ package app.budget.server.settings;
 
 import app.budget.server.api.Inputs;
 import java.time.LocalDate;
+import java.time.MonthDay;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Optional;
@@ -50,7 +51,16 @@ public enum SettingKey {
      * always worked out from the real day. The route also refuses a day after today.
      */
     DEFAULT_DATE("default_date", "", SettingKey::emptyOrSupportedDate,
-            "Please choose a day from 2000 on, up to today, or go back to using today.");
+            "Please choose a day from 2000 on, up to today, or go back to using today."),
+    /** The day the budget year starts, as month and day ({@code 01-01}): when next year's plan takes effect. */
+    BUDGET_YEAR_START("budget_year_start", "01-01", SettingKey::dayOfEveryYear,
+            "Please choose the month and day your budget year starts."),
+    /** The day of the year from which Budget suggests planning the next one. */
+    PLAN_REMINDER("plan_reminder", "10-01", SettingKey::dayOfEveryYear,
+            "Please choose the month and day to be reminded to plan next year.");
+
+    private static final Pattern MONTH_DAY = Pattern.compile("\\d{2}-\\d{2}");
+    private static final int NOT_A_LEAP_YEAR = 2001;
 
     private final String key;
     private final String defaultValue;
@@ -70,6 +80,18 @@ public enum SettingKey {
         }
         try {
             return Inputs.inSupportedYears(LocalDate.parse(value));
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
+    /** A month and day, {@code MM-DD}, that every year has: February 29 is not one. */
+    private static boolean dayOfEveryYear(String value) {
+        if (!MONTH_DAY.matcher(value).matches()) {
+            return false;
+        }
+        try {
+            return MonthDay.parse("--" + value).isValidYear(NOT_A_LEAP_YEAR);
         } catch (DateTimeParseException e) {
             return false;
         }

@@ -2,6 +2,7 @@ import {
   CalendarClock,
   FileText,
   type LucideIcon,
+  NotebookPen,
   Percent,
   RefreshCw,
   Target,
@@ -247,6 +248,22 @@ function lineOf(item: Attention, today: string): Line {
         to: "/accounts",
       };
     }
+    case "plan_reminder":
+      return {
+        tag: "Plan",
+        icon: NotebookPen,
+        title: `Time to plan ${item.name}`,
+        detail: `It starts ${date}. Budget suggests each amount from your last 12 months`,
+        to: "/plan",
+      };
+    case "plan_active":
+      return {
+        tag: "Plan",
+        icon: NotebookPen,
+        title: `Your ${item.name} plan is now active`,
+        detail: `Its amounts took over on ${date}. Everything before then is as it was`,
+        to: "/plan",
+      };
   }
 }
 

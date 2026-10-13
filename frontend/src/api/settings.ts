@@ -40,6 +40,10 @@ export interface Settings {
   backup_keep_count: BackupKeepCount;
   /** The day forms for something new open on, as `YYYY-MM-DD`; empty means today. */
   default_date: string;
+  /** The day the budget year starts, as `MM-DD`: when next year's plan takes effect. */
+  budget_year_start: string;
+  /** The day of the year, as `MM-DD`, from which planning next year is suggested. */
+  plan_reminder: string;
 }
 
 export const SETTINGS_KEY = ["settings"] as const;
@@ -71,9 +75,10 @@ export function useUpdateSetting() {
     // The backend answers with the full, saved settings — use that rather than refetching.
     onSuccess: (saved, { key }) => {
       queryClient.setQueryData(SETTINGS_KEY, saved);
-      if (key === "projection_horizon_months" || key === "promo_warning_days") {
+      if (key === "projection_horizon_months" || key === "promo_warning_days" || key === "budget_year_start" || key === "plan_reminder") {
         // Paychecks and pay periods are generated out to the horizon, and a card's promo
         // warnings (on its page and on the pay periods they end in) start from the warning days.
+        // Which year can be planned, and whether the Dashboard says so, follow the other two.
         return queryClient.invalidateQueries({ queryKey: PAY_KEY });
       }
     },

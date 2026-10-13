@@ -4,6 +4,7 @@ import app.budget.server.auth.PinReset;
 import app.budget.server.db.Database;
 import app.budget.server.lifecycle.InstanceLock;
 import app.budget.server.lifecycle.ParentWatch;
+import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.time.Clock;
 import java.util.Arrays;
@@ -46,6 +47,13 @@ public final class Main {
         });
         timer.scheduleWithFixedDelay(
                 server.backups()::backUpIfDue, FIRST_BACKUP_CHECK_SECONDS, BACKUP_CHECK_EVERY_SECONDS, TimeUnit.SECONDS);
+        // Next year's plan takes effect on its first day (spec §4.10): checked straight away, so it is in
+        // force by the time the first screen asks for anything, and again as often as the backup.
+        timer.scheduleWithFixedDelay(server::activateDuePlan, 0, BACKUP_CHECK_EVERY_SECONDS, TimeUnit.SECONDS);
+    }
+
+    private static long msSince(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     public static void main(String[] args) {
@@ -62,8 +70,11 @@ public final class Main {
                 return;
             }
 
+            long jvmUpMs = ManagementFactory.getRuntimeMXBean().getUptime();
+            long started = System.nanoTime();
             InstanceLock lock = InstanceLock.acquire(config.dataDir());
             Database database = Database.open(config.dataDir());
+            long databaseMs = msSince(started);
             Clock clock = Clock.systemDefaultZone();
             // Both "the shell asked us to stop" and "the shell died" end the same way; the
             // shutdown hook below then closes things down in order.
@@ -72,6 +83,7 @@ public final class Main {
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 server.stop();
+                database.close();
                 try {
                     lock.close();
                 } catch (Exception e) {
@@ -79,11 +91,16 @@ public final class Main {
                 }
             }, "budget-stop"));
 
+            long builtMs = msSince(started);
             int port = server.start();
             config.parentPid().ifPresent(pid -> ParentWatch.watch(pid, exit));
             startDailyBackups(server);
             System.out.println("READY port=" + port);
             System.out.flush();
+            // Times only, no data: where a slow start went, read from the local log.
+            LoggerFactory.getLogger(Main.class).info(
+                    "Started: Java up after {} ms, database {} ms, routes {} ms, listening {} ms",
+                    jvmUpMs, databaseMs, builtMs - databaseMs, msSince(started) - builtMs);
         } catch (InstanceLock.AlreadyRunningException e) {
             System.err.println(resetPin ? PinReset.CLOSE_FIRST : "ALREADY_RUNNING");
             System.exit(EXIT_ALREADY_RUNNING);

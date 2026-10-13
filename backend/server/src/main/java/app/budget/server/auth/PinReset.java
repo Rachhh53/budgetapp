@@ -28,8 +28,9 @@ public final class PinReset {
      */
     public static String run(Path dataDir) throws Exception {
         // The same lock the app takes: the PIN is never removed underneath a running app.
-        try (InstanceLock ignored = InstanceLock.acquire(dataDir)) {
-            AuthRepository auth = new AuthRepository(Database.open(dataDir).jdbi());
+        try (InstanceLock ignored = InstanceLock.acquire(dataDir);
+                Database database = Database.open(dataDir)) {
+            AuthRepository auth = new AuthRepository(database.jdbi());
             if (!auth.read().pinSet()) {
                 return NOTHING_TO_DO;
             }
