@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { useCameFrom } from "../lib/cameFrom";
 import { useAccounts } from "../api/accounts";
 import { useBuckets } from "../api/buckets";
 import { useCategories, useTags } from "../api/categories";
@@ -7,6 +8,7 @@ import { type Item, useItems } from "../api/items";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
+import { ByMonthCard } from "../components/items/ByMonthCard";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
@@ -31,6 +33,7 @@ import { formatCents } from "../lib/money";
 export function RecurringItemDetailPage() {
   const id = Number(useParams().id);
   const navigate = useNavigate();
+  const back = useCameFrom({ to: "/recurring", label: "Recurring items" });
   const items = useItems();
   const accounts = useAccounts();
   const categories = useCategories();
@@ -79,8 +82,8 @@ export function RecurringItemDetailPage() {
       <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/recurring" className="text-accent-ink underline">
-              Recurring items
+            <Link to={back.to} className="text-accent-ink underline">
+              {back.label}
             </Link>{" "}
             / {KIND_LABELS[item.kind]}
           </p>
@@ -164,6 +167,7 @@ export function RecurringItemDetailPage() {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-4">
+            <ByMonthCard item={item} />
             <Card title="Schedule" action={edit("schedule", "the schedule")}>
               <dl className="grid gap-4 sm:grid-cols-3">
                 <Fact term="How often">{describeItemSchedule(item.schedule)}</Fact>

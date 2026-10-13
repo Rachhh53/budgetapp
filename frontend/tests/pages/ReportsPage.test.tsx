@@ -7,7 +7,9 @@ import type { IncomeSource } from "../../src/api/income";
 import {
   type IncomeReport,
   NEW_INCOME_REPORT,
+  NEW_PROJECTED_REPORT,
   NEW_REPORT,
+  type ProjectedReport,
   type Report,
   type ReportDefinition,
   type SavedReport,
@@ -708,5 +710,186 @@ describe("Reports", () => {
         expect(bodiesSentTo(fetchMock, "POST /api/reports/export/csv")).toEqual([{ name: "Brightwater 2026", definition: saved.definition, save: true }]),
       );
     });
+  });
+});
+
+/** This year: an electric bill typed over in July, groceries as planned, and one paycheck that paid more. */
+const PROJECTED: ProjectedReport = {
+  kind: "projected_vs_actual",
+  from: "2026-01-01",
+  to: "2026-12-31",
+  groupBy: "month",
+  spending: {
+    groups: [
+      { key: "2026-07", label: "July 2026", color: null, count: 2, changed: 1, projectedCents: 44000, actualCents: 51200, differenceCents: 7200 },
+      { key: "2026-08", label: "August 2026", color: null, count: 0, changed: 0, projectedCents: 0, actualCents: 0, differenceCents: 0 },
+    ],
+    count: 2,
+    changed: 1,
+    projectedCents: 44000,
+    actualCents: 51200,
+    differenceCents: 7200,
+  },
+  paychecks: {
+    groups: [
+      { key: "2026-08", label: "August 2026", color: null, count: 1, changed: 1, projectedCents: 248620, actualCents: 240000, differenceCents: -8620 },
+    ],
+    count: 1,
+    changed: 1,
+    projectedCents: 248620,
+    actualCents: 240000,
+    differenceCents: -8620,
+  },
+  rows: [
+    {
+      kind: "budget",
+      itemId: 3,
+      sourceId: null,
+      scheduledDate: "2026-07-01",
+      date: "2026-07-01",
+      description: "Groceries",
+      categoryId: null,
+      accountId: 1,
+      projectedCents: 30000,
+      actualCents: 30000,
+      differenceCents: 0,
+      changed: false,
+      toCome: false,
+    },
+    {
+      kind: "bill",
+      itemId: 2,
+      sourceId: null,
+      scheduledDate: "2026-07-16",
+      date: "2026-07-16",
+      description: "Electric",
+      categoryId: null,
+      accountId: 1,
+      projectedCents: 14000,
+      actualCents: 21200,
+      differenceCents: 7200,
+      changed: true,
+      toCome: false,
+    },
+    {
+      kind: "paycheck",
+      itemId: null,
+      sourceId: 2,
+      scheduledDate: "2026-08-15",
+      date: "2026-08-15",
+      description: "Brightwater Health paycheck",
+      categoryId: null,
+      accountId: 1,
+      projectedCents: 248620,
+      actualCents: 240000,
+      differenceCents: -8620,
+      changed: true,
+      toCome: false,
+    },
+  ],
+};
+
+describe("Projected vs. actual reports", () => {
+  function withProjected(overrides: Parameters<typeof fakeBackend>[0] = {}) {
+    return withReports({
+      "GET /api/reports": () => ({ status: 200, data: [] }),
+      "POST /api/reports/run": (body) => ({
+        status: 200,
+        data: (body as { definition: ReportDefinition }).definition.kind === "projected_vs_actual" ? PROJECTED : REPORT,
+      }),
+      ...overrides,
+    });
+  }
+
+  it("is the third kind of report, with its own choices in place of the spending ones", async () => {
+    const fetchMock = withProjected();
+    renderApp("/dashboard/reports");
+
+    await userEvent.click(await screen.findByRole("radio", { name: "Projected vs. actual" }));
+
+    await waitFor(() => expect(lastRun(fetchMock)).toEqual(NEW_PROJECTED_REPORT));
+    expect(screen.getByRole("checkbox", { name: "Bills & expenses" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Budgets" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Paychecks" })).toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "One-off spending" })).not.toBeInTheDocument();
+    // A comparison is read in a table: there is no chart to choose, and no receipts to add.
+    expect(screen.queryByRole("combobox", { name: "Show" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export PDF with receipts" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("combobox", { name: "Group by" })).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Month",
+      "Year",
+      "Category",
+      "Item",
+    ]);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Only what was typed over" }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Group by" }), "item");
+    await waitFor(() => expect(lastRun(fetchMock)).toEqual({ ...NEW_PROJECTED_REPORT, changedOnly: true, compareGroupBy: "item" }));
+  });
+
+  it("sets spending and paychecks out apart, each with what was projected, what it was and the difference", async () => {
+    withProjected();
+    renderApp("/dashboard/reports");
+    await userEvent.click(await screen.findByRole("radio", { name: "Projected vs. actual" }));
+
+    const spending = await screen.findByRole("region", { name: "Spending" });
+    expect(within(spending).getByText("Projected", { selector: "p" }).parentElement).toHaveTextContent("$440.00");
+    expect(within(spending).getByText("Actual", { selector: "p" }).parentElement).toHaveTextContent("$512.00");
+    expect(within(spending).getByText("Difference", { selector: "p" }).parentElement).toHaveTextContent("+$72.00");
+    // Said in words as well as by its sign.
+    expect(within(spending).getByText(/\$72\.00 more than projected · 1 of 2 amounts was typed over/)).toBeInTheDocument();
+    expect(within(spending).getByRole("row", { name: "July 2026 1 of 2 $440.00 $512.00 +$72.00" })).toBeInTheDocument();
+    expect(within(spending).getByRole("row", { name: "Total 1 of 2 $440.00 $512.00 +$72.00" })).toBeInTheDocument();
+
+    const paychecks = screen.getByRole("region", { name: "Paychecks" });
+    expect(within(paychecks).getByText(/\$86\.20 less than projected · 1 of 1 amount was typed over/)).toBeInTheDocument();
+    expect(within(paychecks).getByRole("row", { name: "August 2026 1 of 1 $2,486.20 $2,400.00 -$86.20" })).toBeInTheDocument();
+  });
+
+  it("lists every line, opening a bill's or budget's item, and saying what was projected only where it differs", async () => {
+    withProjected();
+    renderApp("/dashboard/reports");
+    await userEvent.click(await screen.findByRole("radio", { name: "Projected vs. actual" }));
+
+    const lines = within(await screen.findByRole("region", { name: "Every line" })).getAllByRole("listitem");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toHaveTextContent("GroceriesBudget · paid from Everyday CheckingAs projected$300.00");
+    expect(within(lines[1]!).getByRole("link")).toHaveAttribute("href", "/recurring/2");
+    expect(lines[1]).toHaveTextContent("Projected $140.00 · +$72.00$212.00");
+    // A paycheck has no page of its own to open.
+    expect(within(lines[2]!).queryByRole("link")).not.toBeInTheDocument();
+    expect(lines[2]).toHaveTextContent("Paycheck · landed in Everyday CheckingProjected $2,486.20 · -$86.20$2,400.00");
+  });
+
+  it("says so when nothing matches", async () => {
+    withProjected({
+      "POST /api/reports/run": () => ({
+        status: 200,
+        data: {
+          ...PROJECTED,
+          rows: [],
+          spending: { ...PROJECTED.spending, groups: [], count: 0, changed: 0 },
+          paychecks: { ...PROJECTED.paychecks, groups: [], count: 0, changed: 0 },
+        },
+      }),
+    });
+    renderApp("/dashboard/reports");
+    await userEvent.click(await screen.findByRole("radio", { name: "Projected vs. actual" }));
+
+    expect(await screen.findByText("Nothing matches this report.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Every line" })).not.toBeInTheDocument();
+  });
+
+  it("opens a saved one folded, saying what it shows", async () => {
+    const saved: SavedReport = { id: 9, name: "What changed", definition: { ...NEW_PROJECTED_REPORT, changedOnly: true, compareGroupBy: "item" } };
+    withProjected({ "GET /api/reports": () => ({ status: 200, data: [saved] }) });
+    renderApp("/dashboard/reports");
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Report" }));
+    await userEvent.click(await screen.findByRole("option", { name: "What changed" }));
+
+    expect(
+      await screen.findByText("This year · projected vs. actual for bills & expenses, budgets, paychecks, only what was typed over · by item"),
+    ).toBeInTheDocument();
   });
 });

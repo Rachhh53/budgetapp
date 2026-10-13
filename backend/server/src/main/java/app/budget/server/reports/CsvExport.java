@@ -5,7 +5,9 @@ import app.budget.server.api.Inputs;
 import app.budget.server.reports.ReportRunner.Named;
 import app.budget.server.reports.ReportRunner.Report;
 import app.budget.server.reports.ReportRunner.Row;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -25,7 +27,60 @@ final class CsvExport {
     private static final List<String> INCOME_HEADER = List.of(
             "Date", "Description", "Kind", "Landed in", "Gross", "Taxes", "Other deductions", "Amount", "Estimate", "From a pay stub");
 
+    private static final List<String> PROJECTED_HEADER = List.of(
+            "Date", "Description", "Kind", "Category", "Account", "Projected", "Actual", "Difference", "Typed over", "Still to come");
+
     private CsvExport() {}
+
+    /**
+     * A projected vs. actual report's lines. "Difference" is what it was, less what was projected.
+     *
+     * @param names the names for each of the report's rows, in the same order
+     */
+    static byte[] ofProjected(ProjectedVsActualRunner.Report report, List<ProjectedVsActualRunner.Named> names) {
+        StringBuilder csv = new StringBuilder(BYTE_ORDER_MARK);
+        line(csv, PROJECTED_HEADER);
+        for (int i = 0; i < report.rows().size(); i++) {
+            ProjectedVsActualRunner.Row row = report.rows().get(i);
+            line(csv, List.of(
+                    row.date().toString(),
+                    text(row.description()),
+                    ProjectedVsActualRunner.kind(row.kind()),
+                    text(names.get(i).category()),
+                    text(names.get(i).account()),
+                    dollars(row.projectedCents()),
+                    dollars(row.actualCents()),
+                    dollars(row.differenceCents()),
+                    row.changed() ? "yes" : "",
+                    row.toCome() ? "yes" : ""));
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Annual costs (spec §5.8): one row per recurring item, a column per year or twelve months.
+     *
+     * @param windows the heading of each of those columns, oldest first
+     * @param rows    for each item: its name, then one amount per window, then what the newest comes to a month
+     */
+    static byte[] ofAnnual(List<String> windows, List<AnnualRow> rows) {
+        StringBuilder csv = new StringBuilder(BYTE_ORDER_MARK);
+        List<String> header = new ArrayList<>(List.of("Item", "Kind", "Category"));
+        header.addAll(windows);
+        header.addAll(List.of("Change %", "Per month"));
+        line(csv, header);
+        for (AnnualRow row : rows) {
+            List<String> cells = new ArrayList<>(List.of(text(row.name()), text(row.kind()), text(row.category())));
+            row.totalsCents().forEach(cents -> cells.add(dollars(cents)));
+            cells.add(row.changeBp() == null ? "" : BigDecimal.valueOf(row.changeBp(), 2).toPlainString());
+            cells.add(dollars(row.perMonthCents()));
+            line(csv, cells);
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** One line of the annual costs file. {@code changeBp} is {@code null} when there is nothing earlier to compare with. */
+    record AnnualRow(String name, String kind, String category, List<Long> totalsCents, Integer changeBp, long perMonthCents) {}
 
     /**
      * An income report's lines. "Amount" is the take-home of a paycheck, or the money in, the

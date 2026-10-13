@@ -1,6 +1,7 @@
 import { CalendarDays, CircleCheck, Clock, type LucideIcon, Minus, Send } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { Link, useParams } from "react-router";
+import { useCameFrom } from "../lib/cameFrom";
 import { type Account, useAccounts } from "../api/accounts";
 import { useCategories, useTags } from "../api/categories";
 import {
@@ -43,6 +44,7 @@ const STATUS_ICONS: Record<ReimbursementStatus, LucideIcon> = {
  */
 export function ExpenseDetailPage() {
   const id = Number(useParams().id);
+  const back = useCameFrom({ to: "/expenses", label: "Expenses & receipts" });
   const detail = useEntry(id);
   const accounts = useAccounts();
   const { editEntry } = useAddItem();
@@ -77,8 +79,8 @@ export function ExpenseDetailPage() {
       <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/expenses" className="text-accent-ink underline">
-              Expenses &amp; receipts
+            <Link to={back.to} className="text-accent-ink underline">
+              {back.label}
             </Link>{" "}
             / {kindName}
           </p>

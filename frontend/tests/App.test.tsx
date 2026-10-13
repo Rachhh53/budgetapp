@@ -6,6 +6,11 @@ import { calls, DEFAULT_SETTINGS, fakeBackend, renderApp, UNLOCKED } from "./hel
 
 const DEFAULTS = DEFAULT_SETTINGS;
 
+/** The desktop sidebar: the first of the two "Main" navigations (the phone's bar is the other). */
+function sidebar(): HTMLElement {
+  return screen.getAllByRole("navigation", { name: "Main" })[0]!;
+}
+
 describe("app shell", () => {
   it("shows the sidebar with every screen and the privacy note", async () => {
     fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
@@ -13,7 +18,9 @@ describe("app shell", () => {
 
     const sidebar = (await screen.findAllByRole("navigation", { name: "Main" }))[0]!;
     expect(within(sidebar).getByRole("link", { name: "Pay periods" })).toHaveAttribute("aria-current", "page");
-    expect(within(sidebar).getAllByRole("link")).toHaveLength(12);
+    // Reports and Annual costs are tabs of the Dashboard, not entries of their own.
+    expect(within(sidebar).getAllByRole("link")).toHaveLength(10);
+    expect(within(sidebar).queryByRole("link", { name: "Reports" })).not.toBeInTheDocument();
     expect(screen.getByText("Data stored only on this PC")).toBeInTheDocument();
   });
 
@@ -24,6 +31,14 @@ describe("app shell", () => {
     await userEvent.click((await screen.findAllByRole("link", { name: "Dashboard" }))[0]!);
 
     expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
+    expect(within(sidebar()).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("shows a screen that is not built yet as on its way", async () => {
+    fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
+    renderApp("/plan");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Plan next year" })).toBeInTheDocument();
     expect(screen.getByText("This screen is on its way.")).toBeInTheDocument();
   });
 

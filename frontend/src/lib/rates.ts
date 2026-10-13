@@ -34,3 +34,9 @@ export function parseRate(text: string): number | null {
   const basisPoints = Number(whole || "0") * 100 + Number(fraction.padEnd(2, "0") || "0");
   return Number.isSafeInteger(basisPoints) ? basisPoints : null;
 }
+
+/** A change in basis points, with its sign said: `977` → `"+9.77%"`, `-270` → `"-2.70%"`, `0` → `"0.00%"`. */
+export function formatChange(basisPoints: number): string {
+  const sign = basisPoints > 0 ? "+" : basisPoints < 0 ? "-" : "";
+  return `${sign}${formatRate(Math.abs(basisPoints))}`;
+}

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { useCameFrom } from "../lib/cameFrom";
 import {
   holdsCash,
   useAccount,
@@ -39,6 +40,7 @@ import { formatRate } from "../lib/rates";
  */
 export function AccountDetailPage() {
   const id = Number(useParams().id);
+  const back = useCameFrom({ to: "/accounts", label: "Accounts" });
   const navigate = useNavigate();
   const detail = useAccount(id);
   const accounts = useAccounts();
@@ -92,8 +94,8 @@ export function AccountDetailPage() {
       <div className={DETAIL_HEADER}>
         <div className="min-w-0">
           <p className="text-sm text-muted">
-            <Link to="/accounts" className="text-accent-ink underline">
-              Accounts
+            <Link to={back.to} className="text-accent-ink underline">
+              {back.label}
             </Link>{" "}
             / {TYPE_LABELS[account.type]}
           </p>

@@ -3,13 +3,14 @@
 name: CI
 
 on:
-  # Every branch. A pull request shows the checks of its latest commit, so there is no
-  # separate pull_request trigger running everything twice.
+  # Every branch but main. A pull request shows the checks of its latest commit, so there is
+  # no separate pull_request trigger running everything twice.
   #
   # Work reaches main only through a pull request whose branch has already passed the tests
-  # and the dependency checks, so a push to main does not repeat them: it runs the installer
-  # job alone, and build-installer.ps1 runs the full test suites itself before it packages.
+  # and the dependency checks, so a push to main runs nothing.
   push:
+    branches-ignore:
+      - main
   # New vulnerabilities are published without anyone touching the code: re-scan weekly.
   schedule:
     - cron: "17 6 * * 1" # Mondays 06:17 UTC
@@ -107,9 +108,11 @@ jobs:
 
   installer:
     name: Windows installer
-    # Only for main. The script runs the frontend and backend tests before it packages, so
-    # main is still tested once, on the merged code.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Only when asked for by hand ("Run workflow" on the Actions tab). An hour on a Windows
+    # runner is billed double, which used most of a month's allowance in a few builds; the
+    # installer to try is built on the PC with build-installer.ps1 instead. The script runs
+    # the frontend and backend tests itself before it packages.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

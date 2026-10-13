@@ -26,6 +26,8 @@ import app.budget.server.categories.CategoriesRoutes;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.changes.ChangeLog;
 import app.budget.server.changes.ChangeRoutes;
+import app.budget.server.dashboard.DashboardRoutes;
+import app.budget.server.dashboard.DashboardService;
 import app.budget.server.data.DataRoutes;
 import app.budget.server.db.Database;
 import app.budget.server.entries.EntriesRepository;
@@ -47,7 +49,10 @@ import app.budget.server.loans.LoansRepository;
 import app.budget.server.loans.LoansRoutes;
 import app.budget.server.lifecycle.PortFinder;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import app.budget.server.reports.AnnualCostsRoutes;
+import app.budget.server.reports.AnnualCostsRunner;
 import app.budget.server.reports.IncomeReportRunner;
+import app.budget.server.reports.ProjectedVsActualRunner;
 import app.budget.server.reports.ReportRunner;
 import app.budget.server.reports.ReportsRepository;
 import app.budget.server.reports.ReportsRoutes;
@@ -152,6 +157,10 @@ public final class BudgetServer {
         ReportRunner reportRunner = new ReportRunner(entries, items, itemCalendar, payCalendar, accounts, categories, tags, attachments);
         PayStubsRepository payStubs = new PayStubsRepository(database.jdbi(), clock);
         IncomeReportRunner incomeReportRunner = new IncomeReportRunner(payCalendar, income, payStubs, entries, accounts, ledger);
+        ProjectedVsActualRunner projectedRunner = new ProjectedVsActualRunner(items, itemCalendar, payCalendar, accounts, categories, tags);
+        AnnualCostsRunner annualCosts = new AnnualCostsRunner(itemCalendar, payCalendar, categories);
+        DashboardService dashboard = new DashboardService(
+                database.jdbi(), ledger, netWorth, payCalendar, accounts, categories, buckets, income, payStubs, settings, reportRunner, annualCosts);
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
@@ -196,8 +205,10 @@ public final class BudgetServer {
             new AttachmentsRoutes(attachments, storedFiles, entries, items, itemCalendar, cards, accounts, clock).register(routes);
             new PayStubsRoutes(payStubs, storedFiles, income, payCalendar, accounts, clock)
                     .register(routes);
-            new ReportsRoutes(reports, reportRunner, incomeReportRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
+            new ReportsRoutes(reports, reportRunner, incomeReportRunner, projectedRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
                     .register(routes);
+            new AnnualCostsRoutes(annualCosts, items, savedCopies).register(routes);
+            new DashboardRoutes(dashboard).register(routes);
             new DataRoutes(database, sessions).register(routes);
             new BackupRoutes(backups, folders, settings, sessions).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);

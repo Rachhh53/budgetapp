@@ -52,6 +52,37 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/net-worth": () => ({ status: 200, data: NOTHING_OWNED }),
   "GET /api/cards": () => ({ status: 200, data: [] }),
   "GET /api/backups": () => ({ status: 200, data: NO_BACKUPS }),
+  "GET /api/dashboard": () => ({ status: 200, data: EMPTY_DASHBOARD }),
+  "GET /api/annual-costs": () => ({ status: 200, data: NO_ANNUAL_COSTS }),
+};
+
+/** The dashboard before anything is entered. */
+export const EMPTY_DASHBOARD = {
+  today: "2026-10-09",
+  range: "three_months",
+  netWorth: { cents: 0, changeCents: null, since: null },
+  lowestAhead: null,
+  saved: { totalCents: 0, transfersCents: 0, contributionsCents: 0, matchCents: 0 },
+  debt: { totalCents: 0, cardsCents: 0, loansCents: 0 },
+  spending: { from: "2026-07-10", to: "2026-10-09", totalCents: 0, categories: [] },
+  netWorthOverTime: [],
+  attention: [],
+};
+
+/** Annual costs before any bill or budget is set up. */
+export const NO_ANNUAL_COSTS = {
+  basis: "calendar",
+  windows: [
+    { from: "2024-01-01", to: "2024-12-31", label: "2024" },
+    { from: "2025-01-01", to: "2025-12-31", label: "2025" },
+    { from: "2026-01-01", to: "2026-12-31", label: "2026" },
+  ],
+  rows: [],
+  totalsCents: [0, 0, 0],
+  changeBp: null,
+  perMonthCents: 0,
+  biggestIncrease: null,
+  budgetedFrom: "2026-11-01",
 };
 
 /** Net worth before anything is entered. */
@@ -86,6 +117,13 @@ const nothingThisYear: Handler = () => ({
 const NO_STUBS = /^GET \/api\/income-sources\/\d+\/pay-stubs$/;
 const noStubs: Handler = () => ({ status: 200, data: [] });
 
+/** Any bill's or budget's year before anything falls in it. */
+const NO_BY_MONTH = /^GET \/api\/items\/\d+\/by-month$/;
+const nothingByMonth: Handler = () => ({
+  status: 200,
+  data: { year: 2026, months: [], highest: null, lowest: null, totalCents: 0, averageCents: 0, budgetCents: 0, budgetTooLow: false },
+});
+
 /** Any loan before its terms are entered. */
 const NO_LOAN = /^GET \/api\/accounts\/\d+\/loan$/;
 const noLoanTerms: Handler = () => ({
@@ -114,7 +152,7 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
     const handler =
-      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : NO_STUBS.test(`${method} ${path}`) ? noStubs : undefined);
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : NO_STUBS.test(`${method} ${path}`) ? noStubs : NO_BY_MONTH.test(`${method} ${path}`) ? nothingByMonth : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;
