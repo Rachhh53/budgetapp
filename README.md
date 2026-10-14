@@ -6,7 +6,7 @@ All data stays on your PC: no cloud, no telemetry, no update checks, no outbound
 - `spec.md` — the build plan and source of truth
 - `proposals.md` — the features being tracked
 - `design/` — mockups for every screen (sample data only)
-- `.github/workflows/ci.yml` — tests and dependency checks on every branch push; the installer on `main`
+- `.github/workflows/ci.yml` — tests and dependency checks on every branch push; the installer only when asked for by hand
 
 ## Layout
 
@@ -210,6 +210,8 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | POST | `/api/plans/{id}/finish` | finish first-time setup: the plan becomes active at once. 409 for any other plan |
 | DELETE | `/api/plans/{id}` | delete a draft before it starts; body `{ "confirm": "delete-draft" }`. 409 for an active or closed plan |
 | GET | `/api/items/{id}/plan-suggestion` | what next year's plan would suggest for one bill or budget: `{ suggestion: { year, basis, perYearCents, perMonthCents, reason, trendBp } }`, or `{ suggestion: null }` when there is nothing to suggest |
+| POST | `/api/planner` | Debt & decisions: where an extra amount each month could go `{ extraCents, years, order?, growthBp? }`. `years` is 1, 3, 5, 10, 20 or 30; `order` is `highest_rate` (the default) or `smallest_balance`; `growthBp` assumes a yearly rate for an investment or savings account in place of its own, by account id (7% is 700; 0 to 10000) and is not saved. Answers `{ today, extraCents, years, flags, options, payoff, hidden }`: an option is a debt (`interestSavedCents`, `payoffDate`, `payoffDateBefore`, `monthsSooner`, `freedCents`, or `problem: "no_payment"`) or an account to invest or save in (`valueCents`, `putInCents`, `growthCents`, `matchCents`); `payoff` is `{ order, debts, debtFreeDate, debtFreeDateBefore, interestSavedCents }`. A look-up: records nothing for Undo |
+| PUT, DELETE | `/api/planner/hidden/{accountId}` | leave a loan, card, investment or savings account out of that comparison; DELETE brings it back. 400 for a checking account |
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | GET | `/api/undo` | `{ available }`: whether there is a change to undo |

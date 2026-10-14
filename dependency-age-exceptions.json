@@ -7,14 +7,5 @@
     "check-dependency-age.ps1 fails the build once an entry's version is 14 days old (it is no",
     "longer an exception: delete the entry) or is no longer used at all."
   ],
-  "exceptions": [
-    {
-      "ecosystem": "npm",
-      "package": "source-map-js",
-      "version": "1.2.2",
-      "fixes": "GHSA-68fv-2mgg-jv7q",
-      "reason": "Every version before 1.2.2 has the vulnerability, and Vite, Tailwind and jsdom all depend on the package, so it cannot be dropped. Build and test tooling only; not part of the installed app. Forced through 'overrides' in frontend/package.json.",
-      "added": "2026-10-06"
-    }
-  ]
+  "exceptions": []
 }

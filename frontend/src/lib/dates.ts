@@ -24,6 +24,20 @@ export function formatDate(iso: string): string {
   return MONTH_DAY_YEAR.format(toDate(iso));
 }
 
+const MONTH_YEAR = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" });
+
+/** `"2028-09-15"` → `"Sep 2028"`: for a date years off, where the day says nothing. */
+export function formatMonth(iso: string): string {
+  return MONTH_YEAR.format(toDate(iso));
+}
+
+/** Whole calendar months from one date's month to another's; negative when `to` is earlier. */
+export function monthsBetween(from: string, to: string): number {
+  const [fromYear = 0, fromMonth = 1] = from.split("-").map(Number);
+  const [toYear = 0, toMonth = 1] = to.split("-").map(Number);
+  return (toYear - fromYear) * 12 + (toMonth - fromMonth);
+}
+
 const TIME = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 
 /**
