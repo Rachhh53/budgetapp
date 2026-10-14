@@ -56,6 +56,14 @@ public final class FolderBrowser {
         for (File root : File.listRoots()) {
             folders.add(new Folder(root.getPath(), root.getPath()));
         }
+        // A Mac has one root, "/"; its other drives (a USB stick, a backup disk) are the folders in /Volumes.
+        // Only asked on a system whose paths start with "/": on Windows the same text is not a valid path.
+        if (File.separatorChar == '/') {
+            Path volumes = Path.of("/Volumes");
+            if (Files.isDirectory(volumes)) {
+                folders.add(new Folder("Drives", volumes.toString()));
+            }
+        }
         return new Listing(null, null, List.copyOf(folders), false);
     }
 

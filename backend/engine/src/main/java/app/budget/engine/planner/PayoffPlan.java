@@ -79,8 +79,18 @@ public final class PayoffPlan {
      */
     public record Outcome(long id, LocalDate payoffDate, Money interest, boolean paysOff) {}
 
-    /** @param debts one outcome per debt, in the order the debts were given */
-    public record Result(List<Outcome> debts) {
+    /**
+     * What every debt together still owed at the end of a month.
+     *
+     * @param month the month; the first point is the month before the first payment, as things stand today
+     */
+    public record Owed(YearMonth month, Money total) {}
+
+    /**
+     * @param debts one outcome per debt, in the order the debts were given
+     * @param owed  what they all owed together, month by month, until the last is gone (or the months run out)
+     */
+    public record Result(List<Outcome> debts, List<Owed> owed) {
 
         public Outcome of(long id) {
             return debts.stream().filter(outcome -> outcome.id() == id).findFirst().orElseThrow();
@@ -136,6 +146,10 @@ public final class PayoffPlan {
             }
         }
 
+        List<Owed> owedByMonth = new ArrayList<>();
+        if (month != null) {
+            owedByMonth.add(new Owed(month.minusMonths(1), total(owed)));
+        }
         // What used to be paid into debts that are gone: it goes wherever the extra goes.
         Money freed = Money.ZERO;
         for (int step = 0; step < Amortization.MAX_PAYMENTS && anyOwed(owed); step++, month = month.plusMonths(1)) {
@@ -174,13 +188,22 @@ public final class PayoffPlan {
                     freed = freed.plus(debts.get(target).payment());
                 }
             }
+            owedByMonth.add(new Owed(month, total(owed)));
         }
 
         List<Outcome> outcomes = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             outcomes.add(new Outcome(debts.get(i).id(), paidOff[i], interest[i], owed[i].isZero()));
         }
-        return new Result(outcomes);
+        return new Result(outcomes, List.copyOf(owedByMonth));
+    }
+
+    private static Money total(Money[] owed) {
+        Money sum = Money.ZERO;
+        for (Money amount : owed) {
+            sum = sum.plus(amount);
+        }
+        return sum;
     }
 
     private static boolean anyOwed(Money[] owed) {

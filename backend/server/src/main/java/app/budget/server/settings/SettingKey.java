@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
  */
 public enum SettingKey {
     THEME("theme", "system", Set.of("light", "dark", "system")::contains,
-            "Please choose light, dark, or follow Windows."),
+            "Please choose light, dark, or follow the system setting."),
     ACCENT_COLOR("accent_color", "#0f766e", Pattern.compile("#[0-9a-fA-F]{6}").asMatchPredicate(),
             "Colors need to be a six-digit hex code, like #0f766e."),
     /** How far ahead pay periods and balances are projected. */

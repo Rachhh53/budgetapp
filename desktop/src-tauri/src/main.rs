@@ -23,7 +23,15 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 /// The backend only listens on loopback unless phone access is turned on in Settings.
 const LOOPBACK: &str = "127.0.0.1";
 const DATA_FOLDER: &str = "Budget";
+/// The backend launcher inside the bundled jpackage app image, which jpackage lays out differently on
+/// each system. Only the Windows build is made and tried; the others are written so a build there can
+/// follow (spec §12, Mac).
+#[cfg(windows)]
 const BACKEND_EXE: &str = "backend/budget-backend.exe";
+#[cfg(target_os = "macos")]
+const BACKEND_EXE: &str = "backend/budget-backend.app/Contents/MacOS/budget-backend";
+#[cfg(not(any(windows, target_os = "macos")))]
+const BACKEND_EXE: &str = "backend/bin/budget-backend";
 const READY_PREFIX: &str = "READY port=";
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);

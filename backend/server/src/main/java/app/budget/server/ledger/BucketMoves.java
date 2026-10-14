@@ -100,6 +100,7 @@ public final class BucketMoves {
      * @param occurrences every occurrence since the earliest bucket was opened, and far enough
      *                    ahead to include the next due date of every bill saved up for; one
      *                    dated before its bucket was opened no longer names that bucket
+     * @param visits      billed-later items' visits across the same stretch (spec §4.6)
      * @param periods     the pay periods across that same stretch, earliest first
      */
     static List<Move> derive(
@@ -108,6 +109,7 @@ public final class BucketMoves {
             List<Entry> entriesWithSplits,
             List<Item> items,
             List<Occurrence> occurrences,
+            List<Occurrence> visits,
             List<PayPeriod> periods) {
         Map<Long, Bucket> open = new HashMap<>();
         buckets.forEach(bucket -> open.put(bucket.id(), bucket));
@@ -152,7 +154,8 @@ public final class BucketMoves {
                 moves.add(new Move(
                         paidFrom.id(), occurrence.payBy(), -occurrence.amountCents(), Kind.SPENT, occurrence.name(), occurrence.itemId()));
             }
-            if (occurrence.saveUpBucketId() != null) {
+            // An invoice is saved up for visit by visit, below, not shared over the paydays before it.
+            if (occurrence.saveUpBucketId() != null && occurrence.invoiceId() == null) {
                 savedUpFor.computeIfAbsent(occurrence.itemId(), id -> new ArrayList<>()).add(occurrence);
             }
         }
@@ -160,6 +163,7 @@ public final class BucketMoves {
         Map<Long, Item> itemsById = new HashMap<>();
         items.forEach(item -> itemsById.put(item.id(), item));
         savedUpFor.forEach((itemId, due) -> saveUps(itemsById.get(itemId), due, open, periods, moves));
+        billedLaterSaveUps(occurrences, visits, open, moves);
 
         moves.sort(Comparator.comparing(Move::date));
         return moves;
@@ -262,6 +266,50 @@ public final class BucketMoves {
                 }
             }
             afterPrevious = bill.payBy().plusDays(1);
+        }
+    }
+
+    /**
+     * Saving up for something billed later (spec §4.6): each visit sets its amount aside on its
+     * day, and an invoice takes back out what was set aside for the visits it covers, never more
+     * than it costs. Visits before the bucket was opened set nothing aside, so an invoice that
+     * covers them is partly paid from money not in a bucket.
+     */
+    private static void billedLaterSaveUps(
+            List<Occurrence> occurrences, List<Occurrence> visits, Map<Long, Bucket> open, List<Move> moves) {
+        Map<Long, List<Move>> setAside = new HashMap<>();
+        for (Occurrence visit : visits) {
+            Bucket bucket = visit.saveUpBucketId() == null ? null : open.get(visit.saveUpBucketId());
+            if (visit.skipped() || bucket == null || visit.dueDate().isBefore(bucket.openedOn())) {
+                continue;
+            }
+            Move move = new Move(bucket.id(), visit.dueDate(), visit.amountCents(), Kind.SAVE_UP, visit.name(), visit.itemId());
+            moves.add(move);
+            setAside.computeIfAbsent(visit.itemId(), unused -> new ArrayList<>()).add(move);
+        }
+
+        List<Occurrence> invoices = occurrences.stream()
+                .filter(occurrence -> occurrence.invoiceId() != null && occurrence.saveUpBucketId() != null)
+                .sorted(Comparator.comparing(Occurrence::coversThrough))
+                .toList();
+        Map<Long, LocalDate> coveredUpTo = new HashMap<>();
+        for (Occurrence invoice : invoices) {
+            Bucket bucket = open.get(invoice.saveUpBucketId());
+            LocalDate after = coveredUpTo.getOrDefault(invoice.itemId(), LocalDate.MIN);
+            coveredUpTo.put(invoice.itemId(), invoice.coversThrough());
+            if (invoice.skipped() || bucket == null) {
+                continue;
+            }
+            long covered = setAside.getOrDefault(invoice.itemId(), List.of()).stream()
+                    .filter(move -> move.bucketId() == bucket.id()
+                            && move.date().isAfter(after)
+                            && !move.date().isAfter(invoice.coversThrough()))
+                    .mapToLong(Move::amountCents)
+                    .sum();
+            long out = Math.min(covered, invoice.amountCents());
+            if (out > 0) {
+                moves.add(new Move(bucket.id(), invoice.payBy(), -out, Kind.SAVE_UP_PAID, invoice.name(), invoice.itemId()));
+            }
         }
     }
 

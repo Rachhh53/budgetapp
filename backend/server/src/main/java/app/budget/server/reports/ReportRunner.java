@@ -183,7 +183,12 @@ public final class ReportRunner {
             Map<Long, List<Long>> tagsByItem = items.all().stream().collect(Collectors.toMap(Item::id, Item::tagIds));
             Map<Owner.Occurrence, Integer> files = attachments.countsByOccurrence(
                     dates.from().minusYears(1), dates.to().plusYears(1));
-            for (Occurrence occurrence : calendar.expand(dates.from(), dates.to()).occurrences()) {
+            // A visit not billed yet is listed as still to come, at what it costs (spec §4.6).
+            ItemCalendar.Expansion expansion = calendar.expand(dates.from(), dates.to());
+            List<Occurrence> spent = new ArrayList<>(expansion.occurrences());
+            Set<Occurrence> notYetBilled = new HashSet<>(calendar.notYetBilled(expansion));
+            spent.addAll(notYetBilled);
+            for (Occurrence occurrence : spent) {
                 boolean wanted = occurrence.kind() == ItemKind.BILL && definition.include().contains(Include.BILLS)
                         || occurrence.kind() == ItemKind.BUDGET && definition.include().contains(Include.BUDGETS);
                 LocalDate date = occurrence.paid() && occurrence.paidDate() != null ? occurrence.paidDate() : occurrence.dueDate();
@@ -195,10 +200,11 @@ public final class ReportRunner {
                         null, occurrence.itemId(), occurrence.scheduledDate(), date, occurrence.name(), occurrence.name(),
                         occurrence.categoryId(), tagsByItem.getOrDefault(occurrence.itemId(), List.of()),
                         occurrence.payFromAccountId(), occurrence.amountCents(),
-                        occurrence.estimate() || !occurrence.paid() && date.isAfter(today),
-                        !occurrence.paid() && date.isAfter(today),
+                        occurrence.estimate() || !occurrence.paid() && date.isAfter(today) || notYetBilled.contains(occurrence),
+                        !occurrence.paid() && (date.isAfter(today) || notYetBilled.contains(occurrence)),
                         null, 0, 0,
-                        files.getOrDefault(new Owner.Occurrence(occurrence.itemId(), occurrence.scheduledDate()), 0));
+                        // A visit keeps no receipts: they are on its invoice.
+                        notYetBilled.contains(occurrence) ? 0 : files.getOrDefault(new Owner.Occurrence(occurrence.itemId(), occurrence.scheduledDate()), 0));
                 if (filter.lets(row)) {
                     rows.add(row);
                     lines.add(line(row, Share.NONE));

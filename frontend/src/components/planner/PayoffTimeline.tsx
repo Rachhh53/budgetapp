@@ -91,7 +91,15 @@ export function PayoffTimeline({ debts, today, extraCents }: { debts: readonly P
                   <div className="h-2.5 rounded-r" style={{ width: share(debt.payoffDate, debt.paysOff), backgroundColor: debt.color }} />
                   {!debt.planned && <div className="h-2.5 rounded-r bg-line" style={{ width: share(debt.payoffDateBefore, debt.paysOffBefore) }} />}
                 </div>
-                <p className="mt-1 text-sm font-semibold wrap-break-word">{words}</p>
+                <p className="mt-1 text-sm font-semibold wrap-break-word">
+                  {words}
+                  {debt.interestSavedCents !== null && debt.interestSavedCents > 0 && (
+                    <span className="font-normal text-muted">
+                      {" "}
+                      · <span data-amount>{formatCents(debt.interestSavedCents)}</span> less interest
+                    </span>
+                  )}
+                </p>
               </div>
             </li>
           );

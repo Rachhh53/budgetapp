@@ -9,6 +9,7 @@ import app.budget.engine.items.Placement;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.income.PayCalendar;
+import app.budget.server.items.InvoicesRepository.Invoice;
 import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Override;
 import app.budget.server.items.ItemsRepository.Pause;
@@ -21,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 /**
  * Works out the occurrences of recurring items from what is stored: their versions, the pay
@@ -41,10 +43,12 @@ public final class ItemCalendar {
 
     private final ItemsRepository items;
     private final PayCalendar pay;
+    private final InvoicesRepository invoices;
 
-    public ItemCalendar(ItemsRepository items, PayCalendar pay) {
+    public ItemCalendar(ItemsRepository items, PayCalendar pay, InvoicesRepository invoices) {
         this.items = items;
         this.pay = pay;
+        this.invoices = invoices;
     }
 
     /**
@@ -61,6 +65,9 @@ public final class ItemCalendar {
      * @param saveUpBucketId the bucket this bill is saved up for in
      * @param fromBucketId   the bucket of the paying account it comes out of; {@code null} for money not in a bucket
      * @param checkNumber    the check this one was paid with; {@code null} when none was written
+     * @param invoiceId      an invoice for a billed-later item's visits, standing in for them as one bill to pay (spec §4.6);
+     *                       {@code null} for anything its schedule names
+     * @param coversThrough  an invoice: the last visit it pays for; {@code null} otherwise
      */
     public record Occurrence(
             long itemId,
@@ -87,14 +94,16 @@ public final class ItemCalendar {
             Long bucketId,
             Long saveUpBucketId,
             Long fromBucketId,
-            String checkNumber) {
+            String checkNumber,
+            Long invoiceId,
+            LocalDate coversThrough) {
 
         /** This occurrence at another amount: for a bucket move that only has room for part of itself. */
         public Occurrence withAmount(long cents) {
             return new Occurrence(
                     itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, cents, estimate, projectedCents,
                     autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
-                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber);
+                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber, invoiceId, coversThrough);
         }
 
         /**
@@ -105,7 +114,7 @@ public final class ItemCalendar {
             return new Occurrence(
                     itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, cents, isEstimate, projectedCents,
                     autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
-                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber);
+                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber, invoiceId, coversThrough);
         }
 
         /** This occurrence with its money going into no bucket: for one dated before its bucket was opened. */
@@ -113,12 +122,17 @@ public final class ItemCalendar {
             return new Occurrence(
                     itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, amountCents, estimate, projectedCents,
                     autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
-                    skipped, null, saveUpBucketId, fromBucketId, checkNumber);
+                    skipped, null, saveUpBucketId, fromBucketId, checkNumber, invoiceId, coversThrough);
         }
     }
 
-    /** Occurrences together with the pay periods they were placed in. */
-    public record Expansion(List<PayPeriod> periods, List<Occurrence> occurrences) {}
+    /**
+     * Occurrences together with the pay periods they were placed in.
+     *
+     * @param visits what billed-later items' schedules name (spec §4.6): they move no money, and are
+     *               not among {@code occurrences}, where their invoices are instead
+     */
+    public record Expansion(List<PayPeriod> periods, List<Occurrence> occurrences, List<Occurrence> visits) {}
 
     /**
      * What one occurrence of this version costs and what that adds up to over a year.
@@ -135,8 +149,22 @@ public final class ItemCalendar {
         return expand(active, from, to);
     }
 
-    /** The occurrence of {@code item} that its schedule names on {@code scheduledDate}, if there is one. */
+    /**
+     * The occurrence of {@code item} that its schedule names on {@code scheduledDate}, if there is one:
+     * a visit, for something billed later. An invoice is not among them; it is changed as an invoice.
+     */
     public Optional<Occurrence> find(Item item, LocalDate scheduledDate) {
+        Expansion expansion = expand(List.of(item), scheduledDate, scheduledDate);
+        return Stream.concat(expansion.occurrences().stream(), expansion.visits().stream())
+                .filter(occurrence -> occurrence.invoiceId() == null && occurrence.scheduledDate().equals(scheduledDate))
+                .findFirst();
+    }
+
+    /**
+     * What receipts can be kept with on {@code scheduledDate}: an occurrence, or an invoice by its due
+     * date. A visit is not something paid, so it keeps none.
+     */
+    public Optional<Occurrence> findPaid(Item item, LocalDate scheduledDate) {
         return expand(List.of(item), scheduledDate, scheduledDate).occurrences().stream()
                 .filter(occurrence -> occurrence.scheduledDate().equals(scheduledDate))
                 .findFirst();
@@ -183,7 +211,9 @@ public final class ItemCalendar {
         }
 
         Map<Long, List<Pause>> pauses = items.pauses();
+        Map<Long, List<Invoice>> invoiced = invoices.byItem();
         List<Occurrence> occurrences = new ArrayList<>();
+        List<Occurrence> visits = new ArrayList<>();
         for (Item item : chosen) {
             List<Pause> paused = pauses.getOrDefault(item.id(), List.of());
             List<OccurrencePlanner.Version<Terms>> versions = item.versions().stream()
@@ -196,14 +226,81 @@ public final class ItemCalendar {
                     continue;
                 }
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
-                occurrences.add(occurrence(item, planned, edit, assigner, payRule));
+                Occurrence occurrence = occurrence(item, planned, edit, assigner, payRule, null, null);
+                // A visit of something billed later moves no money: its invoice does, when it comes.
+                (planned.version().details().billedLater() ? visits : occurrences).add(occurrence);
+            }
+            for (Invoice invoice : invoiced.getOrDefault(item.id(), List.of())) {
+                if (!invoice.dueDate().isBefore(lo) && !invoice.dueDate().isAfter(hi)) {
+                    occurrences.add(invoiceOccurrence(item, invoice, assigner, payRule));
+                }
             }
         }
         occurrences.sort(Comparator.comparing(Occurrence::payBy).thenComparing(Occurrence::name));
-        return new Expansion(periods, occurrences);
+        visits.sort(Comparator.comparing(Occurrence::dueDate).thenComparing(Occurrence::name));
+        return new Expansion(periods, occurrences, visits);
     }
 
-    private Occurrence occurrence(Item item, Planned<Terms> planned, Override edit, PeriodAssigner assigner, ScheduleRule payRule) {
+    /**
+     * An invoice as one bill to pay: due on its own due date, from the account its item is paid from
+     * then, at the amount billed. What its visits came to is kept as the projected amount, so the
+     * Projected vs. actual report can set the two side by side.
+     */
+    private Occurrence invoiceOccurrence(Item item, Invoice invoice, PeriodAssigner assigner, ScheduleRule payRule) {
+        Version version = item.versionOn(invoice.dueDate());
+        Planned<Terms> planned = new Planned<>(invoice.dueDate(), invoice.dueDate(), null, planned(version));
+        Override edit = new Override(
+                item.id(), invoice.dueDate(), invoice.amountCents(), null, null, invoice.paid(), invoice.paidDate(),
+                invoice.confirmationCode(), invoice.note(), false,
+                invoice.projectedCents() == invoice.amountCents() ? null : invoice.projectedCents(), invoice.checkNumber());
+        return occurrence(item, planned, edit, assigner, payRule, invoice.id(), invoice.coversThrough());
+    }
+
+    /**
+     * The visits in {@code expansion} that no invoice covers yet, skipped ones left out: a cost still
+     * to be billed, which reports and annual costs count as still to come, at what each visit costs.
+     */
+    public List<Occurrence> notYetBilled(Expansion expansion) {
+        Map<Long, LocalDate> coveredUpTo = new HashMap<>();
+        invoices.byItem().forEach((itemId, list) -> list.stream()
+                .map(Invoice::coversThrough)
+                .max(Comparator.naturalOrder())
+                .ifPresent(day -> coveredUpTo.put(itemId, day)));
+        return expansion.visits().stream()
+                .filter(visit -> !visit.skipped())
+                .filter(visit -> {
+                    LocalDate covered = coveredUpTo.get(visit.itemId());
+                    return covered == null || visit.dueDate().isAfter(covered);
+                })
+                .toList();
+    }
+
+    /**
+     * The visits of a billed-later item that no invoice covers yet, up to {@code through}, oldest
+     * first; skipped ones are left out (spec §4.6).
+     */
+    public List<Occurrence> unbilled(Item item, LocalDate through) {
+        LocalDate after = invoices.forItem(item.id()).stream()
+                .map(Invoice::coversThrough)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        LocalDate from = after != null ? after.plusDays(1) : item.versions().getFirst().effectiveFrom();
+        if (from.isAfter(through)) {
+            return List.of();
+        }
+        return expand(List.of(item), from, through).visits().stream()
+                .filter(visit -> !visit.skipped() && !visit.dueDate().isBefore(from) && !visit.dueDate().isAfter(through))
+                .toList();
+    }
+
+    private Occurrence occurrence(
+            Item item,
+            Planned<Terms> planned,
+            Override edit,
+            PeriodAssigner assigner,
+            ScheduleRule payRule,
+            Long invoiceId,
+            LocalDate coversThrough) {
         Terms terms = planned.version().details();
         LocalDate due = edit.dueDate() != null ? edit.dueDate() : planned.due();
 
@@ -252,7 +349,9 @@ public final class ItemCalendar {
                 terms.bucketId(),
                 terms.saveUpBucketId(),
                 terms.fromBucketId(),
-                edit.checkNumber());
+                edit.checkNumber(),
+                invoiceId,
+                coversThrough);
     }
 
     private static OccurrencePlanner.Version<Terms> planned(Version version) {

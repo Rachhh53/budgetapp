@@ -10,9 +10,10 @@ import {
   usePlanner,
   useSetPlannerHidden,
 } from "../api/planner";
-import { EstimateKey } from "../components/Amount";
+import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { AMOUNT_HELP, MoneyField } from "../components/MoneyField";
+import { DebtOverTimeChart } from "../components/planner/DebtOverTimeChart";
 import { OptionCard } from "../components/planner/OptionCard";
 import { PayoffTimeline } from "../components/planner/PayoffTimeline";
 import { PlannerFlags } from "../components/planner/PlannerFlags";
@@ -243,6 +244,12 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
 
       {payoff.debts.length > 0 && (
         <Card title={`Payoff order with the extra ${formatCents(extraCents)}`}>
+          {payoff.interestSavedCents !== null && payoff.interestSavedCents > 0 && (
+            <div className="mb-3">
+              <Amount cents={payoff.interestSavedCents} estimate className="text-2xl font-bold" />
+              <p className="mt-1 text-sm text-muted">less interest altogether, by paying the extra in this order</p>
+            </div>
+          )}
           <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <p className="text-muted">
               The extra goes to one debt at a time. When it is gone, what was being paid into it rolls into the next.
@@ -253,11 +260,6 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
                   {payoff.debtFreeDateBefore !== null && payoff.debtFreeDateBefore !== payoff.debtFreeDate && (
                     <> (was {formatMonth(payoff.debtFreeDateBefore)})</>
                   )}
-                  {payoff.interestSavedCents !== null && payoff.interestSavedCents > 0 && (
-                    <>
-                      , with <span data-amount>{formatCents(payoff.interestSavedCents)}</span> less interest
-                    </>
-                  )}
                   .
                 </>
               )}
@@ -267,6 +269,11 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
             </div>
           </div>
           <PayoffTimeline debts={payoff.debts} today={today} extraCents={extraCents} />
+          <DebtOverTimeChart
+            points={payoff.owedOverTime}
+            debtFreeDate={payoff.debtFreeDate}
+            debtFreeDateBefore={payoff.debtFreeDateBefore}
+          />
         </Card>
       )}
 

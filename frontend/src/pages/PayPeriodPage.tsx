@@ -1,12 +1,13 @@
-import { ChevronLeft, ChevronRight, Clock, Info, PartyPopper, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Info, PartyPopper, ReceiptText, TriangleAlert } from "lucide-react";
 import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Bucket, useBuckets } from "../api/buckets";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
+import type { Unbilled } from "../api/invoices";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
 import { usePlans } from "../api/plans";
@@ -26,7 +27,10 @@ import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
+import { FIND_PARAM, PeriodSearch } from "../components/period/PeriodSearch";
+import { foundEntry, foundOccurrence } from "../api/search";
 import { ItemForm } from "../components/items/ItemForm";
+import { InvoiceForm } from "../components/period/InvoiceForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { PaycheckForm } from "../components/period/PaycheckForm";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
@@ -173,6 +177,7 @@ export function PayPeriodPage() {
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:gap-3">
           {anyEstimate && <EstimateKey />}
+          <PeriodSearch />
           <HideAmountsButton />
           <AddItemButton />
         </div>
@@ -206,7 +211,13 @@ export function PayPeriodPage() {
       <div className="grid grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-3">
         {/* On a phone, what needs doing by hand comes first (design/phone-pay-period.png). */}
         <div className="flex flex-col gap-3 lg:order-2 lg:min-h-0">
-          <ManualPanel occurrences={lists.manual} carriedOver={detail.carriedOver} oneOffs={lists.oneOffs} context={context} />
+          <ManualPanel
+            occurrences={lists.manual}
+            carriedOver={detail.carriedOver}
+            oneOffs={lists.oneOffs}
+            unbilled={detail.unbilled ?? []}
+            context={context}
+          />
         </div>
         <div className="flex flex-col gap-3 lg:order-1 lg:min-h-0 lg:overflow-y-auto">
           {/* An investment's assumed growth is not income: it shows on that account's own tab instead. */}
@@ -287,7 +298,11 @@ const ACCOUNT_PARAM = "account";
  */
 function usePeriodPath(): (start: string) => string {
   const { search } = useLocation();
-  return (start) => `/periods/${start}${search}`;
+  // The row a search led to belongs to this period alone, so it is not carried to the next.
+  const kept = new URLSearchParams(search);
+  kept.delete(FIND_PARAM);
+  const rest = kept.toString();
+  return (start) => `/periods/${start}${rest === "" ? "" : `?${rest}`}`;
 }
 
 /** ← and → move between periods, unless the keys are being used to type or to work a dialog. */
@@ -662,6 +677,7 @@ function Row({
   amount,
   below,
   wrap = false,
+  find,
 }: {
   lead?: ReactNode;
   title: ReactNode;
@@ -670,9 +686,25 @@ function Row({
   below?: ReactNode;
   /** Let the detail run onto a second line instead of cutting it short: for rows where every word matters. */
   wrap?: boolean;
+  /** What a search names this row by (`?find=`), so the row it led to can be pointed out. */
+  find?: string;
 }) {
+  const [params] = useSearchParams();
+  const found = find !== undefined && params.get(FIND_PARAM) === find;
+  const ref = useRef<HTMLLIElement>(null);
+  // Brought into view once, when a search leads here; a column that scrolls by itself scrolls to it too.
+  useEffect(() => {
+    if (found) {
+      ref.current?.scrollIntoView?.({ block: "center" });
+    }
+  }, [found]);
   return (
-    <li onClick={clickRowToEdit} className={`py-1.5 lg:py-1 ${ROW_OPENS}`}>
+    <li
+      ref={ref}
+      onClick={clickRowToEdit}
+      aria-current={found ? "true" : undefined}
+      className={`py-1.5 lg:py-1 ${ROW_OPENS} ${found ? "rounded-md bg-bg ring-2 ring-accent ring-inset lg:px-1" : ""}`}
+    >
       <div className="flex items-center gap-3">
         {lead}
         <div className="min-w-0 flex-1 leading-tight">
@@ -840,6 +872,7 @@ function IncomePanel({
           {moneyIn.map((entry) => (
             <Row
               key={entry.id}
+              find={foundEntry(entry.id)}
               title={<EntryName entry={entry} />}
               detail={`One-off · ${formatDay(entry.date)} → ${context.accountName(entry.accountId)}`}
               amount={<EntryAmount entry={entry} />}
@@ -902,6 +935,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
           {occurrences.map((occurrence) => (
             <Row
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
+              find={foundOccurrence(occurrence.itemId, occurrence.dueDate)}
               lead={<span className="shrink-0 rounded-md bg-bg px-1.5 py-0.5 text-xs font-semibold text-muted">AUTO</span>}
               title={<ItemName occurrence={occurrence} context={context} />}
               detail={
@@ -933,6 +967,7 @@ function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurren
             {occurrences.map((occurrence) => (
               <Row
                 key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
+                find={foundOccurrence(occurrence.itemId, occurrence.dueDate)}
                 lead={
                   <CategoryDot
                     categoryId={occurrence.categoryId}
@@ -1028,11 +1063,14 @@ function ManualPanel({
   occurrences,
   carriedOver,
   oneOffs,
+  unbilled,
   context,
 }: {
   occurrences: readonly Occurrence[];
   carriedOver: readonly Occurrence[];
   oneOffs: readonly Entry[];
+  /** Billed-later visits waiting for an invoice: on the current period only. */
+  unbilled: readonly Unbilled[];
   context: RowContext;
 }) {
   // Something carried over is listed once, even when it also belongs to this period.
@@ -1044,10 +1082,13 @@ function ManualPanel({
 
   return (
     <Panel title="Pay manually & one-offs" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} grow>
-      {bills.length === 0 && oneOffs.length === 0 ? (
+      {bills.length === 0 && oneOffs.length === 0 && unbilled.length === 0 ? (
         <Empty>Nothing to pay by hand this period, and no one-offs. Use + Add item for a one-time purchase.</Empty>
       ) : (
         <ul className="divide-y divide-line">
+          {unbilled.map((waiting) => (
+            <UnbilledRow key={`unbilled-${waiting.itemId}`} unbilled={waiting} context={context} />
+          ))}
           {bills.map((occurrence) => (
             <ManualRow
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
@@ -1059,6 +1100,7 @@ function ManualPanel({
           {oneOffs.map((entry) => (
             <Row
               key={entry.id}
+              find={foundEntry(entry.id)}
               lead={<CategoryDot categoryId={entry.categoryId} tagIds={entry.tagIds} context={context} />}
               title={<EntryName entry={entry} />}
               detail={oneOffDetail(entry, context)}
@@ -1068,6 +1110,42 @@ function ManualPanel({
         </ul>
       )}
     </Panel>
+  );
+}
+
+/**
+ * Visits of something billed later that no invoice covers yet (spec §4.6). They move no money, so the
+ * amount is an estimate; the row stays on the current period until **Mark as invoiced** turns them
+ * into a bill, which is then ticked like any other (Rachel, 2026-10-14).
+ */
+function UnbilledRow({ unbilled, context }: { unbilled: Unbilled; context: RowContext }) {
+  const [invoicing, setInvoicing] = useState(false);
+  const visits = unbilled.visits === 1 ? "1 visit" : `${unbilled.visits} visits`;
+  const span = unbilled.since === unbilled.through ? formatDay(unbilled.since) : `${formatDay(unbilled.since)} – ${formatDay(unbilled.through)}`;
+  return (
+    <>
+      <Row
+        lead={<ReceiptText aria-hidden className="size-4 shrink-0 text-muted" />}
+        title={
+          <Link to={`/recurring/${unbilled.itemId}`} className="cursor-pointer hover:underline">
+            {unbilled.name}
+          </Link>
+        }
+        detail={`${visits} not billed yet · ${span} · ${context.accountName(unbilled.payFromAccountId)}`}
+        wrap
+        amount={<Amount cents={unbilled.amountCents} estimate />}
+        below={
+          <button
+            type="button"
+            onClick={() => setInvoicing(true)}
+            className="mt-1 inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-semibold lg:min-h-9"
+          >
+            Mark as invoiced
+          </button>
+        }
+      />
+      {invoicing && <InvoiceForm unbilled={unbilled} onClose={() => setInvoicing(false)} />}
+    </>
   );
 }
 
@@ -1085,7 +1163,9 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
   const edit = useEditOccurrence();
   const checkboxId = useId();
 
-  const due = `Due ${formatDay(occurrence.dueDate)}`;
+  const due = occurrence.coversThrough
+    ? `Invoice for visits through ${formatDay(occurrence.coversThrough)} · due ${formatDay(occurrence.dueDate)}`
+    : `Due ${formatDay(occurrence.dueDate)}`;
   const isPastDue = pastDue([occurrence]).length > 0;
   const soon = dueSoon(occurrence, Number(useSettings().data?.unpaid_highlight_days ?? 0));
   // Paying late is allowed, and is kept on record: the day it was paid, against the day it was due.
@@ -1095,6 +1175,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
 
   return (
     <Row
+      find={foundOccurrence(occurrence.itemId, occurrence.dueDate)}
       lead={
         // The label gives the small box a 44px target (spec: touch targets).
         <label htmlFor={checkboxId} className="-my-1 -ml-2 flex size-11 shrink-0 cursor-pointer items-center justify-center">

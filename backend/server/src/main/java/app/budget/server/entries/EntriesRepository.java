@@ -120,6 +120,24 @@ public final class EntriesRepository {
                 .list()));
     }
 
+    /**
+     * Entries whose description or payee holds {@code text} (any capitals), newest first, at most {@code limit}.
+     * The text is matched as it is typed: {@code %} and {@code _} in it are not wildcards.
+     */
+    public List<Entry> matching(String text, int limit) {
+        // "!" as the escape character: JDBI's statement parser misreads a quoted backslash.
+        String escaped = text.replace("!", "!!").replace("%", "!%").replace("_", "!_");
+        return jdbi.withHandle(handle -> complete(handle, handle
+                .createQuery(SELECT + """
+                        WHERE description LIKE :pattern ESCAPE '!' OR payee LIKE :pattern ESCAPE '!'
+                        ORDER BY date DESC, id DESC LIMIT :limit
+                        """)
+                .bind("pattern", "%" + escaped + "%")
+                .bind("limit", limit)
+                .map((rs, ctx) -> entry(rs))
+                .list()));
+    }
+
     /** The date of the oldest entry; empty when there are none. */
     public Optional<LocalDate> earliestDate() {
         return jdbi.withHandle(handle -> handle

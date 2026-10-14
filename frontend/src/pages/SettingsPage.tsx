@@ -24,8 +24,11 @@ import { YearDaySetting } from "../components/settings/YearDaySetting";
 import { HolidaysCard } from "../components/settings/HolidaysCard";
 import { PAGE_TITLE } from "../components/ui";
 
+/** The system the window runs on, by name, for "Follow …"; Windows unless it is plainly a Mac. */
+const SYSTEM_NAME = /Mac/i.test(navigator.userAgent) ? "macOS" : "Windows";
+
 const THEME_LABELS: Record<Theme, string> = {
-  system: "Follow Windows",
+  system: `Follow ${SYSTEM_NAME}`,
   light: "Light",
   dark: "Dark",
 };

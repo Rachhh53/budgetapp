@@ -360,7 +360,7 @@ public final class CardsRoutes {
                             new ScheduleRule(
                                     rule.frequency(), rule.interval(), saved.dueDay(), rule.day2(), rule.month(), rule.startDate(),
                                     rule.endDate(), rule.weekendRule(), rule.manualDates()),
-                            terms.daysAfterPayday(), terms.bucketId(), terms.saveUpBucketId(), terms.fromBucketId()),
+                            terms.daysAfterPayday(), terms.bucketId(), terms.saveUpBucketId(), terms.fromBucketId(), terms.billedLater()),
                     today);
         }
         return saved;
@@ -489,7 +489,8 @@ public final class CardsRoutes {
                 0,
                 null,
                 null,
-                null);
+                null,
+                false);
         long itemId = items.create(
                 new Identity(shortened(account.name() + " · " + promo.label() + " payoff"), ItemKind.CARD_PAYMENT, null, false, List.of()),
                 terms,

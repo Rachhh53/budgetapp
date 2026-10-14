@@ -46,6 +46,7 @@ function debt(fields: Partial<PayoffDebt> & Pick<PayoffDebt, "accountId" | "name
     paysOff: true,
     paysOffBefore: true,
     planned: false,
+    interestSavedCents: null,
     ...fields,
   };
 }
@@ -147,12 +148,18 @@ const COMPARISON: PlannerComparison = {
     order: "highest_rate",
     debts: [
       debt({ accountId: 6, name: "Discover", rateBp: 0, payoffDate: "2027-03-15", payoffDateBefore: "2027-03-15", planned: true }),
-      debt({ accountId: 5, name: "Car loan", color: "#b45309", rateBp: 690, payoffDate: "2028-09-15", payoffDateBefore: "2030-03-15" }),
-      debt({ accountId: 8, name: "Mortgage", rateBp: 625, payoffDate: "2047-08-01", payoffDateBefore: "2050-10-01" }),
+      debt({ accountId: 5, name: "Car loan", color: "#b45309", rateBp: 690, payoffDate: "2028-09-15", payoffDateBefore: "2030-03-15", interestSavedCents: 82_400 }),
+      debt({ accountId: 8, name: "Mortgage", rateBp: 625, payoffDate: "2047-08-01", payoffDateBefore: "2050-10-01", interestSavedCents: 3_107_600 }),
     ],
     debtFreeDate: "2047-08-01",
     debtFreeDateBefore: "2050-10-01",
     interestSavedCents: 3_190_000,
+    owedOverTime: [
+      { month: "2026-10-01", withCents: 30_126_000, withoutCents: 30_126_000 },
+      { month: "2026-11-01", withCents: 29_900_000, withoutCents: 29_960_000 },
+      { month: "2047-08-01", withCents: 0, withoutCents: 4_200_000 },
+      { month: "2050-10-01", withCents: 0, withoutCents: 0 },
+    ],
   },
   hidden: [{ accountId: 2, name: "Rainy Day Savings", type: "savings" }],
 };
@@ -289,13 +296,19 @@ describe("Debt & decisions", () => {
     renderApp("/planner");
 
     const payoff = await screen.findByRole("region", { name: "Payoff order with the extra $300.00" });
-    expect(payoff).toHaveTextContent("Debt-free by Aug 2047 (was Oct 2050), with $31,900.00 less interest.");
+    expect(payoff).toHaveTextContent("$31,900.00 (estimate)less interest altogether, by paying the extra in this order");
+    expect(payoff).toHaveTextContent("Debt-free by Aug 2047 (was Oct 2050).");
     const rows = within(payoff).getAllByRole("listitem");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Discover0.00%Mar 2027 · already planned"),
-      expect.stringContaining("Car loan6.90% · gone firstSep 2028 (was Mar 2030 · 1 yr 6 mo sooner)"),
-      expect.stringContaining("Mortgage6.25% · nextAug 2047 (was Oct 2050 · 3 yrs 2 mo sooner)"),
+      expect.stringContaining("Car loan6.90% · gone firstSep 2028 (was Mar 2030 · 1 yr 6 mo sooner) · $824.00 less interest"),
+      expect.stringContaining("Mortgage6.25% · nextAug 2047 (was Oct 2050 · 3 yrs 2 mo sooner) · $31,076.00 less interest"),
     ]);
+    // Debt over time, said in words beside the chart.
+    expect(within(payoff).getByText(/Debt over time/)).toBeInTheDocument();
+    expect(payoff).toHaveTextContent(
+      "All of it together starts at $301,260.00. With the extra it is all paid off by Aug 2047; without it, by Oct 2050.",
+    );
   });
 
   it("asks again in the other order", async () => {

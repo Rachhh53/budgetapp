@@ -77,7 +77,7 @@ export const NOTHING_TO_COMPARE = {
   years: 5,
   flags: [],
   options: [],
-  payoff: { order: "highest_rate", debts: [], debtFreeDate: null, debtFreeDateBefore: null, interestSavedCents: null },
+  payoff: { order: "highest_rate", debts: [], debtFreeDate: null, debtFreeDateBefore: null, interestSavedCents: null, owedOverTime: [] },
   hidden: [],
 };
 

@@ -452,6 +452,7 @@ describe("recurring items screen", () => {
         amountCents: 14000,
         amountMode: "per_occurrence",
         estimate: true,
+        billedLater: false,
         categoryId: null,
         payFromAccountId: 1,
         payToAccountId: null,
@@ -1081,5 +1082,61 @@ describe("Where a recurring item's breadcrumb leads", () => {
     const header = screen.getByRole("heading", { level: 1, name: "Electric" }).parentElement!;
     expect(within(header).getByRole("link", { name: "Recurring items" })).toHaveAttribute("href", "/recurring");
     expect(within(header).queryByRole("link", { name: "Annual costs" })).not.toBeInTheDocument();
+  });
+});
+
+describe("recurring item page: billed later", () => {
+  const THERAPY: Item = { ...ELECTRIC, id: 9, name: "Therapy", estimate: false, billedLater: true };
+
+  it("lists the visits waiting for an invoice and the invoices so far, and removes the newest", async () => {
+    const fetchMock = withItems([THERAPY], {
+      "GET /api/items/9/invoices": () => ({
+        status: 200,
+        data: {
+          notBilled: [
+            { scheduledDate: "2026-10-06", date: "2026-10-06", amountCents: 12000 },
+            { scheduledDate: "2026-10-13", date: "2026-10-13", amountCents: 12000 },
+          ],
+          notBilledCents: 24000,
+          invoices: [
+            {
+              invoice: {
+                id: 3, itemId: 9, invoiceDate: "2026-10-01", dueDate: "2026-10-20", coversThrough: "2026-09-30", amountCents: 61000,
+                projectedCents: 60000, paid: false, paidDate: null, confirmationCode: null, checkNumber: null, note: null,
+              },
+              periodStart: "2026-10-15",
+            },
+          ],
+        },
+      }),
+      "DELETE /api/items/9/invoices/3": () => ({ status: 200, data: { deleted: true }, changed: true }),
+    });
+    renderApp("/recurring/9");
+
+    const card = await screen.findByRole("region", { name: "Billed later" });
+    expect(await within(card).findByText(/2 visits up to today, coming to/)).toHaveTextContent("$240.00");
+    expect(within(card).getByRole("button", { name: "Mark as invoiced" })).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: /Visits through Sep 30, 2026, Due Oct 20: open its pay period/ })).toHaveAttribute(
+      "href",
+      "/periods/2026-10-15",
+    );
+
+    await userEvent.click(within(card).getByRole("button", { name: "Remove this invoice" }));
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/items/9/invoices/3"));
+  });
+
+  it("asks whether a bill is billed later, and sends it", async () => {
+    const fetchMock = withItems([THERAPY], { "PUT /api/items/9": () => ({ status: 200, data: THERAPY }) });
+    renderApp("/recurring/9");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Change the amount of Therapy" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("checkbox", { name: /Billed later/ })).toBeChecked();
+    expect(within(dialog).getByRole("textbox", { name: "Each visit" })).toBeInTheDocument();
+    // Added up visit by visit, so there is no yearly total to choose.
+    expect(within(dialog).queryByRole("radio", { name: /Per year/ })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/9")).toEqual([expect.objectContaining({ billedLater: true })]));
   });
 });

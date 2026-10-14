@@ -2,6 +2,7 @@ package app.budget.server;
 
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -18,7 +19,7 @@ import java.util.stream.Collectors;
  * @param shutdownToken  per-launch secret the desktop shell presents to stop the server
  * @param allowedHosts   extra Host header names to accept beyond IP literals and localhost
  * @param maxUploadMb    the largest receipt or document that can be attached, in megabytes
- * @param fontsDir       a folder of fonts for the PDFs the app writes (Windows' own, unless set); empty when there is none
+ * @param fontsDir       a folder of fonts for the PDFs the app writes (the system's own, unless set); empty when there is none
  * @param downloadsDir   where exports and copies of receipts asked for from this PC are saved (the user's Downloads
  *                       folder, unless set); empty when there is none, and they are then handed to the browser
  */
@@ -46,10 +47,29 @@ public record Config(
     }
 
     public static Config fromEnvironment(Map<String, String> env) {
+        return fromEnvironment(env, Platform.of(System.getProperty("os.name"), System.getProperty("user.home")));
+    }
+
+    /**
+     * Where the operating system keeps things, for the defaults below. Kept apart from the environment
+     * variables so the tests can ask what a Mac would get without running on one.
+     *
+     * @param mac  whether this is macOS, whose folders differ from Windows' and Linux's
+     * @param home the user's home folder; empty when Java could not say
+     */
+    record Platform(boolean mac, Optional<Path> home) {
+        static Platform of(String osName, String userHome) {
+            return new Platform(
+                    osName != null && osName.toLowerCase(Locale.ROOT).startsWith("mac"),
+                    Optional.ofNullable(userHome).map(String::trim).filter(home -> !home.isEmpty()).map(Path::of));
+        }
+    }
+
+    static Config fromEnvironment(Map<String, String> env, Platform platform) {
         return new Config(
                 text(env, "BUDGET_BIND_HOST").orElse(DEFAULT_BIND_HOST),
                 number(env, "BUDGET_PORT", 0, 65_535).map(Long::intValue).orElse(DEFAULT_PORT),
-                text(env, "BUDGET_DATA_DIR").map(Path::of).orElseGet(() -> defaultDataDir(env)),
+                text(env, "BUDGET_DATA_DIR").map(Path::of).orElseGet(() -> defaultDataDir(env, platform)),
                 number(env, "BUDGET_PARENT_PID", 1, Long.MAX_VALUE),
                 text(env, "BUDGET_SHUTDOWN_TOKEN"),
                 text(env, "BUDGET_ALLOWED_HOSTS")
@@ -60,16 +80,29 @@ public record Config(
                         .orElse(Set.of()),
                 number(env, "BUDGET_MAX_UPLOAD_MB", 1, 200).map(Long::intValue).orElse(DEFAULT_MAX_UPLOAD_MB),
                 text(env, "BUDGET_FONTS_DIR").map(Path::of)
-                        .or(() -> text(env, "WINDIR").map(windows -> Path.of(windows, "Fonts"))),
+                        .or(() -> text(env, "WINDIR").map(windows -> Path.of(windows, "Fonts")))
+                        // Arial comes with every Mac, in this folder.
+                        .or(() -> platform.mac() ? Optional.of(MAC_FONTS) : Optional.empty()),
                 text(env, "BUDGET_DOWNLOADS_DIR").map(Path::of)
-                        .or(() -> text(env, "USERPROFILE").map(home -> Path.of(home, "Downloads"))));
+                        .or(() -> text(env, "USERPROFILE").map(home -> Path.of(home, "Downloads")))
+                        .or(() -> platform.mac()
+                                ? platform.home().map(home -> home.resolve("Downloads"))
+                                : Optional.empty()));
     }
 
-    /** %APPDATA%\Budget on Windows; the XDG-style equivalent elsewhere (dev containers). */
-    private static Path defaultDataDir(Map<String, String> env) {
+    static final Path MAC_FONTS = Path.of("/System/Library/Fonts/Supplemental");
+
+    /**
+     * %APPDATA%\Budget on Windows; ~/Library/Application Support/Budget on a Mac (the same folder the desktop
+     * shell passes in there); the XDG-style equivalent elsewhere.
+     */
+    private static Path defaultDataDir(Map<String, String> env, Platform platform) {
+        Path home = platform.home().orElse(Path.of(""));
         return text(env, "APPDATA")
                 .map(appData -> Path.of(appData, APP_FOLDER))
-                .orElseGet(() -> Path.of(System.getProperty("user.home"), ".local", "share", APP_FOLDER));
+                .orElseGet(() -> platform.mac()
+                        ? home.resolve("Library").resolve("Application Support").resolve(APP_FOLDER)
+                        : home.resolve(".local").resolve("share").resolve(APP_FOLDER));
     }
 
     private static Optional<String> text(Map<String, String> env, String name) {

@@ -68,7 +68,9 @@ final class PdfExport {
     /** Regular and bold of the first family found, tried in this order. */
     private static final List<String[]> FONT_FILES = List.of(
             new String[] {"segoeui.ttf", "segoeuib.ttf"},
-            new String[] {"arial.ttf", "arialbd.ttf"});
+            new String[] {"arial.ttf", "arialbd.ttf"},
+            // How a Mac names the same font (/System/Library/Fonts/Supplemental).
+            new String[] {"Arial.ttf", "Arial Bold.ttf"});
 
     /**
      * A file to add after the report.

@@ -94,7 +94,9 @@ public final class AnnualCostsRunner {
         List<Line> lines = new ArrayList<>();
         // The newest occurrence seen of each item says what it is called and filed under now.
         Map<Long, Occurrence> latest = new HashMap<>();
-        for (Occurrence occurrence : calendar.expand(windows.getFirst().from(), windows.getLast().to()).occurrences()) {
+        // Visits not billed yet count as still to come, at what each costs (spec §4.6); an invoice counts once it is entered.
+        ItemCalendar.Expansion expansion = calendar.expand(windows.getFirst().from(), windows.getLast().to());
+        for (Occurrence occurrence : withNotYetBilled(expansion)) {
             if (!counts(occurrence)) {
                 continue;
             }
@@ -161,7 +163,7 @@ public final class AnnualCostsRunner {
         LocalDate from = LocalDate.of(today.getYear() - 1, 1, 1);
         LocalDate to = LocalDate.of(today.getYear(), 12, 31);
         List<Line> lines = new ArrayList<>();
-        for (Occurrence occurrence : calendar.expand(List.of(item), from, to).occurrences()) {
+        for (Occurrence occurrence : withNotYetBilled(calendar.expand(List.of(item), from, to))) {
             if (counts(occurrence) && !date(occurrence).isBefore(from) && !date(occurrence).isAfter(to)) {
                 lines.add(new Line(item.id(), date(occurrence), Money.ofCents(occurrence.amountCents())));
             }
@@ -187,6 +189,13 @@ public final class AnnualCostsRunner {
                 .map(row -> new CsvExport.AnnualRow(
                         row.name(), CsvExport.kind(row.kind()), row.categoryName(), row.totalsCents(), row.changeBp(), row.perMonthCents()))
                 .toList();
+    }
+
+    /** What is paid (invoices included), then the visits no invoice covers yet. */
+    private List<Occurrence> withNotYetBilled(ItemCalendar.Expansion expansion) {
+        List<Occurrence> all = new ArrayList<>(expansion.occurrences());
+        all.addAll(calendar.notYetBilled(expansion));
+        return all;
     }
 
     /** True for an occurrence that is a cost: a bill or a budget that was not skipped. */
