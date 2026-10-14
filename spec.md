@@ -352,6 +352,7 @@ Inputs: extra amount per month, comparison period, and the user's options. Rates
   - **What is compared**: every loan, every card carrying a balance, every investment account and every savings account (at its APY) that is not archived. Checking is not offered. Any of them can be left out (`planner_hidden_accounts`, migration `V24`) and brought back; Undo covers both. Nothing else is saved: the amount, the period and the order are remembered on the device, like Hide amounts.
   - **Comparison only**: nothing on the screen adds a payment or changes the budget. Each card's name opens its account.
   - **No tax or access claims**: the mockup's "Not until 59½", "Gains are taxed when you sell" and "Pre-tax" lines are left out. A card says only what Budget works out.
+  - **Interest compounds monthly on both sides.** A debt's unpaid interest joins its balance and is charged interest from then on; an investment's growth is grown on in later months. A debt's month is rate ÷ 12 (how loans and cards charge it), an investment's is the twelfth root of the yearly rate (so 7% a year comes to exactly 7%).
   - **A debt** is followed a month at a time, the way its loan page does it (`PayoffPlan`): a month's interest (rate ÷ 12) is added, then the payment comes off. A loan uses today's balance and rate and its payment less escrow, from its next payment day, so its "was" date is the payoff date on its own page. A loan with no monthly payment entered says so and is not followed.
   - **A card** is followed at what next month's payments into it come to, held level; with none set up, at its estimated minimum. A promotional rate that covers the whole balance is used until its last day, then the rate after it; a promotion on only part of the balance leaves the card compared at its regular APR. A card paid in full every month (its own payment pays the statement or the full balance) is not offered: there is nothing to pay down. A promotional balance whose payoff is already among the recurring payments takes none of the extra and shows on the timeline as gone when the promotion ends.
   - **Extra on one debt** is that debt alone with the extra added: interest saved over its life, the new payoff date, and what is free each month afterwards (its payment and the extra). When the payment never gets ahead of the interest there is no "interest saved" to give, and the card says so.
@@ -895,7 +896,7 @@ Still open from Phase 0: the uninstall check has never been run by hand (Rachel'
 
 ### Phase 11 — Debt & decisions (`milestone/11-debt-decisions`)
 
-**Status: built; waiting for Rachel to try the installer and confirm.** Branched from `milestone/10-plan-next-year`.
+**Status: complete; confirmed by Rachel on 2026-10-14 after trying the installer.** Branched from `milestone/10-plan-next-year`.
 
 Decided with Rachel before building (2026-10-13): its own sidebar entry; every loan, card with a balance, investment and savings account is compared and any can be left out; comparison only, with no button that adds a payment; no tax or withdrawal lines (§5.9).
 
