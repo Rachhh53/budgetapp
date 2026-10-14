@@ -39,6 +39,9 @@ import { BUTTON_PRIMARY, INPUT } from "../components/ui";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
+import { InfoTip } from "../components/help/InfoTip";
+import { type TermId, TERMS } from "../help/terms";
 
 /** How far either side of the period on screen the strip of ending balances reaches. */
 const STRIP_DAYS_BACK = 45;
@@ -166,9 +169,15 @@ export function PayPeriodPage() {
           <PeriodLink to={previous} label="Previous pay period" icon={ChevronLeft} />
           <div className="min-w-0 flex-1 text-center lg:flex-none lg:text-left">
             <p className="text-xs font-semibold tracking-wide text-muted uppercase">{detail.current ? "Current pay period" : "Pay period"}</p>
-            <h1 className="text-xl font-bold md:text-2xl">
-              {formatDay(detail.start)} – {formatDate(detail.end)}
-            </h1>
+            <div className="flex min-w-0 items-center justify-center gap-1 lg:justify-start">
+              <h1 className="text-xl font-bold md:text-2xl">
+                {formatDay(detail.start)} – {formatDate(detail.end)}
+              </h1>
+              {/* On a phone the ? sits in the row below, so the dates stay on one line between the arrows. */}
+              <span className="hidden lg:inline-flex">
+                <HelpLink />
+              </span>
+            </div>
           </div>
           <PeriodLink to={next} label="Next pay period" icon={ChevronRight} />
           {detail.current && (
@@ -176,7 +185,12 @@ export function PayPeriodPage() {
           )}
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:gap-3">
-          {anyEstimate && <EstimateKey />}
+          <div className="flex items-center justify-between gap-2">
+            {anyEstimate && <EstimateKey />}
+            <span className="ml-auto flex lg:hidden">
+              <HelpLink />
+            </span>
+          </div>
           <PeriodSearch />
           <HideAmountsButton />
           <AddItemButton />
@@ -401,6 +415,13 @@ function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
           </>
         )}
       </Card>
+      <p className="mt-4 text-muted">
+        Not sure where to begin?{" "}
+        <Link to="/help" className="font-semibold text-accent-ink underline">
+          Help has a step-by-step guide
+        </Link>
+        .
+      </p>
     </>
   );
 }
@@ -434,7 +455,7 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
       <p className="hidden shrink-0 text-sm leading-tight text-muted xl:block">
         Ending balance
         <br />
-        by period
+        by period <InfoTip term="endingByPeriod" />
       </p>
       <ol className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
         {periods.map((period) => (
@@ -482,6 +503,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
     <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
       <Figure
         label="Starting balance"
+        tip="startingBalance"
         cents={balance.startingCents}
         // A balance dated after this period is the first one entered: nothing earlier is counted, and the note says so.
         note={`${account.name} · ${formatDay(balance.startingOn)}${
@@ -491,6 +513,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Coming in"
+        tip="comingIn"
         cents={balance.inCents}
         sign="+"
         note="Paychecks and money in"
@@ -500,6 +523,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Going out"
+        tip="goingOut"
         cents={balance.outCents}
         sign="−"
         note="Bills, transfers, budgets, one-offs"
@@ -507,6 +531,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Projected ending"
+        tip="projectedEnding"
         cents={balance.endingCents}
         note={`${plain(balance.startingCents)} + ${plain(balance.inCents)} − ${plain(balance.outCents)}`}
         className="order-1 col-span-2 lg:order-4 lg:col-span-1"
@@ -514,6 +539,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Available after buckets"
+        tip="available"
         cents={balance.availableCents}
         note={
           balance.lowBalance
@@ -573,6 +599,7 @@ function Figure({
   cents,
   sign = "",
   note,
+  tip,
   breakdown,
   breakdownLabel,
   highlight = false,
@@ -583,6 +610,8 @@ function Figure({
   cents: number;
   sign?: string;
   note: string;
+  /** What the figure means, behind an ⓘ. One with a breakdown says it at the top of that instead: the whole figure is what opens it. */
+  tip?: TermId;
   /** What the number is made of, shown when the figure is hovered, focused or tapped. */
   breakdown?: readonly Part[];
   breakdownLabel?: string;
@@ -602,6 +631,7 @@ function Figure({
     >
       <dt className="flex items-center gap-1 text-sm text-muted">
         {label}
+        {tip && !breakdown && <InfoTip term={tip} />}
         {breakdown && <Info aria-hidden className="size-3.5" />}
       </dt>
       <dd>
@@ -619,6 +649,7 @@ function Figure({
             // Opens towards the middle of the screen: on a phone this figure sits in the right-hand column.
             className="invisible absolute top-full right-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface p-3 text-sm opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 lg:right-auto lg:left-0"
           >
+            {tip && <p className="mb-2 text-muted">{TERMS[tip].about}</p>}
             {breakdown.length === 0 ? (
               <p className="text-muted">Nothing in this pay period.</p>
             ) : (
@@ -642,7 +673,20 @@ function Figure({
 }
 
 /** One panel of the screen: a titled region that scrolls inside itself as a last resort. */
-function Panel({ title, aside, grow = false, children }: { title: string; aside?: string; grow?: boolean; children: ReactNode }) {
+function Panel({
+  title,
+  aside,
+  tip,
+  grow = false,
+  children,
+}: {
+  title: string;
+  aside?: string;
+  /** A word whose meaning an ⓘ beside the title gives. */
+  tip?: TermId;
+  grow?: boolean;
+  children: ReactNode;
+}) {
   const headingId = useId();
   return (
     <section
@@ -650,9 +694,12 @@ function Panel({ title, aside, grow = false, children }: { title: string; aside?
       className={`flex flex-col rounded-card border border-line bg-surface px-4 py-3 ${grow ? "lg:min-h-0 lg:flex-1" : ""}`}
     >
       <div className="mb-1 flex items-baseline justify-between gap-3">
-        <h2 id={headingId} className="font-semibold">
-          {title}
-        </h2>
+        <div className="flex items-center gap-1">
+          <h2 id={headingId} className="font-semibold">
+            {title}
+          </h2>
+          {tip && <InfoTip term={tip} />}
+        </div>
         {aside && <p className="text-sm text-muted">{aside}</p>}
       </div>
       {/* The side padding (taken back by the margin) leaves room for a focus ring, which scrolling would otherwise clip. */}
@@ -1081,7 +1128,7 @@ function ManualPanel({
   const paid = bills.filter((occurrence) => occurrence.paid).length;
 
   return (
-    <Panel title="Pay manually & one-offs" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} grow>
+    <Panel title="Pay manually & one-offs" tip="payManually" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} grow>
       {bills.length === 0 && oneOffs.length === 0 && unbilled.length === 0 ? (
         <Empty>Nothing to pay by hand this period, and no one-offs. Use + Add item for a one-time purchase.</Empty>
       ) : (
@@ -1127,9 +1174,12 @@ function UnbilledRow({ unbilled, context }: { unbilled: Unbilled; context: RowCo
       <Row
         lead={<ReceiptText aria-hidden className="size-4 shrink-0 text-muted" />}
         title={
-          <Link to={`/recurring/${unbilled.itemId}`} className="cursor-pointer hover:underline">
-            {unbilled.name}
-          </Link>
+          <>
+            <Link to={`/recurring/${unbilled.itemId}`} className="cursor-pointer hover:underline">
+              {unbilled.name}
+            </Link>{" "}
+            <InfoTip term="billedLater" />
+          </>
         }
         detail={`${visits} not billed yet · ${span} · ${context.accountName(unbilled.payFromAccountId)}`}
         wrap
@@ -1303,7 +1353,7 @@ function AccountsPanel({
 
   if (shown === undefined || known.every((tab) => tab.balance === undefined)) {
     return (
-      <Panel title="Accounts & buckets" aside="at period end">
+      <Panel title="Accounts & buckets" aside="at period end" tip="bucket">
         <Empty>
           Enter a balance on the{" "}
           <Link to="/accounts" className="font-semibold text-accent-ink underline">
@@ -1339,7 +1389,7 @@ function AccountsPanel({
   const { balance } = shown;
   if (balance === undefined) {
     return (
-      <Panel title="Accounts & buckets" aside="at period end">
+      <Panel title="Accounts & buckets" aside="at period end" tip="bucket">
         {picker}
         <div>
           <Empty>
@@ -1364,7 +1414,7 @@ function AccountsPanel({
     return bucket && period.accountId === shown.account.id ? [{ bucket, period }] : [];
   });
   return (
-    <Panel title="Accounts & buckets" aside="at period end">
+    <Panel title="Accounts & buckets" aside="at period end" tip="bucket">
       {picker}
       <dl aria-label={shown.account.name} className="divide-y divide-line">
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />

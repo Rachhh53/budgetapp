@@ -40,6 +40,10 @@ npm run typecheck
 The backend reads its settings from environment variables only (see `.env.example`); load `.env`
 into your shell or IDE run configuration.
 
+## Help
+
+The app has its own user guide: **Help** at the foot of the sidebar (in More on a phone), a **?** beside every screen's title for that screen's chapter, and **ⓘ** beside words that need explaining. Its text lives in `frontend/src/help/` (`guide.ts`, `terms.ts`); when a button or card is renamed, rename it there too.
+
 ## Keyboard shortcuts
 
 | Keys | What they do |
@@ -181,7 +185,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | GET | `/api/goal-pace?goalCents=&goalDate=&bucketId=&heldCents=` | what a goal would take before it is saved: projected amount, shortfall, paydays left, and what to add every paycheck or month. `bucketId` counts what is already scheduled into that bucket; `heldCents` is what it holds (or will start with) |
 | POST | `/api/items/{id}/replacement` | archive that item and add the body (same shape as a new item) as a new one starting today; for changing what kind of item something is without touching its past |
 | PUT | `/api/items/{id}/occurrences/{scheduledDate}` | "just this one": any of `{ amountCents, dueDate, periodStart, paid, paidDate, confirmationCode, note, skipped, checkNumber }` (a check number only for something paid from a checking account) |
-| GET, POST | `/api/items/{id}/invoices` | billed later: `{ notBilled, notBilledCents, invoices }`, the visits up to today no invoice covers and every invoice, newest first, each `{ invoice, periodStart }`; POST adds one `{ invoiceDate, dueDate, coversThrough?, amountCents?, note? }` (left out: every visit up to the invoice date, at what they come to). 400 with no visits to bill, 409 for an item that is not billed later or a due date another of its invoices has |
+| GET, POST | `/api/items/{id}/invoices` | billed later: `{ notBilled, notBilledCents, skipped, upcoming, invoices }`, the visits up to today no invoice covers (and those of them skipped), the next three to come (each `{ scheduledDate, date, amountCents, skipped }`; a visit is skipped or put back with `PUT /api/items/{id}/occurrences/{scheduledDate}` `{ skipped }`, 409 once it is on an invoice) and every invoice, newest first, each `{ invoice, periodStart }`; POST adds one `{ invoiceDate, dueDate, coversThrough?, amountCents?, note? }` (left out: every visit up to the invoice date, at what they come to). 400 with no visits to bill, 409 for an item that is not billed later or a due date another of its invoices has |
 | PUT, DELETE | `/api/items/{id}/invoices/{invoiceId}` | change one `{ amountCents?, invoiceDate?, dueDate?, paid?, paidDate?, confirmationCode?, checkNumber?, note? }`; remove the newest (409 for an older one), leaving its visits not billed again. An invoice is listed among a period's `occurrences` with its `invoiceId` and `coversThrough`, and its receipts are an occurrence's, by its due date |
 | GET, POST | `/api/entries` | one-off money in, money out and transfers; optional `from`, `to`; add `{ kind, date, amountCents, description, accountId, toAccountId?, estimate?, payee?, categoryId?, tagIds?, note?, bucketSplits?, checkNumber? }` (`checkNumber` is kept only for money leaving a checking account); `bucketSplits` is `[{ bucketId, amountCents }]`, naming a bucket of the receiving account to set part of money in or a transfer aside there, or a bucket of the paying account to pay money out or a transfer from it (refused beyond what the bucket holds that day) |
 | | | entries also take `reimbursementStatus?` (money out: `none`, `to_submit`, `submitted` or `reimbursed`) and `reimbursesEntryId?` (money in: the expense it pays back). Each comes back with `fileCount` and, for money out, `reimbursement` `{ status, submittedOn, to, paidBackCents, reimbursedCents, owedCents }` |

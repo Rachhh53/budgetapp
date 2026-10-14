@@ -44,15 +44,22 @@ export interface InvoiceView {
 }
 
 export interface Visit {
+  /** The day its schedule names, which is how it is skipped or put back. */
   scheduledDate: string;
   date: string;
   amountCents: number;
+  /** It did not (or will not) happen: in no total and on no invoice. */
+  skipped: boolean;
 }
 
 export interface Billing {
   /** Up to today, oldest first. */
   notBilled: Visit[];
   notBilledCents: number;
+  /** Up to today and skipped, oldest first. */
+  skipped: Visit[];
+  /** The next few after today, skipped ones included. */
+  upcoming: Visit[];
   /** Newest first. */
   invoices: InvoiceView[];
 }
@@ -91,6 +98,16 @@ export function useDeleteInvoice(itemId: number) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (invoiceId: number) => api.delete<{ deleted: boolean }>(`/api/items/${itemId}/invoices/${invoiceId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+  });
+}
+
+/** Skips one visit, or puts a skipped one back. A visit already on an invoice can't be changed (409). */
+export function useSkipVisit(itemId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ scheduledDate, skipped }: { scheduledDate: string; skipped: boolean }) =>
+      api.put<unknown>(`/api/items/${itemId}/occurrences/${scheduledDate}`, { skipped }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
   });
 }

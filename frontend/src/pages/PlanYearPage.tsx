@@ -38,6 +38,8 @@ import { Segmented } from "../components/Segmented";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, PAGE_TITLE, ROW_LINK } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
+import { InfoTip } from "../components/help/InfoTip";
 
 /** A link drawn as a button: the way on to the next step is an address, so Back and a refresh keep the step. */
 const LINK_BUTTON = "flex items-center justify-center text-center";
@@ -67,7 +69,10 @@ function PlansList() {
     <>
       <div className="mb-4 md:mb-6">
         <p className="text-sm font-semibold tracking-wide text-muted uppercase">Year by year</p>
-        <h1 className={PAGE_TITLE}>Plan next year</h1>
+        <div className="flex min-w-0 items-center gap-1">
+          <h1 className={PAGE_TITLE}>Plan next year</h1>
+          <HelpLink />
+        </div>
       </div>
       <div className="space-y-4">
         {plans.isPending && <p className="text-muted">Looking up your plans…</p>}
@@ -252,7 +257,10 @@ function Wizard({ detail, current }: { detail: PlanDetail; current: WizardStep }
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">
             {plan.setup ? "Setup" : `Plan ${plan.year}`} · {STATUS_LABELS[plan.status]} · Step {index + 1} of {WIZARD_STEPS.length}
           </p>
-          <h1 className={`${PAGE_TITLE} wrap-break-word`}>{title}</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} wrap-break-word`}>{title}</h1>
+            <HelpLink />
+          </div>
         </div>
       </div>
 
@@ -295,7 +303,8 @@ function Wizard({ detail, current }: { detail: PlanDetail; current: WizardStep }
                     <strong>
                       {monthOf(detail.historyFrom)} – {monthOf(detail.historyTo)}
                     </strong>
-                    {plan.basis === "last_12_trend" && " and each one's price trend"}. Accept them or type your own.
+                    {plan.basis === "last_12_trend" && " and each one's price trend"}. Accept them or type your own.{" "}
+                    <InfoTip term="suggestionBasis" />
                   </p>
                   <div className="lg:w-96 lg:shrink-0">
                     <Segmented

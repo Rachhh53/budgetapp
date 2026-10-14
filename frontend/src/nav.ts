@@ -1,5 +1,6 @@
 import {
   CalendarRange,
+  CircleHelp,
   Landmark,
   LayoutDashboard,
   type LucideIcon,
@@ -35,4 +36,5 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: "/planner", label: "Debt & decisions", icon: Scale },
   { path: "/categories", label: "Categories & tags", icon: Tags },
   { path: "/settings", label: "Settings", icon: Settings },
+  { path: "/help", label: "Help", icon: CircleHelp },
 ];

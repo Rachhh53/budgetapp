@@ -17,6 +17,7 @@ import { PauseControls } from "../components/items/PauseItem";
 import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 /**
  * One recurring item, laid out like an account's page and an income source's: the big figures
@@ -88,7 +89,10 @@ export function RecurringItemDetailPage() {
             </Link>{" "}
             / {KIND_LABELS[item.kind]}
           </p>
-          <h1 className={`${PAGE_TITLE} truncate`}>{item.name}</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} min-w-0 truncate`}>{item.name}</h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {describeKind(item)} · {describeItemSchedule(item.schedule)}
             {/* Said in words, never by color alone. */}

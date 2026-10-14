@@ -416,6 +416,12 @@ public final class ItemsRoutes {
             throw ApiException.notFound();
         }
         Occurrence current = calendar.find(item, scheduledDate).orElseThrow(ApiException::notFound);
+        // An invoice was worked out from the visits it covers; skipping one of them afterwards would
+        // leave the invoice paying for a visit that is gone.
+        if (input.skipped() != null && calendar.onInvoice(item, scheduledDate)) {
+            throw ApiException.conflict("That visit is already on an invoice, so it can't be skipped or put back. "
+                    + "To change it, remove the invoice first.");
+        }
 
         Long amount = input.amountCents() == null ? null : Inputs.amount(input.amountCents(), "The amount");
         requireSupported(input.dueDate(), "the due date");

@@ -65,8 +65,18 @@ public final class InvoicesRoutes {
             String checkNumber,
             String note) {}
 
-    /** One visit not billed yet. */
-    public record Visit(LocalDate scheduledDate, LocalDate date, long amountCents) {}
+    /**
+     * One visit no invoice covers yet.
+     *
+     * @param skipped the visit did not (or will not) happen: it is in no total and on no invoice
+     */
+    public record Visit(LocalDate scheduledDate, LocalDate date, long amountCents, boolean skipped) {}
+
+    /** How many visits still to come are listed, so the next one or two can be skipped ahead of time. */
+    private static final int UPCOMING_SHOWN = 3;
+
+    /** How far ahead to look for them: three monthly visits fit in this. */
+    private static final int UPCOMING_DAYS = 100;
 
     /**
      * An invoice with the pay period that pays it.
@@ -78,9 +88,12 @@ public final class InvoicesRoutes {
     /**
      * @param notBilled      the visits up to today that no invoice covers, oldest first
      * @param notBilledCents what they come to
+     * @param skipped        the visits up to today that no invoice covers and that were skipped, oldest first
+     * @param upcoming       the next few visits after today, skipped ones included
      * @param invoices       newest first
      */
-    public record Billing(List<Visit> notBilled, long notBilledCents, List<InvoiceView> invoices) {}
+    public record Billing(
+            List<Visit> notBilled, long notBilledCents, List<Visit> skipped, List<Visit> upcoming, List<InvoiceView> invoices) {}
 
     public record Deleted(boolean deleted) {}
 
@@ -90,14 +103,18 @@ public final class InvoicesRoutes {
     }
 
     private Billing billing(Item item) {
-        List<Visit> visits = calendar.unbilled(item, pay.today()).stream()
-                .map(visit -> new Visit(visit.scheduledDate(), visit.dueDate(), visit.amountCents()))
+        LocalDate today = pay.today();
+        List<Visit> waiting = calendar.uninvoiced(item, today.plusDays(UPCOMING_DAYS)).stream()
+                .map(visit -> new Visit(visit.scheduledDate(), visit.dueDate(), visit.amountCents(), visit.skipped()))
                 .toList();
+        List<Visit> visits = waiting.stream().filter(visit -> !visit.date().isAfter(today) && !visit.skipped()).toList();
+        List<Visit> skipped = waiting.stream().filter(visit -> !visit.date().isAfter(today) && visit.skipped()).toList();
+        List<Visit> upcoming = waiting.stream().filter(visit -> visit.date().isAfter(today)).limit(UPCOMING_SHOWN).toList();
         List<InvoiceView> views = invoices.forItem(item.id()).stream()
                 .sorted(Comparator.comparing(Invoice::coversThrough).reversed())
                 .map(invoice -> view(item, invoice))
                 .toList();
-        return new Billing(visits, visits.stream().mapToLong(Visit::amountCents).sum(), views);
+        return new Billing(visits, visits.stream().mapToLong(Visit::amountCents).sum(), skipped, upcoming, views);
     }
 
     private void create(Context ctx) {

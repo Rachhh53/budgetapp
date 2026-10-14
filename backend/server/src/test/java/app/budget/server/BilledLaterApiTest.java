@@ -219,4 +219,42 @@ class BilledLaterApiTest extends ApiTestBase {
         assertThat(report.get("totalCents").asLong()).isEqualTo(60000);
         assertThat(report.get("estimatedCents").asLong()).isEqualTo(36000);
     }
+
+    @Test
+    void listsSkippedAndUpcomingVisitsSoEitherCanBeSkippedOrPutBack() throws Exception {
+        String visits = "/api/items/" + therapy + "/occurrences/";
+        // One that happened and one still to come (Oct 13) are skipped.
+        assertThat(server.put(visits + "2026-09-15", "{\"skipped\":true}", cookie).status()).isEqualTo(200);
+        assertThat(server.put(visits + "2026-10-13", "{\"skipped\":true}", cookie).status()).isEqualTo(200);
+
+        JsonNode billing = server.get("/api/items/" + therapy + "/invoices", cookie).data();
+        assertThat(billing.get("notBilled")).hasSize(4);
+        assertThat(billing.get("notBilledCents").asLong()).isEqualTo(48000);
+        assertThat(billing.get("skipped")).hasSize(1);
+        assertThat(billing.get("skipped").get(0).get("date").asText()).isEqualTo("2026-09-15");
+        JsonNode upcoming = billing.get("upcoming");
+        assertThat(upcoming).hasSize(3);
+        assertThat(upcoming.get(0).get("date").asText()).isEqualTo("2026-10-06");
+        assertThat(upcoming.get(0).get("skipped").asBoolean()).isFalse();
+        assertThat(upcoming.get(1).get("date").asText()).isEqualTo("2026-10-13");
+        assertThat(upcoming.get(1).get("skipped").asBoolean()).isTrue();
+
+        // Put back, it counts again.
+        assertThat(server.put(visits + "2026-09-15", "{\"skipped\":false}", cookie).status()).isEqualTo(200);
+        assertThat(period("2026-10-01").get("unbilled").get(0).get("amountCents").asLong()).isEqualTo(60000);
+    }
+
+    @Test
+    void aVisitOnAnInvoiceCannotBeSkipped() throws Exception {
+        invoice(SEPTEMBER);
+
+        Reply refused = server.put("/api/items/" + therapy + "/occurrences/2026-09-15", "{\"skipped\":true}", cookie);
+
+        assertThat(refused.status()).isEqualTo(409);
+        assertThat(refused.error()).isEqualTo(
+                "That visit is already on an invoice, so it can't be skipped or put back. To change it, remove the invoice first.");
+        // A visit after the invoice can still be skipped.
+        assertThat(server.put("/api/items/" + therapy + "/occurrences/2026-10-06", "{\"skipped\":true}", cookie).status())
+                .isEqualTo(200);
+    }
 }

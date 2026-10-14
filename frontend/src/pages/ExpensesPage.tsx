@@ -12,6 +12,7 @@ import { TagChips } from "../components/expenses/TagChips";
 import { BUTTON_PRIMARY, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 /** The columns of the list from `md` up; below that each expense is a small stack. */
 const COLUMNS = "md:grid md:grid-cols-[4.5rem_minmax(0,1.3fr)_minmax(0,1.2fr)_minmax(0,1fr)_7.5rem_3rem_7.5rem] md:items-center md:gap-3";
@@ -69,7 +70,10 @@ export function ExpensesPage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">One-off spending</p>
-          <h1 className={PAGE_TITLE}>Expenses &amp; receipts</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Expenses &amp; receipts</h1>
+            <HelpLink />
+          </div>
         </div>
         <button type="button" disabled={needsAccount} onClick={() => add("money_out")} className={BUTTON_PRIMARY}>
           + Add expense

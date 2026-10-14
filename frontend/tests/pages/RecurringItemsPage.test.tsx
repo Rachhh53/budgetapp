@@ -1079,7 +1079,7 @@ describe("Where a recurring item's breadcrumb leads", () => {
     renderApp("/recurring/2");
 
     await screen.findByRole("heading", { level: 1, name: "Electric" });
-    const header = screen.getByRole("heading", { level: 1, name: "Electric" }).parentElement!;
+    const header = screen.getByRole("heading", { level: 1, name: "Electric" }).parentElement!.parentElement!;
     expect(within(header).getByRole("link", { name: "Recurring items" })).toHaveAttribute("href", "/recurring");
     expect(within(header).queryByRole("link", { name: "Annual costs" })).not.toBeInTheDocument();
   });
@@ -1094,10 +1094,12 @@ describe("recurring item page: billed later", () => {
         status: 200,
         data: {
           notBilled: [
-            { scheduledDate: "2026-10-06", date: "2026-10-06", amountCents: 12000 },
-            { scheduledDate: "2026-10-13", date: "2026-10-13", amountCents: 12000 },
+            { scheduledDate: "2026-10-06", date: "2026-10-06", amountCents: 12000, skipped: false },
+            { scheduledDate: "2026-10-13", date: "2026-10-13", amountCents: 12000, skipped: false },
           ],
           notBilledCents: 24000,
+          skipped: [],
+          upcoming: [],
           invoices: [
             {
               invoice: {
@@ -1123,6 +1125,39 @@ describe("recurring item page: billed later", () => {
 
     await userEvent.click(within(card).getByRole("button", { name: "Remove this invoice" }));
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/items/9/invoices/3"));
+  });
+
+  it("skips a visit, puts a skipped one back, and skips one still to come", async () => {
+    const visit = (date: string, skipped: boolean) => ({ scheduledDate: date, date, amountCents: 12000, skipped });
+    const fetchMock = withItems([THERAPY], {
+      "GET /api/items/9/invoices": () => ({
+        status: 200,
+        data: {
+          notBilled: [visit("2026-10-06", false)],
+          notBilledCents: 12000,
+          skipped: [visit("2026-09-29", true)],
+          upcoming: [visit("2026-10-20", false), visit("2026-10-27", false)],
+          invoices: [],
+        },
+      }),
+      "PUT /api/items/9/occurrences/2026-10-06": () => ({ status: 200, data: {}, changed: true }),
+      "PUT /api/items/9/occurrences/2026-09-29": () => ({ status: 200, data: {}, changed: true }),
+      "PUT /api/items/9/occurrences/2026-10-20": () => ({ status: 200, data: {}, changed: true }),
+    });
+    renderApp("/recurring/9");
+
+    const card = await screen.findByRole("region", { name: "Billed later" });
+    // The skipped one is listed, in words, in date order with the rest.
+    expect(await within(card).findByText("Skipped")).toBeInTheDocument();
+    expect(within(card).getByRole("heading", { name: "Coming up" })).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Skip the visit on Oct 6, 2026" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Put back the visit on Sep 29, 2026" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Skip the visit on Oct 20, 2026" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/9/occurrences/2026-10-20")).toEqual([{ skipped: true }]));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/9/occurrences/2026-10-06")).toEqual([{ skipped: true }]);
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/9/occurrences/2026-09-29")).toEqual([{ skipped: false }]);
   });
 
   it("asks whether a bill is billed later, and sends it", async () => {

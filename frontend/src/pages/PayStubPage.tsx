@@ -26,6 +26,7 @@ import { LINE_COLUMNS, NewStubLine, StubLineRow } from "../components/stubs/Stub
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 /**
  * One pay stub (design/pay-stub.png): the PDF beside every line read from it, this stub and
@@ -109,9 +110,12 @@ export function PayStubPage() {
             </Link>{" "}
             / Pay stub
           </p>
-          <h1 className={`${PAGE_TITLE} truncate`}>
-            {inReview ? "Review pay stub" : "Pay stub"} · {data.payDate ? formatDate(data.payDate) : "no date yet"}
-          </h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} min-w-0 truncate`}>
+              {inReview ? "Review pay stub" : "Pay stub"} · {data.payDate ? formatDate(data.payDate) : "no date yet"}
+            </h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {inReview
               ? "Nothing changes until you save it."

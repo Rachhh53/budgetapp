@@ -38,6 +38,7 @@ import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, PAG
 import { formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
 
 /* One statement: stacked on a phone, columns from `md` up. */
 const STATEMENT_ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[9rem_8rem_8rem_8rem_1fr_auto] md:items-center";
@@ -118,10 +119,13 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
             </Link>{" "}
             / Credit card
           </p>
-          <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
-            <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
-            <span className="truncate">{account.name}</span>
-          </h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
+              <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
+              <span className="truncate">{account.name}</span>
+            </h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {settings
               ? `Closes on ${dayOfMonth(settings.statementCloseDay)} · due on ${dayOfMonth(settings.dueDay)}`
@@ -283,7 +287,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
         />
 
         <TransactionsCard account={account} title="Charges and payments" />
-        <Card title="Balances you entered">
+        <Card title="Balances you entered" tip="enteredBalance">
           {asAccount.balances.length === 0 ? (
             <p className="text-muted">
               Nothing here yet. Choose "Update balance" and type in what the card shows as owed. Projections start from the latest number

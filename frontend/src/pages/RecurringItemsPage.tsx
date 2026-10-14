@@ -11,6 +11,7 @@ import { describeItemSchedule, describeKind, describeLandsIn, KIND_PLURALS } fro
 import { BUTTON_PRIMARY, INPUT, PAGE_TITLE } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 type Filter = "all" | ItemKind | "archived";
 
@@ -119,7 +120,10 @@ export function RecurringItemsPage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Setup</p>
-          <h1 className={PAGE_TITLE}>Recurring items</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Recurring items</h1>
+            <HelpLink />
+          </div>
         </div>
         <button type="button" disabled={needsAccount} onClick={() => setAdding(true)} className={BUTTON_PRIMARY}>
           + Add item

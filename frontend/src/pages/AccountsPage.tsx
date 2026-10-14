@@ -13,6 +13,8 @@ import { Card } from "../components/Card";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE, ROW_LINK } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
+import { InfoTip } from "../components/help/InfoTip";
 
 const GROUP = "rounded-card border border-line bg-surface p-5 md:p-6";
 
@@ -47,7 +49,10 @@ export function AccountsPage() {
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Everything you own and owe</p>
-          <h1 className={PAGE_TITLE}>Accounts</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Accounts</h1>
+            <HelpLink />
+          </div>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           {active.length > 0 && (
@@ -140,7 +145,10 @@ function NetWorthSummary({ worth }: { worth: NetWorth }) {
     <section aria-label="Net worth" className={`${GROUP} mb-4`}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:gap-8">
         <div>
-          <p className="text-muted">Net worth</p>
+          <p className="flex items-center gap-1 text-muted">
+            Net worth
+            <InfoTip term="netWorth" />
+          </p>
           <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(worth.netWorthCents)}</p>
           <p className="text-muted">today</p>
         </div>

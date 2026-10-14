@@ -27,6 +27,7 @@ import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, HINT, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 const KIND_NAMES: Record<Entry["kind"], string> = { money_out: "Expense", money_in: "Money in", transfer: "Transfer" };
 
@@ -84,7 +85,10 @@ export function ExpenseDetailPage() {
             </Link>{" "}
             / {kindName}
           </p>
-          <h1 className={`${PAGE_TITLE} truncate`}>{entry.payee ?? entry.description}</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} min-w-0 truncate`}>{entry.payee ?? entry.description}</h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {formatDate(entry.date)}
             {entry.payee !== null && ` · ${entry.description}`}

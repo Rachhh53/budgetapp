@@ -37,7 +37,7 @@ export function BucketsCard({ account }: { account: Account }) {
   const notInABucket = balanceCents === null ? null : balanceCents - setAside;
 
   return (
-    <Card title="Buckets">
+    <Card title="Buckets" tip="bucket">
       {buckets.isPending && <p className="text-muted">Loading buckets…</p>}
       {buckets.isError && (
         <p role="alert" className="text-danger">

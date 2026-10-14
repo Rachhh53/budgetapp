@@ -13,6 +13,7 @@ import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../compo
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
 
 /** What the form is open for: the source as it is today, one entry of its pay history, or a new change of pay. */
 type FormState = { terms?: PayTerms; payChange?: boolean } | null;
@@ -64,7 +65,10 @@ export function IncomeDetailPage() {
             </Link>{" "}
             / Income source
           </p>
-          <h1 className={`${PAGE_TITLE} truncate`}>{source.name}</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} min-w-0 truncate`}>{source.name}</h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {source.primary ? "Primary · its paydays define your pay periods" : "Its paydays do not change your pay periods"}
           </p>

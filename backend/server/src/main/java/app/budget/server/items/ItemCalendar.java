@@ -280,17 +280,34 @@ public final class ItemCalendar {
      * first; skipped ones are left out (spec §4.6).
      */
     public List<Occurrence> unbilled(Item item, LocalDate through) {
-        LocalDate after = invoices.forItem(item.id()).stream()
-                .map(Invoice::coversThrough)
-                .max(Comparator.naturalOrder())
-                .orElse(null);
+        return uninvoiced(item, through).stream().filter(visit -> !visit.skipped()).toList();
+    }
+
+    /**
+     * The visits of a billed-later item that no invoice covers yet, up to {@code through}, oldest
+     * first, skipped ones included: the item's page lists those too, so a skipped visit can be put back.
+     */
+    public List<Occurrence> uninvoiced(Item item, LocalDate through) {
+        LocalDate after = coveredThrough(item).orElse(null);
         LocalDate from = after != null ? after.plusDays(1) : item.versions().getFirst().effectiveFrom();
         if (from.isAfter(through)) {
             return List.of();
         }
         return expand(List.of(item), from, through).visits().stream()
-                .filter(visit -> !visit.skipped() && !visit.dueDate().isBefore(from) && !visit.dueDate().isAfter(through))
+                .filter(visit -> !visit.dueDate().isBefore(from) && !visit.dueDate().isAfter(through))
                 .toList();
+    }
+
+    /** Whether {@code scheduledDate} is a visit of {@code item} that an invoice already covers. */
+    public boolean onInvoice(Item item, LocalDate scheduledDate) {
+        Optional<LocalDate> covered = coveredThrough(item);
+        return covered.isPresent() && expand(List.of(item), scheduledDate, scheduledDate).visits().stream()
+                .anyMatch(visit -> visit.scheduledDate().equals(scheduledDate) && !visit.dueDate().isAfter(covered.get()));
+    }
+
+    /** The last visit day the item's invoices cover, if it has any. */
+    private Optional<LocalDate> coveredThrough(Item item) {
+        return invoices.forItem(item.id()).stream().map(Invoice::coversThrough).max(Comparator.naturalOrder());
     }
 
     private Occurrence occurrence(
