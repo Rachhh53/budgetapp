@@ -18,8 +18,9 @@ describe("app shell", () => {
 
     const sidebar = (await screen.findAllByRole("navigation", { name: "Main" }))[0]!;
     expect(within(sidebar).getByRole("link", { name: "Pay periods" })).toHaveAttribute("aria-current", "page");
-    // Reports and Annual costs are tabs of the Dashboard, not entries of their own.
-    expect(within(sidebar).getAllByRole("link")).toHaveLength(10);
+    // Reports and Annual costs are tabs of the Dashboard, not entries of their own; Help is the last entry.
+    expect(within(sidebar).getAllByRole("link")).toHaveLength(11);
+    expect(within(sidebar).getByRole("link", { name: "Help" })).toHaveAttribute("href", "/help");
     expect(within(sidebar).queryByRole("link", { name: "Reports" })).not.toBeInTheDocument();
     expect(screen.getByText("Data stored only on this PC")).toBeInTheDocument();
   });

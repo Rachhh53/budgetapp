@@ -14,6 +14,7 @@ import { LabelForm } from "../components/categories/LabelForm";
 import { BUTTON_PRIMARY, PAGE_TITLE } from "../components/ui";
 import { readableTextOn } from "../lib/color";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 /** What a form is open for: something new, something that exists, or closed. */
 type FormState<T> = { existing?: T } | null;
@@ -34,7 +35,10 @@ export function CategoriesPage() {
     <>
       <div className="mb-4 md:mb-6">
         <p className="text-sm font-semibold tracking-wide text-muted uppercase">Setup</p>
-        <h1 className={PAGE_TITLE}>Categories &amp; tags</h1>
+        <div className="flex min-w-0 items-center gap-1">
+          <h1 className={PAGE_TITLE}>Categories &amp; tags</h1>
+          <HelpLink />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

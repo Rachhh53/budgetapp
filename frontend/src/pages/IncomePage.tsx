@@ -8,6 +8,7 @@ import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
 import { describeSchedule } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
 import { BUTTON_PRIMARY, PAGE_TITLE, ROW_LINK } from "../components/ui";
+import { HelpLink } from "../components/help/HelpLink";
 
 
 /**
@@ -30,7 +31,10 @@ export function IncomePage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Money coming in</p>
-          <h1 className={PAGE_TITLE}>Income</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Income</h1>
+            <HelpLink />
+          </div>
         </div>
         <button type="button" disabled={needsAccount} onClick={() => setAdding(true)} className={BUTTON_PRIMARY}>
           + Add income source

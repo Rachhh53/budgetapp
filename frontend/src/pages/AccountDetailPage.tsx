@@ -31,6 +31,7 @@ import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
 
 /**
  * Account detail (design/account-detail.png): the balance and where it is heading, how it has
@@ -99,10 +100,13 @@ export function AccountDetailPage() {
             </Link>{" "}
             / {TYPE_LABELS[account.type]}
           </p>
-          <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
-            <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
-            <span className="truncate">{account.name}</span>
-          </h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
+              <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: account.color }} />
+              <span className="truncate">{account.name}</span>
+            </h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {accountSubtitle(account)}
             {account.archived && " · Archived"}
@@ -217,7 +221,7 @@ export function AccountDetailPage() {
 
         <TransactionsCard account={account} />
 
-        <Card title="Balances you entered">
+        <Card title="Balances you entered" tip="enteredBalance">
           {balances.length === 0 ? (
             <p className="text-muted">
               Nothing here yet. Choose "Update balance" and type in what your bank shows — projections start from the

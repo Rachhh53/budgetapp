@@ -22,6 +22,34 @@ class ConfigTest {
     }
 
     @Test
+    void usesWindowsOwnFoldersForFontsAndDownloads() {
+        Config config = Config.fromEnvironment(
+                Map.of("WINDIR", "C:\\Windows", "USERPROFILE", "C:\\Users\\Amara"),
+                Config.Platform.of("Windows 11", "C:\\Users\\Amara"));
+
+        assertThat(config.fontsDir()).hasValue(Path.of("C:\\Windows", "Fonts"));
+        assertThat(config.downloadsDir()).hasValue(Path.of("C:\\Users\\Amara", "Downloads"));
+    }
+
+    @Test
+    void usesAMacsOwnFoldersWhenNothingIsSet() {
+        Config config = Config.fromEnvironment(Map.of(), Config.Platform.of("Mac OS X", "/Users/amara"));
+
+        assertThat(config.dataDir()).isEqualTo(Path.of("/Users/amara", "Library", "Application Support", "Budget"));
+        assertThat(config.fontsDir()).hasValue(Config.MAC_FONTS);
+        assertThat(config.downloadsDir()).hasValue(Path.of("/Users/amara", "Downloads"));
+    }
+
+    @Test
+    void leavesFontsAndDownloadsEmptyElsewhere() {
+        Config config = Config.fromEnvironment(Map.of(), Config.Platform.of("Linux", "/home/amara"));
+
+        assertThat(config.dataDir()).isEqualTo(Path.of("/home/amara", ".local", "share", "Budget"));
+        assertThat(config.fontsDir()).isEmpty();
+        assertThat(config.downloadsDir()).isEmpty();
+    }
+
+    @Test
     void readsEveryValueFromTheEnvironment() {
         Config config = Config.fromEnvironment(Map.of(
                 "BUDGET_BIND_HOST", "100.64.0.7",

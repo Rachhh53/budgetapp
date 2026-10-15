@@ -166,4 +166,22 @@ class PayoffPlanTest {
         assertThatIllegalArgumentException().isThrownBy(
                 () -> PayoffPlan.withExtra(List.of(debt(1, 100000, 100, 1000)), cents(-1), Order.HIGHEST_RATE));
     }
+
+    /** For the "Debt over time" chart: everything owed at each month's end, from today until the last debt is gone. */
+    @Test
+    void followsWhatIsOwedAltogetherMonthByMonth() {
+        Debt card = debt(1, 30000, 0, 10000);
+        Debt loan = debt(2, 20000, 0, 10000);
+
+        Result without = PayoffPlan.asTheyAre(List.of(card, loan));
+        Result with = PayoffPlan.withExtra(List.of(card, loan), cents(10000), Order.SMALLEST_BALANCE);
+
+        // October as it stands, then each month's payments off, at 0% so the sums are plain.
+        assertThat(without.owed()).extracting(PayoffPlan.Owed::total)
+                .containsExactly(cents(50000), cents(30000), cents(10000), cents(0));
+        assertThat(without.owed().getFirst().month()).hasToString("2026-10");
+        assertThat(with.owed()).extracting(PayoffPlan.Owed::total)
+                .containsExactly(cents(50000), cents(20000), cents(0));
+        assertThat(with.owed().getLast().month()).hasToString("2026-12");
+    }
 }

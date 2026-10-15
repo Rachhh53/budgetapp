@@ -10,6 +10,15 @@ export function formatCents(cents: number): string {
   return DOLLARS.format(cents / 100);
 }
 
+/** `24000000` → `"$240k"`, `125000000` → `"$1.25M"`: short enough for a chart's axis, for figures that can run to millions. */
+export function shortDollars(cents: number): string {
+  const dollars = cents / 100;
+  if (Math.abs(dollars) >= 1_000_000) {
+    return `$${(dollars / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
+  }
+  return Math.abs(dollars) >= 1000 ? `$${Math.round(dollars / 1000)}k` : `$${Math.round(dollars)}`;
+}
+
 /** `170510` → `"1705.10"`: the plain form that goes back into an amount field. */
 export function centsToInput(cents: number): string {
   const sign = cents < 0 ? "-" : "";

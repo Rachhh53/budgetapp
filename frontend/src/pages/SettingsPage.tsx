@@ -23,9 +23,13 @@ import { DefaultDateSetting } from "../components/settings/DefaultDateSetting";
 import { YearDaySetting } from "../components/settings/YearDaySetting";
 import { HolidaysCard } from "../components/settings/HolidaysCard";
 import { PAGE_TITLE } from "../components/ui";
+import { HelpLink } from "../components/help/HelpLink";
+
+/** The system the window runs on, by name, for "Follow …"; Windows unless it is plainly a Mac. */
+const SYSTEM_NAME = /Mac/i.test(navigator.userAgent) ? "macOS" : "Windows";
 
 const THEME_LABELS: Record<Theme, string> = {
-  system: "Follow Windows",
+  system: `Follow ${SYSTEM_NAME}`,
   light: "Light",
   dark: "Dark",
 };
@@ -49,7 +53,10 @@ export function SettingsPage() {
 
   return (
     <>
-      <h1 className={`${PAGE_TITLE} mb-4 md:mb-6`}>Settings</h1>
+      <div className="flex min-w-0 items-center gap-1 mb-4 md:mb-6">
+        <h1 className={PAGE_TITLE}>Settings</h1>
+        <HelpLink />
+      </div>
       <div className="space-y-4 md:space-y-6">
         {settings.isPending && <p className="text-muted">Loading your settings…</p>}
         {settings.isError && (

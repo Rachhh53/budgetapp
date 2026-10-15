@@ -221,6 +221,8 @@ public final class Ledger {
      * @param promosEnding promotional rates that end in this period with a balance left on them
      * @param statementsPaid which statement each card payment listed here was sized from, for those
      *                    that pay a statement's balance or its minimum
+     * @param unbilled    the current period only: each billed-later item's visits that no invoice covers yet,
+     *                    up to today (spec §4.6); empty for any other period
      */
     public record PeriodDetail(
             LocalDate start,
@@ -237,7 +239,17 @@ public final class Ledger {
             List<BucketPeriod> buckets,
             List<Move> bucketMoves,
             List<PromoEnd> promosEnding,
-            List<StatementPaid> statementsPaid) {}
+            List<StatementPaid> statementsPaid,
+            List<Unbilled> unbilled) {}
+
+    /**
+     * Visits of something billed later that have built up with no invoice yet.
+     *
+     * @param since   the first of them
+     * @param through the last of them
+     */
+    public record Unbilled(
+            long itemId, String name, long payFromAccountId, int visits, long amountCents, LocalDate since, LocalDate through) {}
 
     /**
      * The statement a card payment that follows its card was sized from, so the screen can say
@@ -354,7 +366,32 @@ public final class Ledger {
                                                 .map(Carried::occurrence))
                                 .anyMatch(occurrence ->
                                         occurrence.itemId() == paid.itemId() && occurrence.scheduledDate().equals(paid.scheduledDate())))
-                        .toList()));
+                        .toList(),
+                period.current() ? unbilled(pay.today()) : List.of()));
+    }
+
+    /**
+     * What has built up on each billed-later item with no invoice yet, up to {@code today}. It stays
+     * on the current pay period, whichever that is, until an invoice is entered for it (Rachel,
+     * 2026-10-14). An item that stopped being billed later still lists what built up before.
+     */
+    public List<Unbilled> unbilled(LocalDate today) {
+        List<Unbilled> unbilled = new ArrayList<>();
+        for (Item item : items.all()) {
+            boolean everBilledLater = item.versions().stream().anyMatch(version -> version.terms().billedLater());
+            if (item.archived() || !everBilledLater) {
+                continue;
+            }
+            List<Occurrence> visits = itemCalendar.unbilled(item, today);
+            if (!visits.isEmpty()) {
+                unbilled.add(new Unbilled(
+                        item.id(), item.name(), item.versionOn(today).terms().payFromAccountId(), visits.size(),
+                        visits.stream().mapToLong(Occurrence::amountCents).sum(),
+                        visits.getFirst().dueDate(), visits.getLast().dueDate()));
+            }
+        }
+        unbilled.sort(Comparator.comparing(Unbilled::name, String.CASE_INSENSITIVE_ORDER));
+        return unbilled;
     }
 
     /**
@@ -1095,7 +1132,8 @@ public final class Ledger {
         BucketMoves.Capped capped = BucketMoves.stopAtGoals(
                 open.isEmpty()
                         ? List.<Move>of()
-                        : BucketMoves.derive(open, buckets.allChanges(), entries.withBucketSplits(), active, settled, expansion.periods()),
+                        : BucketMoves.derive(
+                                open, buckets.allChanges(), entries.withBucketSplits(), active, settled, expansion.visits(), expansion.periods()),
                 stopAt);
         List<Move> bucketMoves = new ArrayList<>(BucketMoves.neverOverdrawn(capped.moves()));
         List<Occurrence> listed = settled.stream()

@@ -249,6 +249,26 @@ class PlannerApiTest extends ApiTestBase {
             assertThat(date(visaSmallest.get("payoffDate"))).isBefore(date(visaHighest.get("payoffDate")));
             // Paying the dearest first never costs more interest.
             assertThat(highest.get("interestSavedCents").asLong()).isGreaterThanOrEqualTo(smallest.get("interestSavedCents").asLong());
+
+            // Each debt says what it saves, and those add up to the whole.
+            long eachSaves = 0;
+            for (JsonNode debt : highest.get("debts")) {
+                eachSaves += debt.get("interestSavedCents").asLong();
+            }
+            assertThat(eachSaves).isEqualTo(highest.get("interestSavedCents").asLong());
+
+            // Debt over time: this month as it stands on both sides, gone sooner with the extra than without.
+            JsonNode owed = highest.get("owedOverTime");
+            JsonNode first = owed.get(0);
+            assertThat(first.get("withCents").asLong()).isEqualTo(first.get("withoutCents").asLong()).isPositive();
+            JsonNode last = owed.get(owed.size() - 1);
+            assertThat(last.get("withCents").asLong()).isZero();
+            assertThat(last.get("withoutCents").asLong()).isZero();
+            int goneWith = 0;
+            while (owed.get(goneWith).get("withCents").asLong() > 0) {
+                goneWith++;
+            }
+            assertThat(owed.get(goneWith).get("withoutCents").asLong()).isPositive();
         }
 
         @Test

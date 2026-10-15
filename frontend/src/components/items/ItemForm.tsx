@@ -165,6 +165,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   // How much a card payment pays: an amount of its own, or whatever the card works out (its statement balance, say).
   const [cardMode, setCardMode] = useState<CardPaymentMode>(item?.cardPaymentMode ?? starting?.cardPaymentMode ?? "fixed");
   const [amountMode, setAmountMode] = useState<AmountMode>(item?.amountMode ?? "per_occurrence");
+  const [billedLater, setBilledLater] = useState(item?.billedLater ?? false);
   const [amount, setAmount] = useState(item ? centsToInput(item.amountCents) : "");
   const [estimate, setEstimate] = useState(item?.estimate ?? false);
   const [frequency, setFrequency] = useState<ItemFrequency>(schedule?.frequency ?? "monthly");
@@ -302,7 +303,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
       archived,
       tagIds,
       amountCents,
-      amountMode: followsCard ? "per_occurrence" : amountMode,
+      // Something billed later is added up visit by visit, so it is always an amount each time.
+      amountMode: followsCard || (kind === "bill" && billedLater) ? "per_occurrence" : amountMode,
+      billedLater: kind === "bill" && billedLater,
       estimate: followsCard || estimate,
       // Only a card payment says how much it pays; nothing else has the choice.
       ...(kind === "card_payment" ? { cardPaymentMode: cardMode } : {}),
@@ -443,17 +446,37 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
               <>
                 <div>
                   <MoneyField
-                    label={amountMode === "annual" ? "Per year" : "Amount each time"}
+                    label={kind === "bill" && billedLater ? "Each visit" : amountMode === "annual" ? "Per year" : "Amount each time"}
                     value={amount}
                     onChange={setAmount}
-                    hint={amountMode === "annual" ? "Shared out evenly over its schedule." : undefined}
+                    hint={amountMode === "annual" && !(kind === "bill" && billedLater) ? "Shared out evenly over its schedule." : undefined}
                     required
                     hero
                   />
                 </div>
+                {kind === "bill" && (
+                  <label className="flex min-h-11 items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={billedLater}
+                      onChange={(event) => setBilledLater(event.target.checked)}
+                      aria-describedby={`${id}-billed-later`}
+                      className="mt-0.5 size-5 shrink-0 accent-(--accent)"
+                    />
+                    <span>
+                      Billed later
+                      <span id={`${id}-billed-later`} className="block text-sm text-muted">
+                        Each date is a visit you're billed for afterwards, like a weekly appointment invoiced every few months. Visits add
+                        up on the pay period until you mark them invoiced.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 {/* Side by side where there is room, so the amount is one glance, not three rows. */}
                 <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 sm:items-end">
-                  <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+                  {!(kind === "bill" && billedLater) && (
+                    <Segmented legend="How you enter the amount" options={AMOUNT_MODE_OPTIONS} value={amountMode} onChange={setAmountMode} />
+                  )}
                   <label className="flex min-h-11 items-center gap-3">
                     <input
                       type="checkbox"

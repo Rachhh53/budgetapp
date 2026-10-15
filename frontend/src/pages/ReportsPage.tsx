@@ -62,6 +62,7 @@ import { Segmented } from "../components/Segmented";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 /** The picker's choice for a report not saved yet. Not a number, so it can never be a saved report's id. */
 const NEW = "new";
@@ -193,7 +194,10 @@ export function ReportsPage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Your reports</p>
-          <h1 className={PAGE_TITLE}>Reports</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Reports</h1>
+            <HelpLink />
+          </div>
         </div>
       </div>
 

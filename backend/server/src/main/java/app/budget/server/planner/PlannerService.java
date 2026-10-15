@@ -194,6 +194,8 @@ public final class PlannerService {
     /**
      * A debt on the payoff timeline.
      *
+     * @param interestSavedCents interest no longer paid on this debt with the extra; {@code null} when it is never paid off
+     *                           one way or the other, or its payoff is already planned
      * @param planned true for a card whose promotional balance already has a payoff among the recurring
      *                payments: it is shown as gone when the promotion ends, and takes none of the extra
      */
@@ -209,7 +211,8 @@ public final class PlannerService {
             LocalDate payoffDateBefore,
             boolean paysOff,
             boolean paysOffBefore,
-            boolean planned) {}
+            boolean planned,
+            Long interestSavedCents) {}
 
     /**
      * Every debt with the extra going to one at a time and each payoff rolling into the next.
@@ -217,8 +220,18 @@ public final class PlannerService {
      * @param debts              in the order they are gone
      * @param debtFreeDate       when the last is gone with the extra; {@code null} when one never is
      * @param interestSavedCents across all of them; {@code null} when one is never paid off
+     * @param owedOverTime       what they all owe together at each month's end, with the extra and without, from
+     *                           this month until the last is gone both ways (at most {@value #CHART_MONTHS} months)
      */
-    public record Payoff(Order order, List<PayoffDebt> debts, LocalDate debtFreeDate, LocalDate debtFreeDateBefore, Long interestSavedCents) {}
+    public record Payoff(
+            Order order, List<PayoffDebt> debts, LocalDate debtFreeDate, LocalDate debtFreeDateBefore, Long interestSavedCents,
+            List<OwedPoint> owedOverTime) {}
+
+    /** One month on the "Debt over time" chart; {@code month} is its first day. */
+    public record OwedPoint(LocalDate month, long withCents, long withoutCents) {}
+
+    /** How far the chart runs at most, when a debt is never paid off one way or the other: thirty years. */
+    static final int CHART_MONTHS = 360;
 
     /** An account left out of the comparison. */
     public record Hidden(long accountId, String name, String type) {}
@@ -308,16 +321,40 @@ public final class PlannerService {
             timeline.add(new PayoffDebt(
                     debt.account().id(), debt.account().name(), debt.account().color(), debt.balanceCents(), debt.rateBp(),
                     debt.debt().rateAfter() == null ? null : (Integer) debt.debt().rateAfter().value(), debt.debt().rateChangesOn(),
-                    with.payoffDate(), without.payoffDate(), with.paysOff(), without.paysOff(), false));
+                    with.payoffDate(), without.payoffDate(), with.paysOff(), without.paysOff(), false,
+                    with.paysOff() && without.paysOff() ? (Long) without.interest().minus(with.interest()).cents() : null));
         }
         // In the order they are gone; one that never is goes last.
         timeline.sort(Comparator.comparing((PayoffDebt debt) -> debt.payoffDate() == null ? LocalDate.MAX : debt.payoffDate())
                 .thenComparing(PayoffDebt::name, String.CASE_INSENSITIVE_ORDER));
         Payoff payoff = new Payoff(
                 order, timeline, after.debtFreeDate(), before.debtFreeDate(),
-                before.paysOff() && after.paysOff() ? (Long) before.totalInterest().minus(after.totalInterest()).cents() : null);
+                before.paysOff() && after.paysOff() ? (Long) before.totalInterest().minus(after.totalInterest()).cents() : null,
+                owedOverTime(after, before));
 
         return new Comparison(today, extraCents, years, flags, options, payoff, hidden);
+    }
+
+    /**
+     * The two month-by-month totals side by side. The one that ends sooner stays at what it ended on
+     * (nothing, once paid off) until the other ends too.
+     */
+    private static List<OwedPoint> owedOverTime(Result with, Result without) {
+        List<PayoffPlan.Owed> a = with.owed();
+        List<PayoffPlan.Owed> b = without.owed();
+        if (a.isEmpty() || b.isEmpty()) {
+            return List.of();
+        }
+        int months = Math.min(Math.max(a.size(), b.size()), CHART_MONTHS + 1);
+        List<OwedPoint> points = new ArrayList<>(months);
+        for (int i = 0; i < months; i++) {
+            PayoffPlan.Owed withOwed = a.get(Math.min(i, a.size() - 1));
+            PayoffPlan.Owed withoutOwed = b.get(Math.min(i, b.size() - 1));
+            // Both start in the same month, so the i-th month is the same on each side.
+            YearMonth month = a.getFirst().month().plusMonths(i);
+            points.add(new OwedPoint(month.atDay(1), withOwed.total().cents(), withoutOwed.total().cents()));
+        }
+        return List.copyOf(points);
     }
 
     /** A loan as its own page works it out: today's balance and rate, the payment less escrow, on its payment day. */
@@ -377,7 +414,7 @@ public final class PlannerService {
         Integer rateBp = covering != null ? (Integer) covering.rateBp() : apr.map(BasisPoints::value).orElse(null);
         if (plannedBy != null) {
             plannedCards.add(new PayoffDebt(
-                    account.id(), account.name(), account.color(), balance, rateBp, null, null, plannedBy, plannedBy, true, true, true));
+                    account.id(), account.name(), account.color(), balance, rateBp, null, null, plannedBy, plannedBy, true, true, true, null));
             return Optional.empty();
         }
         CardsRepository.Settings settings = cards.settings(account.id()).orElse(null);

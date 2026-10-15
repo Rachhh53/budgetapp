@@ -9,6 +9,7 @@ import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
 import { ByMonthCard } from "../components/items/ByMonthCard";
+import { BilledLaterCard } from "../components/items/BilledLaterCard";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
@@ -16,6 +17,7 @@ import { PauseControls } from "../components/items/PauseItem";
 import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 /**
  * One recurring item, laid out like an account's page and an income source's: the big figures
@@ -87,7 +89,10 @@ export function RecurringItemDetailPage() {
             </Link>{" "}
             / {KIND_LABELS[item.kind]}
           </p>
-          <h1 className={`${PAGE_TITLE} truncate`}>{item.name}</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} min-w-0 truncate`}>{item.name}</h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {describeKind(item)} · {describeItemSchedule(item.schedule)}
             {/* Said in words, never by color alone. */}
@@ -167,6 +172,7 @@ export function RecurringItemDetailPage() {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-4">
+            {item.billedLater && <BilledLaterCard item={item} />}
             <ByMonthCard item={item} />
             <Card title="Schedule" action={edit("schedule", "the schedule")}>
               <dl className="grid gap-4 sm:grid-cols-3">

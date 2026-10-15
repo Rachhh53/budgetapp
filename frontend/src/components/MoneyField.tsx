@@ -1,6 +1,8 @@
 import { Calculator } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import type { TermId } from "../help/terms";
 import { centsToInput, isSum, parseDollars } from "../lib/money";
+import { InfoTip } from "./help/InfoTip";
 import { MoneyCalculator } from "./MoneyCalculator";
 import { HINT, INPUT, LABEL } from "./ui";
 
@@ -19,6 +21,8 @@ interface MoneyFieldProps {
   autoFocus?: boolean;
   /** The form's main figure: shown large, so it is the first thing read. */
   hero?: boolean;
+  /** An ⓘ beside the label, outside it so the field's name stays just the label. */
+  tip?: TermId;
 }
 
 export const AMOUNT_HELP = "Please enter an amount like 1,250.00.";
@@ -30,7 +34,7 @@ export const AMOUNT_HELP = "Please enter an amount like 1,250.00.";
  * button beside it opens a calculator for anything more, and for a phone, whose number pad
  * has no plus key.
  */
-export function MoneyField({ label, value, onChange, hint, aside, error, required, autoFocus, hero }: MoneyFieldProps) {
+export function MoneyField({ label, value, onChange, hint, aside, error, required, autoFocus, hero, tip }: MoneyFieldProps) {
   const id = useId();
   const [calculating, setCalculating] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
@@ -68,6 +72,13 @@ export function MoneyField({ label, value, onChange, hint, aside, error, require
           <span id={`${id}-aside`} className="text-sm text-muted tabular-nums">
             {aside}
           </span>
+        </div>
+      ) : tip ? (
+        <div className="mb-1 flex items-center gap-1">
+          <label htmlFor={id} className="font-medium">
+            {label}
+          </label>
+          <InfoTip term={tip} />
         </div>
       ) : (
         <label htmlFor={id} className={LABEL}>

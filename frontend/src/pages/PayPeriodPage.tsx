@@ -1,12 +1,13 @@
-import { ChevronLeft, ChevronRight, Clock, Info, PartyPopper, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, PartyPopper, ReceiptText, TriangleAlert } from "lucide-react";
 import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Bucket, useBuckets } from "../api/buckets";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
+import type { Unbilled } from "../api/invoices";
 import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
 import { usePlans } from "../api/plans";
@@ -26,7 +27,10 @@ import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
+import { FIND_PARAM, PeriodSearch } from "../components/period/PeriodSearch";
+import { foundEntry, foundOccurrence } from "../api/search";
 import { ItemForm } from "../components/items/ItemForm";
+import { InvoiceForm } from "../components/period/InvoiceForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { PaycheckForm } from "../components/period/PaycheckForm";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
@@ -35,6 +39,9 @@ import { BUTTON_PRIMARY, INPUT } from "../components/ui";
 import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
+import { InfoTip } from "../components/help/InfoTip";
+import type { TermId } from "../help/terms";
 
 /** How far either side of the period on screen the strip of ending balances reaches. */
 const STRIP_DAYS_BACK = 45;
@@ -157,22 +164,36 @@ export function PayPeriodPage() {
 
   return (
     <div className="flex flex-col gap-3 lg:h-full">
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
+      {/* The two halves share a row while they fit and wrap onto two when the window is too narrow,
+          so a resized window never has one drawn over the other; the search box gives up width first. */}
+      <header className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-y-2">
+        <div className="flex items-center gap-3 lg:shrink-0">
           <PeriodLink to={previous} label="Previous pay period" icon={ChevronLeft} />
           <div className="min-w-0 flex-1 text-center lg:flex-none lg:text-left">
             <p className="text-xs font-semibold tracking-wide text-muted uppercase">{detail.current ? "Current pay period" : "Pay period"}</p>
-            <h1 className="text-xl font-bold md:text-2xl">
-              {formatDay(detail.start)} – {formatDate(detail.end)}
-            </h1>
+            <div className="flex min-w-0 items-center justify-center gap-1 lg:justify-start">
+              <h1 className="text-xl font-bold md:text-2xl">
+                {formatDay(detail.start)} – {formatDate(detail.end)}
+              </h1>
+              {/* On a phone the ? sits in the row below, so the dates stay on one line between the arrows. */}
+              <span className="hidden lg:inline-flex">
+                <HelpLink />
+              </span>
+            </div>
           </div>
           <PeriodLink to={next} label="Next pay period" icon={ChevronRight} />
           {detail.current && (
             <span className="hidden rounded-full bg-accent px-3 py-1 text-sm font-semibold text-on-accent lg:inline">Current</span>
           )}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:gap-3">
-          {anyEstimate && <EstimateKey />}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:flex-1 lg:justify-end lg:gap-3">
+          <div className="flex items-center justify-between gap-2">
+            {anyEstimate && <EstimateKey />}
+            <span className="ml-auto flex lg:hidden">
+              <HelpLink />
+            </span>
+          </div>
+          <PeriodSearch />
           <HideAmountsButton />
           <AddItemButton />
         </div>
@@ -206,7 +227,13 @@ export function PayPeriodPage() {
       <div className="grid grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-3">
         {/* On a phone, what needs doing by hand comes first (design/phone-pay-period.png). */}
         <div className="flex flex-col gap-3 lg:order-2 lg:min-h-0">
-          <ManualPanel occurrences={lists.manual} carriedOver={detail.carriedOver} oneOffs={lists.oneOffs} context={context} />
+          <ManualPanel
+            occurrences={lists.manual}
+            carriedOver={detail.carriedOver}
+            oneOffs={lists.oneOffs}
+            unbilled={detail.unbilled ?? []}
+            context={context}
+          />
         </div>
         <div className="flex flex-col gap-3 lg:order-1 lg:min-h-0 lg:overflow-y-auto">
           {/* An investment's assumed growth is not income: it shows on that account's own tab instead. */}
@@ -287,7 +314,11 @@ const ACCOUNT_PARAM = "account";
  */
 function usePeriodPath(): (start: string) => string {
   const { search } = useLocation();
-  return (start) => `/periods/${start}${search}`;
+  // The row a search led to belongs to this period alone, so it is not carried to the next.
+  const kept = new URLSearchParams(search);
+  kept.delete(FIND_PARAM);
+  const rest = kept.toString();
+  return (start) => `/periods/${start}${rest === "" ? "" : `?${rest}`}`;
 }
 
 /** ← and → move between periods, unless the keys are being used to type or to work a dialog. */
@@ -386,6 +417,13 @@ function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
           </>
         )}
       </Card>
+      <p className="mt-4 text-muted">
+        Not sure where to begin?{" "}
+        <Link to="/help" className="font-semibold text-accent-ink underline">
+          Help has a step-by-step guide
+        </Link>
+        .
+      </p>
     </>
   );
 }
@@ -419,7 +457,7 @@ function PeriodStrip({ periods, selected }: { periods: readonly PayPeriod[]; sel
       <p className="hidden shrink-0 text-sm leading-tight text-muted xl:block">
         Ending balance
         <br />
-        by period
+        by period <InfoTip term="endingByPeriod" />
       </p>
       <ol className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
         {periods.map((period) => (
@@ -467,6 +505,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
     <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
       <Figure
         label="Starting balance"
+        tip="startingBalance"
         cents={balance.startingCents}
         // A balance dated after this period is the first one entered: nothing earlier is counted, and the note says so.
         note={`${account.name} · ${formatDay(balance.startingOn)}${
@@ -476,6 +515,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Coming in"
+        tip="comingIn"
         cents={balance.inCents}
         sign="+"
         note="Paychecks and money in"
@@ -485,6 +525,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Going out"
+        tip="goingOut"
         cents={balance.outCents}
         sign="−"
         note="Bills, transfers, budgets, one-offs"
@@ -492,6 +533,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Projected ending"
+        tip="projectedEnding"
         cents={balance.endingCents}
         note={`${plain(balance.startingCents)} + ${plain(balance.inCents)} − ${plain(balance.outCents)}`}
         className="order-1 col-span-2 lg:order-4 lg:col-span-1"
@@ -499,6 +541,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
       />
       <Figure
         label="Available after buckets"
+        tip="available"
         cents={balance.availableCents}
         note={
           balance.lowBalance
@@ -558,6 +601,7 @@ function Figure({
   cents,
   sign = "",
   note,
+  tip,
   breakdown,
   breakdownLabel,
   highlight = false,
@@ -568,7 +612,12 @@ function Figure({
   cents: number;
   sign?: string;
   note: string;
-  /** What the number is made of, shown when the figure is hovered, focused or tapped. */
+  /** What the figure means, behind an ⓘ. */
+  tip?: TermId;
+  /**
+   * What the number is made of, listed in the same ⓘ under what it means. It opens like every
+   * other tip, on a click, a tap or the keyboard, never on a hover over the figure (Rachel, 2026-10-14).
+   */
   breakdown?: readonly Part[];
   breakdownLabel?: string;
   /** The number the screen is about: outlined, and largest on a phone. */
@@ -578,16 +627,32 @@ function Figure({
   className?: string;
 }) {
   return (
-    <div
-      // Focusable when it has more to show, so the keyboard and a tap reach what a hover does.
-      tabIndex={breakdown ? 0 : undefined}
-      className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${
-        breakdown ? "group relative cursor-help focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink" : ""
-      } ${className}`}
-    >
+    <div className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${className}`}>
       <dt className="flex items-center gap-1 text-sm text-muted">
         {label}
-        {breakdown && <Info aria-hidden className="size-3.5" />}
+        {tip && (
+          <InfoTip term={tip}>
+            {breakdown && (
+              <div role="group" aria-label={breakdownLabel}>
+                {breakdown.length === 0 ? (
+                  <p>Nothing in this pay period.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {breakdown.map((part, index) => (
+                      <li key={index} className="flex items-baseline justify-between gap-3">
+                        <span className="min-w-0 break-words">{part.label}</span>
+                        <span data-amount className="shrink-0 font-semibold tabular-nums">
+                          {part.cents < 0 ? "−" : ""}
+                          {formatCents(Math.abs(part.cents))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </InfoTip>
+        )}
       </dt>
       <dd>
         <span data-amount className={`block font-bold tabular-nums ${highlight ? "text-3xl lg:text-2xl" : "text-xl lg:text-2xl"} lg:short:text-xl`}>
@@ -597,37 +662,26 @@ function Figure({
         <span data-amount title={note} className={`block text-sm tabular-nums lg:truncate ${warn ? "font-semibold text-danger" : "text-muted"}`}>
           {note}
         </span>
-        {breakdown && (
-          <div
-            role="group"
-            aria-label={breakdownLabel}
-            // Opens towards the middle of the screen: on a phone this figure sits in the right-hand column.
-            className="invisible absolute top-full right-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface p-3 text-sm opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 lg:right-auto lg:left-0"
-          >
-            {breakdown.length === 0 ? (
-              <p className="text-muted">Nothing in this pay period.</p>
-            ) : (
-              <ul className="space-y-1">
-                {breakdown.map((part, index) => (
-                  <li key={index} className="flex items-baseline justify-between gap-3">
-                    <span className="min-w-0 break-words">{part.label}</span>
-                    <span data-amount className="shrink-0 font-semibold tabular-nums">
-                      {part.cents < 0 ? "−" : ""}
-                      {formatCents(Math.abs(part.cents))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
       </dd>
     </div>
   );
 }
 
 /** One panel of the screen: a titled region that scrolls inside itself as a last resort. */
-function Panel({ title, aside, grow = false, children }: { title: string; aside?: string; grow?: boolean; children: ReactNode }) {
+function Panel({
+  title,
+  aside,
+  tip,
+  grow = false,
+  children,
+}: {
+  title: string;
+  aside?: string;
+  /** A word whose meaning an ⓘ beside the title gives. */
+  tip?: TermId;
+  grow?: boolean;
+  children: ReactNode;
+}) {
   const headingId = useId();
   return (
     <section
@@ -635,9 +689,12 @@ function Panel({ title, aside, grow = false, children }: { title: string; aside?
       className={`flex flex-col rounded-card border border-line bg-surface px-4 py-3 ${grow ? "lg:min-h-0 lg:flex-1" : ""}`}
     >
       <div className="mb-1 flex items-baseline justify-between gap-3">
-        <h2 id={headingId} className="font-semibold">
-          {title}
-        </h2>
+        <div className="flex items-center gap-1">
+          <h2 id={headingId} className="font-semibold">
+            {title}
+          </h2>
+          {tip && <InfoTip term={tip} />}
+        </div>
         {aside && <p className="text-sm text-muted">{aside}</p>}
       </div>
       {/* The side padding (taken back by the margin) leaves room for a focus ring, which scrolling would otherwise clip. */}
@@ -662,6 +719,7 @@ function Row({
   amount,
   below,
   wrap = false,
+  find,
 }: {
   lead?: ReactNode;
   title: ReactNode;
@@ -670,9 +728,25 @@ function Row({
   below?: ReactNode;
   /** Let the detail run onto a second line instead of cutting it short: for rows where every word matters. */
   wrap?: boolean;
+  /** What a search names this row by (`?find=`), so the row it led to can be pointed out. */
+  find?: string;
 }) {
+  const [params] = useSearchParams();
+  const found = find !== undefined && params.get(FIND_PARAM) === find;
+  const ref = useRef<HTMLLIElement>(null);
+  // Brought into view once, when a search leads here; a column that scrolls by itself scrolls to it too.
+  useEffect(() => {
+    if (found) {
+      ref.current?.scrollIntoView?.({ block: "center" });
+    }
+  }, [found]);
   return (
-    <li onClick={clickRowToEdit} className={`py-1.5 lg:py-1 ${ROW_OPENS}`}>
+    <li
+      ref={ref}
+      onClick={clickRowToEdit}
+      aria-current={found ? "true" : undefined}
+      className={`py-1.5 lg:py-1 ${ROW_OPENS} ${found ? "rounded-md bg-bg ring-2 ring-accent ring-inset lg:px-1" : ""}`}
+    >
       <div className="flex items-center gap-3">
         {lead}
         <div className="min-w-0 flex-1 leading-tight">
@@ -840,6 +914,7 @@ function IncomePanel({
           {moneyIn.map((entry) => (
             <Row
               key={entry.id}
+              find={foundEntry(entry.id)}
               title={<EntryName entry={entry} />}
               detail={`One-off · ${formatDay(entry.date)} → ${context.accountName(entry.accountId)}`}
               amount={<EntryAmount entry={entry} />}
@@ -902,6 +977,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
           {occurrences.map((occurrence) => (
             <Row
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
+              find={foundOccurrence(occurrence.itemId, occurrence.dueDate)}
               lead={<span className="shrink-0 rounded-md bg-bg px-1.5 py-0.5 text-xs font-semibold text-muted">AUTO</span>}
               title={<ItemName occurrence={occurrence} context={context} />}
               detail={
@@ -933,6 +1009,7 @@ function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurren
             {occurrences.map((occurrence) => (
               <Row
                 key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
+                find={foundOccurrence(occurrence.itemId, occurrence.dueDate)}
                 lead={
                   <CategoryDot
                     categoryId={occurrence.categoryId}
@@ -1028,11 +1105,14 @@ function ManualPanel({
   occurrences,
   carriedOver,
   oneOffs,
+  unbilled,
   context,
 }: {
   occurrences: readonly Occurrence[];
   carriedOver: readonly Occurrence[];
   oneOffs: readonly Entry[];
+  /** Billed-later visits waiting for an invoice: on the current period only. */
+  unbilled: readonly Unbilled[];
   context: RowContext;
 }) {
   // Something carried over is listed once, even when it also belongs to this period.
@@ -1043,11 +1123,14 @@ function ManualPanel({
   const paid = bills.filter((occurrence) => occurrence.paid).length;
 
   return (
-    <Panel title="Pay manually & one-offs" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} grow>
-      {bills.length === 0 && oneOffs.length === 0 ? (
+    <Panel title="Pay manually & one-offs" tip="payManually" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} grow>
+      {bills.length === 0 && oneOffs.length === 0 && unbilled.length === 0 ? (
         <Empty>Nothing to pay by hand this period, and no one-offs. Use + Add item for a one-time purchase.</Empty>
       ) : (
         <ul className="divide-y divide-line">
+          {unbilled.map((waiting) => (
+            <UnbilledRow key={`unbilled-${waiting.itemId}`} unbilled={waiting} context={context} />
+          ))}
           {bills.map((occurrence) => (
             <ManualRow
               key={`${occurrence.itemId}-${occurrence.scheduledDate}`}
@@ -1059,6 +1142,7 @@ function ManualPanel({
           {oneOffs.map((entry) => (
             <Row
               key={entry.id}
+              find={foundEntry(entry.id)}
               lead={<CategoryDot categoryId={entry.categoryId} tagIds={entry.tagIds} context={context} />}
               title={<EntryName entry={entry} />}
               detail={oneOffDetail(entry, context)}
@@ -1068,6 +1152,45 @@ function ManualPanel({
         </ul>
       )}
     </Panel>
+  );
+}
+
+/**
+ * Visits of something billed later that no invoice covers yet (spec §4.6). They move no money, so the
+ * amount is an estimate; the row stays on the current period until **Mark as invoiced** turns them
+ * into a bill, which is then ticked like any other (Rachel, 2026-10-14).
+ */
+function UnbilledRow({ unbilled, context }: { unbilled: Unbilled; context: RowContext }) {
+  const [invoicing, setInvoicing] = useState(false);
+  const visits = unbilled.visits === 1 ? "1 visit" : `${unbilled.visits} visits`;
+  const span = unbilled.since === unbilled.through ? formatDay(unbilled.since) : `${formatDay(unbilled.since)} – ${formatDay(unbilled.through)}`;
+  return (
+    <>
+      <Row
+        lead={<ReceiptText aria-hidden className="size-4 shrink-0 text-muted" />}
+        title={
+          <>
+            <Link to={`/recurring/${unbilled.itemId}`} className="cursor-pointer hover:underline">
+              {unbilled.name}
+            </Link>{" "}
+            <InfoTip term="billedLater" />
+          </>
+        }
+        detail={`${visits} not billed yet · ${span} · ${context.accountName(unbilled.payFromAccountId)}`}
+        wrap
+        amount={<Amount cents={unbilled.amountCents} estimate />}
+        below={
+          <button
+            type="button"
+            onClick={() => setInvoicing(true)}
+            className="mt-1 inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-semibold lg:min-h-9"
+          >
+            Mark as invoiced
+          </button>
+        }
+      />
+      {invoicing && <InvoiceForm unbilled={unbilled} onClose={() => setInvoicing(false)} />}
+    </>
   );
 }
 
@@ -1085,7 +1208,9 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
   const edit = useEditOccurrence();
   const checkboxId = useId();
 
-  const due = `Due ${formatDay(occurrence.dueDate)}`;
+  const due = occurrence.coversThrough
+    ? `Invoice for visits through ${formatDay(occurrence.coversThrough)} · due ${formatDay(occurrence.dueDate)}`
+    : `Due ${formatDay(occurrence.dueDate)}`;
   const isPastDue = pastDue([occurrence]).length > 0;
   const soon = dueSoon(occurrence, Number(useSettings().data?.unpaid_highlight_days ?? 0));
   // Paying late is allowed, and is kept on record: the day it was paid, against the day it was due.
@@ -1095,6 +1220,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
 
   return (
     <Row
+      find={foundOccurrence(occurrence.itemId, occurrence.dueDate)}
       lead={
         // The label gives the small box a 44px target (spec: touch targets).
         <label htmlFor={checkboxId} className="-my-1 -ml-2 flex size-11 shrink-0 cursor-pointer items-center justify-center">
@@ -1222,7 +1348,7 @@ function AccountsPanel({
 
   if (shown === undefined || known.every((tab) => tab.balance === undefined)) {
     return (
-      <Panel title="Accounts & buckets" aside="at period end">
+      <Panel title="Accounts & buckets" aside="at period end" tip="bucket">
         <Empty>
           Enter a balance on the{" "}
           <Link to="/accounts" className="font-semibold text-accent-ink underline">
@@ -1258,7 +1384,7 @@ function AccountsPanel({
   const { balance } = shown;
   if (balance === undefined) {
     return (
-      <Panel title="Accounts & buckets" aside="at period end">
+      <Panel title="Accounts & buckets" aside="at period end" tip="bucket">
         {picker}
         <div>
           <Empty>
@@ -1283,7 +1409,7 @@ function AccountsPanel({
     return bucket && period.accountId === shown.account.id ? [{ bucket, period }] : [];
   });
   return (
-    <Panel title="Accounts & buckets" aside="at period end">
+    <Panel title="Accounts & buckets" aside="at period end" tip="bucket">
       {picker}
       <dl aria-label={shown.account.name} className="divide-y divide-line">
         <AccountLine label={owed ? "Owed at period end" : "Ending balance"} cents={balance.endingCents} strong />

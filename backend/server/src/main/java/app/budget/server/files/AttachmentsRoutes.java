@@ -188,7 +188,7 @@ public final class AttachmentsRoutes {
         } catch (ApiException e) {
             throw ApiException.notFound();
         }
-        if (!Inputs.inSupportedYears(scheduledDate) || calendar.find(item, scheduledDate).isEmpty()) {
+        if (!Inputs.inSupportedYears(scheduledDate) || calendar.findPaid(item, scheduledDate).isEmpty()) {
             throw ApiException.notFound();
         }
         return new Owner.Occurrence(item.id(), scheduledDate);

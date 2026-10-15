@@ -326,10 +326,12 @@ describe("pay period screen", () => {
     expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("$1,214.38");
     expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("Everyday Checking · Oct 1 · set by you");
     expect(within(figures).getByText("Coming in").closest("div")).toHaveTextContent("+$3,986.20");
-    // Hovering, focusing or tapping the figure lists what it is made of.
-    const comingIn = within(figures).getByRole("group", { name: "What is coming in" });
+    // What it is made of is behind its ⓘ, like every other tip: nothing shows until that is pressed.
+    expect(within(figures).queryByRole("group", { name: "What is coming in" })).not.toBeInTheDocument();
+    await userEvent.click(within(figures).getByRole("button", { name: 'What "Coming in" means' }));
+    const comingIn = screen.getByRole("group", { name: "What is coming in" });
     expect(comingIn).toHaveTextContent(/paycheck\$2,486\.20/);
-    expect(comingIn.closest("[tabindex]")).toHaveAttribute("tabindex", "0");
+    expect(comingIn.closest("[role=note]")).toHaveTextContent("Paychecks and any other money arriving in this pay period.");
     expect(within(figures).getByText("Going out").closest("div")).toHaveTextContent("−$2,104.48");
     expect(within(figures).getByText("Projected ending").closest("div")).toHaveTextContent("$3,096.10");
     expect(within(figures).getByText("Projected ending").closest("div")).toHaveTextContent("1,214.38 + 3,986.20 − 2,104.48");
@@ -1353,5 +1355,145 @@ describe("pay period screen: a paycheck and its stub", () => {
     expect(await within(dialog).findByRole("link", { name: "Add your paycheck on the Income screen" })).toHaveAttribute("href", "/income");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add the expense it is for" }));
     expect(await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" })).toBeInTheDocument();
+  });
+});
+
+describe("pay period screen: finding something", () => {
+  const RESULTS = {
+    recurring: [
+      {
+        id: 2,
+        name: "Electric",
+        kind: "bill",
+        payFromAccountId: 1,
+        last: { date: "2026-09-16", amountCents: 13200, estimate: false, paid: true, periodStart: "2026-09-15" },
+        next: { date: "2026-10-16", amountCents: 14000, estimate: true, paid: false, periodStart: "2026-10-01" },
+      },
+    ],
+    oneOffs: [
+      {
+        id: 9,
+        kind: "money_out",
+        description: "Vet emergency",
+        payee: null,
+        date: "2026-10-03",
+        amountCents: 64000,
+        estimate: false,
+        accountId: 1,
+        upcoming: false,
+        periodStart: "2026-10-01",
+      },
+    ],
+    more: false,
+  };
+
+  it("lists when a recurring item was last paid and is next planned, and one-offs, without putting the words in the address", async () => {
+    const fetchMock = withPeriod(OCTOBER, { "POST /api/search": () => ({ status: 200, data: RESULTS }) });
+    renderApp();
+
+    await userEvent.type(await screen.findByRole("combobox", { name: "Find a bill or one-off" }), "e");
+    expect(await screen.findByText("Type at least 2 letters to search.")).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("combobox", { name: "Find a bill or one-off" }), "le");
+
+    const list = await screen.findByRole("listbox", { name: "What was found" });
+    const options = within(list).getAllByRole("option");
+    expect(options).toHaveLength(3);
+    expect(options[0]).toHaveTextContent("Last paid Sep 16, 2026");
+    expect(options[1]).toHaveTextContent("Next planned Oct 16, 2026");
+    expect(options[2]).toHaveTextContent("One-off · Paid Oct 3, 2026 · Everyday Checking");
+    expect(bodiesSentTo(fetchMock, "POST /api/search")).toContainEqual({ text: "ele" });
+    expect(calls(fetchMock).some((call) => call.includes("ele") && call.startsWith("GET"))).toBe(false);
+  });
+
+  it("opens the pay period that lists it, with the row pointed out", async () => {
+    withPeriod(OCTOBER, { "POST /api/search": () => ({ status: 200, data: RESULTS }) });
+    renderApp("/periods/2026-10-15");
+
+    await userEvent.type(await screen.findByRole("combobox", { name: "Find a bill or one-off" }), "vet");
+    await userEvent.click(await screen.findByRole("option", { name: /Vet emergency/ }));
+
+    expect(await screen.findByRole("heading", { name: /Oct 1 – Oct 14, 2026/ })).toBeInTheDocument();
+    const found = await screen.findByText("Vet emergency", { selector: "button" });
+    expect(found.closest("li")).toHaveAttribute("aria-current", "true");
+  });
+
+  it("says so kindly when nothing matches, or the search fails", async () => {
+    let fail = false;
+    withPeriod(OCTOBER, {
+      "POST /api/search": () =>
+        fail ? { status: 500, error: "Something went wrong" } : { status: 200, data: { recurring: [], oneOffs: [], more: false } },
+    });
+    renderApp();
+
+    const box = await screen.findByRole("combobox", { name: "Find a bill or one-off" });
+    await userEvent.type(box, "zz");
+    expect(await screen.findByText(/Nothing matches “zz”/)).toBeInTheDocument();
+
+    fail = true;
+    await userEvent.type(box, "q");
+    expect(await screen.findByText(/We couldn't search just now/)).toBeInTheDocument();
+  });
+});
+
+describe("pay period screen: billed later", () => {
+  const THERAPY_INVOICE: Occurrence = {
+    ...ELECTRIC,
+    itemId: 7,
+    name: "Therapy",
+    scheduledDate: "2026-10-10",
+    dueDate: "2026-10-10",
+    early: false,
+    payBy: "2026-10-10",
+    amountCents: 61000,
+    estimate: false,
+    projectedCents: 60000,
+    placement: "due_period",
+    invoiceId: 3,
+    coversThrough: "2026-09-30",
+  };
+  const WAITING: PeriodDetail = {
+    ...OCTOBER,
+    occurrences: [THERAPY_INVOICE],
+    unbilled: [
+      { itemId: 7, name: "Therapy", payFromAccountId: 1, visits: 5, amountCents: 60000, since: "2026-09-01", through: "2026-09-29" },
+    ],
+  };
+
+  it("keeps visits not billed yet on the current period and marks them invoiced", async () => {
+    const fetchMock = withPeriod(WAITING, {
+      "POST /api/items/7/invoices": () => ({ status: 201, data: { invoice: { id: 4 }, periodStart: "2026-10-15" }, changed: true }),
+    });
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(manual).toHaveTextContent("5 visits not billed yet · Sep 1 – Sep 29 · Everyday Checking");
+    await userEvent.click(within(manual).getByRole("button", { name: "Mark as invoiced" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Mark Therapy as invoiced" });
+    expect(within(dialog).getByRole("textbox", { name: "Amount billed" })).toHaveValue("600.00");
+    expect(within(dialog).getByLabelText("Covers visits through")).toHaveValue("2026-09-29");
+    fireEvent.change(within(dialog).getByLabelText("Due on"), { target: { value: "2026-10-20" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save invoice" }));
+
+    // Left at what the visits came to, the amount is not sent: the backend adds up the visits the dates cover.
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "POST /api/items/7/invoices")).toEqual([
+        { invoiceDate: todayIso(), dueDate: "2026-10-20", coversThrough: "2026-09-29" },
+      ]),
+    );
+  });
+
+  it("says what an invoice covers, and ticks it paid as an invoice", async () => {
+    const fetchMock = withPeriod(WAITING, {
+      "PUT /api/items/7/invoices/3": () => ({ status: 200, data: {}, changed: true }),
+    });
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(manual).toHaveTextContent("Invoice for visits through Sep 30 · due Oct 10");
+    await userEvent.click(within(manual).getByRole("checkbox", { name: "Therapy paid" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/7/invoices/3")).toEqual([{ paid: true, paidDate: todayIso() }]));
+    expect(calls(fetchMock).some((call) => call.includes("/occurrences/"))).toBe(false);
   });
 });

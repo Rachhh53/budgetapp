@@ -24,6 +24,9 @@ import { PAGE_TITLE } from "../components/ui";
 import { formatDate, formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
+import { InfoTip } from "../components/help/InfoTip";
+import type { TermId } from "../help/terms";
 
 const RANGE_OPTIONS = DASHBOARD_RANGES.map((range) => ({ value: range, label: DASHBOARD_RANGE_LABELS[range] }));
 
@@ -42,7 +45,10 @@ export function DashboardPage() {
       <DashboardTabs />
       <div className="mb-4 md:mb-6">
         <p className="text-sm font-semibold tracking-wide text-muted uppercase">Overview</p>
-        <h1 className={PAGE_TITLE}>Dashboard</h1>
+        <div className="flex min-w-0 items-center gap-1">
+          <h1 className={PAGE_TITLE}>Dashboard</h1>
+          <HelpLink />
+        </div>
       </div>
 
       {dashboard.isPending && <p className="text-muted">Adding everything up…</p>}
@@ -102,7 +108,7 @@ function Figures({ dashboard }: { dashboard: Dashboard }) {
   return (
     <Card>
       <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Figure label="Net worth" cents={netWorth.cents}>
+        <Figure label="Net worth" tip="netWorth" cents={netWorth.cents}>
           {netWorth.changeCents !== null && netWorth.since !== null ? (
             <>
               <span data-amount>{signedCents(netWorth.changeCents)}</span> since {formatDay(netWorth.since)}
@@ -113,18 +119,21 @@ function Figures({ dashboard }: { dashboard: Dashboard }) {
         </Figure>
         {lowestAhead === null ? (
           <div className="min-w-0">
-            <p className="text-muted">Lowest balance ahead</p>
+            <p className="flex items-center gap-1 text-muted">
+              Lowest balance ahead
+              <InfoTip term="lowestAhead" />
+            </p>
             <p className="text-2xl font-bold">—</p>
             <p className="text-sm text-muted">shows once a checking or savings account has a balance</p>
           </div>
         ) : (
-          <Figure label="Lowest balance ahead" cents={lowestAhead.cents}>
+          <Figure label="Lowest balance ahead" tip="lowestAhead" cents={lowestAhead.cents}>
             {/* Said in words, never by color alone. */}
             {lowestAhead.low && <span className="font-semibold text-ink">Under your warning · </span>}
             {formatDay(lowestAhead.periodStart)} period · {lowestAhead.accountName}
           </Figure>
         )}
-        <Figure label="Saved & invested this year" cents={saved.totalCents}>
+        <Figure label="Saved & invested this year" tip="savedInvested" cents={saved.totalCents}>
           {savedParts.length === 0 ? "transfers, paycheck contributions and employer match" : savedParts.join(", ")}
         </Figure>
         <Figure label="Total debt" cents={debt.totalCents}>
@@ -141,10 +150,13 @@ function Figures({ dashboard }: { dashboard: Dashboard }) {
   );
 }
 
-function Figure({ label, cents, children }: { label: string; cents: number; children: ReactNode }) {
+function Figure({ label, cents, tip, children }: { label: string; cents: number; tip?: TermId; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-muted">{label}</p>
+      <p className="flex items-center gap-1 text-muted">
+        {label}
+        {tip && <InfoTip term={tip} />}
+      </p>
       <p data-amount className="text-2xl font-bold tabular-nums">
         {formatCents(cents)}
       </p>

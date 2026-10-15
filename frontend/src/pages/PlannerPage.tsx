@@ -10,9 +10,10 @@ import {
   usePlanner,
   useSetPlannerHidden,
 } from "../api/planner";
-import { EstimateKey } from "../components/Amount";
+import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { AMOUNT_HELP, MoneyField } from "../components/MoneyField";
+import { DebtOverTimeChart } from "../components/planner/DebtOverTimeChart";
 import { OptionCard } from "../components/planner/OptionCard";
 import { PayoffTimeline } from "../components/planner/PayoffTimeline";
 import { PlannerFlags } from "../components/planner/PlannerFlags";
@@ -20,6 +21,7 @@ import { Segmented } from "../components/Segmented";
 import { BUTTON_LINK, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import { formatMonth } from "../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../lib/money";
+import { HelpLink } from "../components/help/HelpLink";
 
 const ORDER_OPTIONS = PAYOFF_ORDERS.map((order) => ({ value: order, label: PAYOFF_ORDER_LABELS[order] }));
 
@@ -117,7 +119,10 @@ export function PlannerPage() {
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3 md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Debt &amp; decisions</p>
-          <h1 className={PAGE_TITLE}>Where should extra money go?</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Where should extra money go?</h1>
+            <HelpLink />
+          </div>
         </div>
         <EstimateKey />
       </div>
@@ -128,6 +133,7 @@ export function PlannerPage() {
             <div className="sm:w-56">
               <MoneyField
                 label="Extra each month"
+                tip="extraEachMonth"
                 value={extraText}
                 onChange={setExtraText}
                 error={extraText.trim() !== "" && !extraValid ? AMOUNT_HELP : undefined}
@@ -242,7 +248,13 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
       )}
 
       {payoff.debts.length > 0 && (
-        <Card title={`Payoff order with the extra ${formatCents(extraCents)}`}>
+        <Card title={`Payoff order with the extra ${formatCents(extraCents)}`} tip="payoffOrder">
+          {payoff.interestSavedCents !== null && payoff.interestSavedCents > 0 && (
+            <div className="mb-3">
+              <Amount cents={payoff.interestSavedCents} estimate className="text-2xl font-bold" />
+              <p className="mt-1 text-sm text-muted">less interest altogether, by paying the extra in this order</p>
+            </div>
+          )}
           <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <p className="text-muted">
               The extra goes to one debt at a time. When it is gone, what was being paid into it rolls into the next.
@@ -253,11 +265,6 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
                   {payoff.debtFreeDateBefore !== null && payoff.debtFreeDateBefore !== payoff.debtFreeDate && (
                     <> (was {formatMonth(payoff.debtFreeDateBefore)})</>
                   )}
-                  {payoff.interestSavedCents !== null && payoff.interestSavedCents > 0 && (
-                    <>
-                      , with <span data-amount>{formatCents(payoff.interestSavedCents)}</span> less interest
-                    </>
-                  )}
                   .
                 </>
               )}
@@ -267,6 +274,11 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
             </div>
           </div>
           <PayoffTimeline debts={payoff.debts} today={today} extraCents={extraCents} />
+          <DebtOverTimeChart
+            points={payoff.owedOverTime}
+            debtFreeDate={payoff.debtFreeDate}
+            debtFreeDateBefore={payoff.debtFreeDateBefore}
+          />
         </Card>
       )}
 

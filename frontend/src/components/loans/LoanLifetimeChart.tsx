@@ -1,8 +1,8 @@
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { Account, BalanceEntry } from "../../api/accounts";
 import type { Loan } from "../../api/loans";
-import { formatDate, todayIso } from "../../lib/dates";
-import { formatCents } from "../../lib/money";
+import { formatDate, todayIso, yearTicks } from "../../lib/dates";
+import { formatCents, shortDollars } from "../../lib/money";
 
 const YEAR = new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: "UTC" });
 
@@ -16,15 +16,6 @@ interface Day {
 /** Calendar dates are plotted as UTC midnights, so the PC's time zone can never shift a day. */
 function toTime(iso: string): number {
   return Date.parse(`${iso}T00:00:00Z`);
-}
-
-/** `24000000` → `"$240k"`, `125000000` → `"$1.25M"`: short enough for an axis. */
-function shortDollars(cents: number): string {
-  const dollars = cents / 100;
-  if (Math.abs(dollars) >= 1_000_000) {
-    return `$${(dollars / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
-  }
-  return Math.abs(dollars) >= 1000 ? `$${Math.round(dollars / 1000)}k` : `$${Math.round(dollars)}`;
 }
 
 /** True when the loan has what the chart is drawn from: a balance today and payments still to come. */
@@ -86,7 +77,8 @@ export function LoanLifetimeChart({ account, balances, loan }: { account: Accoun
               tickFormatter={(time: number) => YEAR.format(time)}
               tick={{ fill: "var(--text-muted)", fontSize: 12 }}
               stroke="var(--border)"
-              minTickGap={40}
+              ticks={yearTicks(data[0]?.at ?? 0, data.at(-1)?.at ?? 0)}
+              minTickGap={16}
             />
             <YAxis tickFormatter={shortDollars} tick={{ fill: "var(--text-muted)", fontSize: 12 }} stroke="var(--border)" width={56} domain={[0, "auto"]} />
             <Tooltip

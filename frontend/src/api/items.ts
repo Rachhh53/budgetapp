@@ -49,6 +49,11 @@ export interface ItemTerms {
   amountCents: number;
   amountMode: AmountMode;
   estimate: boolean;
+  /**
+   * A bill whose schedule names visits (a weekly appointment, say): they build up on the pay period,
+   * moving no money, until an invoice is entered for them, and the invoice is what is paid (spec §4.6).
+   */
+  billedLater?: boolean;
   categoryId: number | null;
   payFromAccountId: number;
   /** Where a transfer or card payment goes; `null` otherwise. */

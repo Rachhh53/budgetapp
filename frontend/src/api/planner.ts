@@ -86,6 +86,16 @@ export interface PayoffDebt {
   paysOffBefore: boolean;
   /** A promotional balance with its payoff already planned: it takes none of the extra. */
   planned: boolean;
+  /** Interest no longer paid on this debt with the extra; `null` when it is never paid off one way or the other, or is planned. */
+  interestSavedCents: number | null;
+}
+
+/** One month on the "Debt over time" chart: what every debt together owes at its end. */
+export interface OwedPoint {
+  /** The month's first day. */
+  month: string;
+  withCents: number;
+  withoutCents: number;
 }
 
 export interface PlannerComparison {
@@ -101,6 +111,8 @@ export interface PlannerComparison {
     debtFreeDate: string | null;
     debtFreeDateBefore: string | null;
     interestSavedCents: number | null;
+    /** Every debt together, month by month from this one, with the extra and without, until both are gone (at most 30 years). */
+    owedOverTime: OwedPoint[];
   };
   hidden: { accountId: number; name: string; type: AccountType }[];
 }

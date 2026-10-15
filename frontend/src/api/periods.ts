@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { Entry } from "./entries";
+import type { Unbilled } from "./invoices";
 import { PAY_KEY, type PayPeriods, type Paycheck, type PromoEnd } from "./income";
 import type { ItemKind, Placement } from "./items";
 
@@ -37,6 +38,13 @@ export interface Occurrence {
   saveUpBucketId: number | null;
   /** The bucket of the paying account it comes out of; `null` for money not in a bucket. */
   fromBucketId: number | null;
+  /**
+   * An invoice for a billed-later item's visits, standing in for them as one bill to pay; `null` (or
+   * left out) for anything the item's schedule names. It is changed through its own address.
+   */
+  invoiceId?: number | null;
+  /** An invoice: the last visit it pays for. */
+  coversThrough?: string | null;
   /** The check this one was paid with; `null` when none was written. */
   checkNumber: string | null;
 }
@@ -125,6 +133,8 @@ export interface PeriodDetail {
   promosEnding?: PromoEnd[];
   /** Which statement each card payment listed here was sized from, for those that pay a statement's balance or its minimum. */
   statementsPaid?: StatementPaid[];
+  /** The current period only: visits of billed-later items that no invoice covers yet, up to today. */
+  unbilled?: Unbilled[];
 }
 
 /** The statement a card payment that follows its card was sized from. */
@@ -223,8 +233,11 @@ export function usePayPeriodsBetween(from: string | undefined, to: string | unde
 export function useEditOccurrence() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ occurrence, edit }: { occurrence: Pick<Occurrence, "itemId" | "scheduledDate">; edit: OccurrenceEdit }) =>
-      api.put<Occurrence>(`/api/items/${occurrence.itemId}/occurrences/${occurrence.scheduledDate}`, edit),
+    mutationFn: ({ occurrence, edit }: { occurrence: Pick<Occurrence, "itemId" | "scheduledDate" | "invoiceId">; edit: OccurrenceEdit }) =>
+      // An invoice is changed as an invoice; the same form and tick serve both.
+      occurrence.invoiceId != null
+        ? api.put<unknown>(`/api/items/${occurrence.itemId}/invoices/${occurrence.invoiceId}`, edit)
+        : api.put<Occurrence>(`/api/items/${occurrence.itemId}/occurrences/${occurrence.scheduledDate}`, edit),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
   });
 }

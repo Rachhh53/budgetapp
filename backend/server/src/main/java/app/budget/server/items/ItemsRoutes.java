@@ -40,9 +40,9 @@ import java.util.Optional;
 public final class ItemsRoutes {
 
     private static final int NAME_MAX = 80;
-    private static final int NOTE_MAX = 500;
-    private static final int CODE_MAX = 60;
-    private static final int CHECK_NUMBER_MAX = 20;
+    static final int NOTE_MAX = 500;
+    static final int CODE_MAX = 60;
+    static final int CHECK_NUMBER_MAX = 20;
     private static final int MAX_TAGS = 20;
     private static final String CHOOSE_TAGS = "Please choose tags from the list.";
     private static final int MAX_DAYS_AFTER_PAYDAY = 60;
@@ -102,6 +102,8 @@ public final class ItemsRoutes {
      * @param cardPaymentMode a card payment: how much it pays. {@code fixed} is the amount sent; {@code
      *                       statement_balance}, {@code full_balance} and {@code minimum} follow the card,
      *                       so the amount sent means nothing. Left out, it stays as it was (fixed, when new).
+     * @param billedLater    a bill: its schedule names visits that build up and are paid when an invoice for them
+     *                       arrives (spec §4.6). Only for an amount per time, not a yearly total.
      */
     public record ItemInput(
             String name,
@@ -123,7 +125,8 @@ public final class ItemsRoutes {
             Long bucketId,
             Long saveUpBucketId,
             Long fromBucketId,
-            String cardPaymentMode) {}
+            String cardPaymentMode,
+            Boolean billedLater) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -157,6 +160,7 @@ public final class ItemsRoutes {
      *                    say), so {@code amountCents} means nothing
      * @param cardPaymentMode how much a card's own payment pays ({@code fixed}, {@code statement_balance},
      *                    {@code full_balance} or {@code minimum}); {@code null} for any other item
+     * @param billedLater true when, today, its schedule names visits paid when an invoice arrives (spec §4.6)
      */
     public record ItemView(
             long id,
@@ -188,7 +192,8 @@ public final class ItemsRoutes {
             LocalDate pausedUntil,
             Long paymentOfCardId,
             boolean followsCard,
-            String cardPaymentMode) {}
+            String cardPaymentMode,
+            boolean billedLater) {}
 
     /** @param until the first day it runs again; left out to pause until it is turned back on */
     public record PauseInput(LocalDate until) {}
@@ -341,7 +346,7 @@ public final class ItemsRoutes {
         return new Terms(
                 0, AmountMode.PER_OCCURRENCE, true, terms.categoryId(), terms.payFromAccountId(), terms.payToAccountId(),
                 terms.autopay(), terms.placement(), terms.schedule(), terms.daysAfterPayday(), terms.bucketId(),
-                terms.saveUpBucketId(), terms.fromBucketId());
+                terms.saveUpBucketId(), terms.fromBucketId(), terms.billedLater());
     }
 
     /**
@@ -411,6 +416,12 @@ public final class ItemsRoutes {
             throw ApiException.notFound();
         }
         Occurrence current = calendar.find(item, scheduledDate).orElseThrow(ApiException::notFound);
+        // An invoice was worked out from the visits it covers; skipping one of them afterwards would
+        // leave the invoice paying for a visit that is gone.
+        if (input.skipped() != null && calendar.onInvoice(item, scheduledDate)) {
+            throw ApiException.conflict("That visit is already on an invoice, so it can't be skipped or put back. "
+                    + "To change it, remove the invoice first.");
+        }
 
         Long amount = input.amountCents() == null ? null : Inputs.amount(input.amountCents(), "The amount");
         requireSupported(input.dueDate(), "the due date");
@@ -521,7 +532,8 @@ public final class ItemsRoutes {
                 pause.map(Pause::until).orElse(null),
                 card == null ? null : (Long) card.accountId(),
                 card != null && card.paymentMode() != CardPayment.Mode.FIXED,
-                card == null ? null : Inputs.code(card.paymentMode()));
+                card == null ? null : Inputs.code(card.paymentMode()),
+                terms.billedLater());
     }
 
     /**
@@ -643,6 +655,12 @@ public final class ItemsRoutes {
         if (daysAfterPayday < 0 || daysAfterPayday > MAX_DAYS_AFTER_PAYDAY) {
             throw ApiException.badRequest("Please choose how many days after payday, from 0 to " + MAX_DAYS_AFTER_PAYDAY + ".");
         }
+        // The form sends whatever was last ticked; only a bill keeps it.
+        boolean billedLater = kind == ItemKind.BILL && Boolean.TRUE.equals(input.billedLater());
+        if (billedLater && mode == AmountMode.ANNUAL) {
+            throw ApiException.badRequest(
+                    "Something billed later is added up visit by visit. Please enter what each visit costs, not a yearly total.");
+        }
         return new Terms(
                 amount,
                 mode,
@@ -658,7 +676,8 @@ public final class ItemsRoutes {
                 schedule.frequency() == Frequency.EVERY_PAY_PERIOD ? daysAfterPayday : 0,
                 bucketId,
                 saveUpBucketId,
-                fromBucketId);
+                fromBucketId,
+                billedLater);
     }
 
     /** One of the user's open buckets, or {@code message} when it is missing, unknown or archived. */
@@ -669,7 +688,7 @@ public final class ItemsRoutes {
                 .orElseThrow(() -> ApiException.badRequest(message));
     }
 
-    private static void requireSupported(LocalDate date, String label) {
+    static void requireSupported(LocalDate date, String label) {
         if (date != null && !Inputs.inSupportedYears(date)) {
             throw ApiException.badRequest("Please choose " + label + " between 2000 and 2100.");
         }

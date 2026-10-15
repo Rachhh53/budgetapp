@@ -66,6 +66,7 @@ public final class ItemsRepository {
      * @param bucketId       the bucket a bucket move, or a transfer, puts its money in; {@code null} otherwise
      * @param saveUpBucketId the bucket a share of the bill is set aside in every paycheck; {@code null} when it is not saved up for
      * @param fromBucketId   the bucket of the paying account this comes out of; {@code null} for money that is not in a bucket
+     * @param billedLater    a bill whose schedule names visits, paid when an invoice for them arrives (spec §4.6)
      */
     public record Terms(
             long amountCents,
@@ -80,16 +81,17 @@ public final class ItemsRepository {
             int daysAfterPayday,
             Long bucketId,
             Long saveUpBucketId,
-            Long fromBucketId) {
+            Long fromBucketId,
+            boolean billedLater) {
 
         Terms withAmount(long cents) {
             return new Terms(cents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
-                    autopay, placement, schedule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId);
+                    autopay, placement, schedule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater);
         }
 
         Terms withSchedule(ScheduleRule rule) {
             return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
-                    autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId);
+                    autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater);
         }
     }
 
@@ -186,7 +188,7 @@ public final class ItemsRepository {
                                 UPDATE item_versions
                                 SET pay_from_account_id = :payFrom, pay_to_account_id = :payTo, autopay = :autopay,
                                     placement = :placement, bucket_id = :bucketId, save_up_bucket_id = :saveUpBucketId,
-                                    from_bucket_id = :fromBucketId
+                                    from_bucket_id = :fromBucketId, billed_later = :billedLater
                                 WHERE item_id = :id AND effective_from < :effectiveFrom
                                 """)
                         .bind("id", id)
@@ -198,6 +200,7 @@ public final class ItemsRepository {
                         .bind("bucketId", terms.bucketId())
                         .bind("saveUpBucketId", terms.saveUpBucketId())
                         .bind("fromBucketId", terms.fromBucketId())
+                        .bind("billedLater", terms.billedLater())
                         .execute();
             }
             handle.createUpdate("UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived WHERE id = :id")
@@ -440,7 +443,8 @@ public final class ItemsRepository {
                                 rs.getInt("days_after_payday"),
                                 nullableLong(rs, "bucket_id"),
                                 nullableLong(rs, "save_up_bucket_id"),
-                                nullableLong(rs, "from_bucket_id"))))
+                                nullableLong(rs, "from_bucket_id"),
+                                rs.getBoolean("billed_later"))))
                 .list();
         List<Version> versions = new ArrayList<>();
         for (VersionRow row : rows) {
@@ -456,10 +460,10 @@ public final class ItemsRepository {
                         INSERT INTO item_versions
                             (item_id, effective_from, amount, amount_mode, is_estimate, category_id, pay_from_account_id,
                              pay_to_account_id, autopay, placement, schedule_rule_id, days_after_payday,
-                             bucket_id, save_up_bucket_id, from_bucket_id)
+                             bucket_id, save_up_bucket_id, from_bucket_id, billed_later)
                         VALUES (:itemId, :effectiveFrom, :amount, :amountMode, :estimate, :categoryId, :payFrom,
                                 :payTo, :autopay, :placement, :ruleId, :daysAfterPayday, :bucketId, :saveUpBucketId,
-                                :fromBucketId)
+                                :fromBucketId, :billedLater)
                         """)
                 .bind("itemId", itemId)
                 .bind("effectiveFrom", effectiveFrom.toString())
@@ -476,6 +480,7 @@ public final class ItemsRepository {
                 .bind("bucketId", terms.bucketId())
                 .bind("saveUpBucketId", terms.saveUpBucketId())
                 .bind("fromBucketId", terms.fromBucketId())
+                .bind("billedLater", terms.billedLater())
                 .execute();
     }
 

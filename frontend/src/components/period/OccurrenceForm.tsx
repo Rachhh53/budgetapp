@@ -115,9 +115,13 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
         </div>
       )}
       <form onSubmit={submit} hidden={showingFiles} className="space-y-4">
-        <p className="text-muted">Just this one, due {formatDay(occurrence.dueDate)}. The others stay as they are.</p>
+        <p className="text-muted">
+          {occurrence.coversThrough
+            ? `The invoice for visits through ${formatDay(occurrence.coversThrough)}, due ${formatDay(occurrence.dueDate)}.`
+            : `Just this one, due ${formatDay(occurrence.dueDate)}. The others stay as they are.`}
+        </p>
 
-        <MoneyField label="Amount this time" value={amount} onChange={setAmount} required />
+        <MoneyField label={occurrence.invoiceId != null ? "Amount billed" : "Amount this time"} value={amount} onChange={setAmount} required />
 
         {/* Side by side on a phone too, so the form stays one screen: the day it is due, and the day it was paid. */}
         <div className={byHand ? "grid grid-cols-2 gap-3" : undefined}>

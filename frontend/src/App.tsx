@@ -19,6 +19,8 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ExpenseDetailPage } from "./pages/ExpenseDetailPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
+import { HelpPage } from "./pages/HelpPage";
+import { HelpTopicPage } from "./pages/HelpTopicPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
 import { PayStubPage } from "./pages/PayStubPage";
 import { IncomePage } from "./pages/IncomePage";
@@ -43,6 +45,7 @@ const PAGES: Record<string, ReactNode> = {
   "/planner": <PlannerPage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
+  "/help": <HelpPage />,
 };
 
 /** Until the setting has loaded; the same as its default on the backend. */
@@ -154,6 +157,7 @@ function Screens() {
         <Route path="/expenses/:id" element={<ExpenseDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
         <Route path="/plan/:id/:step?" element={<PlanYearPage />} />
+        <Route path="/help/:topic" element={<HelpTopicPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

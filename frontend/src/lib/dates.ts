@@ -96,3 +96,22 @@ export function ordinal(day: number): string {
   }
   return `${day}${["th", "st", "nd", "rd"][day % 10] ?? "th"}`;
 }
+
+/**
+ * Where a chart over years puts its labels: each January 1st (UTC midnight) from `from` to `to`,
+ * both times in milliseconds. Left to itself, a time axis spaces its ticks evenly and labels
+ * several of them with the same year. Over a long span every second or fifth year is enough.
+ */
+export function yearTicks(from: number, to: number): number[] {
+  const start = new Date(from);
+  // A span that does not start on January 1st has its first label on the next one.
+  const first = start.getUTCFullYear() + (Date.UTC(start.getUTCFullYear(), 0, 1) === from ? 0 : 1);
+  const last = new Date(to).getUTCFullYear();
+  const span = last - first;
+  const step = span > 20 ? 5 : span > 8 ? 2 : 1;
+  const ticks: number[] = [];
+  for (let year = first; year <= last; year += step) {
+    ticks.push(Date.UTC(year, 0, 1));
+  }
+  return ticks;
+}

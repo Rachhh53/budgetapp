@@ -12,6 +12,7 @@ import { BUTTON_PRIMARY, BUTTON_SECONDARY, PAGE_TITLE } from "../components/ui";
 import { formatDay } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatChange } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
 
 const BASIS_OPTIONS = ANNUAL_BASES.map((basis) => ({ value: basis, label: ANNUAL_BASIS_LABELS[basis] }));
 
@@ -43,7 +44,10 @@ export function AnnualCostsPage() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
           <p className="text-sm font-semibold tracking-wide text-muted uppercase">Year over year</p>
-          <h1 className={PAGE_TITLE}>Annual costs</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={PAGE_TITLE}>Annual costs</h1>
+            <HelpLink />
+          </div>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button

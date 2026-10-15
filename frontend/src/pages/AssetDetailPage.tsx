@@ -15,6 +15,7 @@ import { formatDate, todayIso } from "../lib/dates";
 import { useDefaultDate } from "../api/settings";
 import { formatCents, parseDollars } from "../lib/money";
 import { formatRate } from "../lib/rates";
+import { HelpLink } from "../components/help/HelpLink";
 
 /* One row of "Values you entered": stacked on a phone, columns from `md` up. */
 const ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[10rem_10rem_10rem_1fr] md:items-center";
@@ -64,10 +65,13 @@ export function AssetDetailPage() {
             </Link>{" "}
             / Home & assets
           </p>
-          <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
-            <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: asset.color }} />
-            <span className="truncate">{asset.name}</span>
-          </h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <h1 className={`${PAGE_TITLE} flex items-center gap-3`}>
+              <span aria-hidden className="size-4 shrink-0 rounded-full" style={{ backgroundColor: asset.color }} />
+              <span className="truncate">{asset.name}</span>
+            </h1>
+            <HelpLink />
+          </div>
           <p className="text-muted">
             {ASSET_KIND_LABELS[asset.kind]}
             {asset.archived && " · Archived"}

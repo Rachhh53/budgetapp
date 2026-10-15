@@ -98,12 +98,13 @@ export function describeItemSchedule(schedule: ItemSchedule): string {
   }
 }
 
-/** "Bill · autopay", "Bill · manual", "Budget": the kind, and how it gets paid where that applies. */
-export function describeKind(item: Pick<Item, "kind" | "autopay">): string {
+/** "Bill · autopay", "Bill · manual", "Bill · billed later", "Budget": the kind, and how it gets paid where that applies. */
+export function describeKind(item: Pick<Item, "kind" | "autopay" | "billedLater">): string {
   // A budget is spent, and a bucket move just happens: neither is "paid" by anyone.
-  return item.kind === "budget" || item.kind === "bucket_move"
-    ? KIND_LABELS[item.kind]
-    : `${KIND_LABELS[item.kind]} · ${item.autopay ? "autopay" : "manual"}`;
+  if (item.kind === "budget" || item.kind === "bucket_move") {
+    return KIND_LABELS[item.kind];
+  }
+  return `${KIND_LABELS[item.kind]} · ${item.billedLater ? "billed later" : item.autopay ? "autopay" : "manual"}`;
 }
 
 /** Which paycheck pays for it, in the table's words. */
