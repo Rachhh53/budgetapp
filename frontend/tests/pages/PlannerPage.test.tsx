@@ -209,7 +209,7 @@ describe("Debt & decisions", () => {
     const car = await screen.findByRole("region", { name: "Car loan" });
     expect(car).toHaveTextContent("Pay debt");
     expect(car).toHaveTextContent("$14,860.00 owed at 6.90%");
-    expect(car).toHaveTextContent("$824.00 (estimate)interest saved over the life of the debt");
+    expect(car).toHaveTextContent("$824.00 (estimate)you'd save in interest by putting the extra $300.00 a month here");
     expect(car).toHaveTextContent("Return6.90% guaranteed");
     expect(car).toHaveTextContent("Debt-free dateSep 2028 (was Mar 2030)");
     expect(car).toHaveTextContent("Sooner by1 yr 6 mo");
@@ -217,13 +217,15 @@ describe("Debt & decisions", () => {
     expect(within(car).getByRole("link", { name: "Car loan" })).toHaveAttribute("href", "/accounts/5");
   });
 
-  it("shows what the extra would come to invested, with the match it earns", async () => {
+  it("leads with what the extra would earn invested, with the match", async () => {
     withComparison();
     renderApp("/planner");
 
     const retirement = await screen.findByRole("region", { name: "Brightwater 401(k)" });
     expect(retirement).toHaveTextContent("Invest");
-    expect(retirement).toHaveTextContent("$26,210.00 (estimate)what the extra comes to after 5 years, with the match");
+    // Growth $4,250.00 + match $3,960.00: what the extra gains, not the $18,000.00 put in coming back.
+    expect(retirement).toHaveTextContent("$8,210.00 (estimate)you'd earn, with the match, by putting the extra $300.00 a month here for 5 years");
+    expect(retirement).toHaveTextContent("Comes to after 5 years$26,210.00");
     expect(retirement).toHaveTextContent("Return7.00% assumed + match");
     expect(retirement).toHaveTextContent("You put in$18,000.00");
     expect(retirement).toHaveTextContent("Employer match$3,960.00");

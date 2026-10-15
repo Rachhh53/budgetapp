@@ -112,7 +112,9 @@ function Debt({ option, extraCents }: { option: PlannerOption; extraCents: numbe
     <>
       {owed}
       {option.interestSavedCents !== null ? (
-        <Headline cents={option.interestSavedCents}>interest saved over the life of the debt</Headline>
+        <Headline cents={option.interestSavedCents}>
+          you'd save in interest by putting the extra <span data-amount>{formatCents(extraCents)}</span> a month here
+        </Headline>
       ) : option.paysOff ? (
         <p className="my-3">
           At {payment} a month this is never paid off: the interest is more than the payment. With the extra it is gone by{" "}
@@ -191,6 +193,9 @@ function Growing({
   const changed = option.rateBp !== option.accountRateBp;
   const span = years === 1 ? "1 year" : `${years} years`;
   const matched = (option.matchPerMonthCents ?? 0) > 0;
+  // What the extra gains, not what it comes to: the rest is only the money put in coming back
+  // (Rachel, 2026-10-14: each card should say "how much potential you'd earn").
+  const earnedCents = (option.growthCents ?? 0) + (option.matchCents ?? 0);
   return (
     <>
       <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
@@ -228,9 +233,8 @@ function Growing({
       {option.rateBp === null && (
         <p className="mt-1 text-sm text-muted">This account has no rate yet, so nothing is added for growth. Type one to try it.</p>
       )}
-      <Headline cents={option.valueCents ?? 0}>
-        what the extra comes to after {span}
-        {matched && ", with the match"}
+      <Headline cents={earnedCents}>
+        you'd earn{matched ? ", with the match," : ""} by putting the extra <span data-amount>{formatCents(extraCents)}</span> a month here for {span}
       </Headline>
       <dl className="border-t border-line pt-2 text-sm">
         <Row label="Return">
@@ -247,6 +251,9 @@ function Growing({
         )}
         <Row label={option.kind === "invest" ? "Assumed growth" : "Interest"}>
           <span data-amount>{formatCents(option.growthCents ?? 0)}</span>
+        </Row>
+        <Row label={`Comes to after ${span}`}>
+          <span data-amount>{formatCents(option.valueCents ?? 0)}</span>
         </Row>
       </dl>
       {matched && (

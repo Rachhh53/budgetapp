@@ -49,7 +49,9 @@ export function YearDaySetting({ id, label, hint, value, disabled, onChange }: Y
           {hint}
         </p>
       </div>
-      <div className="flex shrink-0 gap-2">
+      {/* The pair takes the same width as every other dropdown in Settings (w-56), the month most of it,
+          so it never runs past the card (Rachel, 2026-10-14: "too long. it overflows the card"). */}
+      <div className="grid w-full shrink-0 grid-cols-[1fr_4.5rem] gap-2 sm:w-56">
         <select
           id={`${id}-month`}
           aria-label={`${label}: month`}
@@ -60,7 +62,7 @@ export function YearDaySetting({ id, label, hint, value, disabled, onChange }: Y
             const chosen = Number(event.target.value);
             onChange(`${two(chosen)}-${two(Math.min(day, DAYS_IN_MONTH[chosen - 1] ?? 31))}`);
           }}
-          className={`${INPUT} sm:w-40`}
+          className={`${INPUT} min-w-0`}
         >
           {MONTHS.map((name, index) => (
             <option key={name} value={index + 1}>
@@ -74,7 +76,7 @@ export function YearDaySetting({ id, label, hint, value, disabled, onChange }: Y
           value={day}
           disabled={disabled}
           onChange={(event) => onChange(`${two(month)}-${two(Number(event.target.value))}`)}
-          className={`${INPUT} w-24 shrink-0`}
+          className={`${INPUT} min-w-0`}
         >
           {Array.from({ length: days }, (_, index) => index + 1).map((number) => (
             <option key={number} value={number}>

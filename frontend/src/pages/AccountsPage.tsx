@@ -138,7 +138,8 @@ export function AccountsPage() {
 
 /**
  * Net worth with what it is made of. Each total has its parts listed under it, a label and an
- * amount to a line with the amounts in one column, so the sum can be followed by eye.
+ * amount to a line with the amounts in one column, so the sum can be followed by eye. The three
+ * totals share one line height, so the lines under them start level across the card.
  */
 function NetWorthSummary({ worth }: { worth: NetWorth }) {
   return (
@@ -149,12 +150,12 @@ function NetWorthSummary({ worth }: { worth: NetWorth }) {
             Net worth
             <InfoTip term="netWorth" />
           </p>
-          <p data-amount className="text-3xl font-bold tabular-nums">{formatCents(worth.netWorthCents)}</p>
+          <p data-amount className="text-3xl leading-9 font-bold tabular-nums">{formatCents(worth.netWorthCents)}</p>
           <p className="text-muted">today</p>
         </div>
         <div>
           <p className="text-muted">You own</p>
-          <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(worth.assetsCents)}</p>
+          <p data-amount className="text-2xl leading-9 font-bold tabular-nums">{formatCents(worth.assetsCents)}</p>
           <Parts
             of="what you own"
             parts={[
@@ -166,7 +167,7 @@ function NetWorthSummary({ worth }: { worth: NetWorth }) {
         </div>
         <div>
           <p className="text-muted">You owe</p>
-          <p data-amount className="text-2xl font-bold tabular-nums">{formatCents(worth.liabilitiesCents)}</p>
+          <p data-amount className="text-2xl leading-9 font-bold tabular-nums">{formatCents(worth.liabilitiesCents)}</p>
           <Parts
             of="what you owe"
             parts={[
@@ -180,14 +181,19 @@ function NetWorthSummary({ worth }: { worth: NetWorth }) {
   );
 }
 
-/** What a total is made of: one line per part, the label on the left and its amount lined up on the right. */
+/**
+ * What a total is made of: one line per part, as a compact table under the total. The amounts are
+ * lined up on the right of their own column, next to their labels rather than at the far edge of a
+ * wide card (Rachel, 2026-10-14: "the right aligned amounts looks bad").
+ */
 function Parts({ of, parts }: { of: string; parts: readonly (readonly [label: string, cents: number])[] }) {
   return (
-    <dl aria-label={`What makes up ${of}`} className="mt-1 text-muted">
+    <dl aria-label={`What makes up ${of}`} className="mt-1 grid w-fit grid-cols-[auto_auto] gap-x-6 text-muted">
       {parts.map(([label, cents]) => (
-        <div key={label} className="flex items-baseline justify-between gap-3">
+        // contents: the line itself draws nothing, so its two cells sit in the table's columns.
+        <div key={label} className="contents">
           <dt>{label}</dt>
-          <dd data-amount className="tabular-nums">
+          <dd data-amount className="text-right tabular-nums">
             {formatCents(cents)}
           </dd>
         </div>

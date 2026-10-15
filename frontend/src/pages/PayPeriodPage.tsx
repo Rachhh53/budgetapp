@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Clock, Info, PartyPopper, ReceiptText, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, PartyPopper, ReceiptText, TriangleAlert } from "lucide-react";
 import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
@@ -41,7 +41,7 @@ import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
 import { HelpLink } from "../components/help/HelpLink";
 import { InfoTip } from "../components/help/InfoTip";
-import { type TermId, TERMS } from "../help/terms";
+import type { TermId } from "../help/terms";
 
 /** How far either side of the period on screen the strip of ending balances reaches. */
 const STRIP_DAYS_BACK = 45;
@@ -164,8 +164,10 @@ export function PayPeriodPage() {
 
   return (
     <div className="flex flex-col gap-3 lg:h-full">
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
+      {/* The two halves share a row while they fit and wrap onto two when the window is too narrow,
+          so a resized window never has one drawn over the other; the search box gives up width first. */}
+      <header className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-y-2">
+        <div className="flex items-center gap-3 lg:shrink-0">
           <PeriodLink to={previous} label="Previous pay period" icon={ChevronLeft} />
           <div className="min-w-0 flex-1 text-center lg:flex-none lg:text-left">
             <p className="text-xs font-semibold tracking-wide text-muted uppercase">{detail.current ? "Current pay period" : "Pay period"}</p>
@@ -184,7 +186,7 @@ export function PayPeriodPage() {
             <span className="hidden rounded-full bg-accent px-3 py-1 text-sm font-semibold text-on-accent lg:inline">Current</span>
           )}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:flex-1 lg:justify-end lg:gap-3">
           <div className="flex items-center justify-between gap-2">
             {anyEstimate && <EstimateKey />}
             <span className="ml-auto flex lg:hidden">
@@ -610,9 +612,12 @@ function Figure({
   cents: number;
   sign?: string;
   note: string;
-  /** What the figure means, behind an ⓘ. One with a breakdown says it at the top of that instead: the whole figure is what opens it. */
+  /** What the figure means, behind an ⓘ. */
   tip?: TermId;
-  /** What the number is made of, shown when the figure is hovered, focused or tapped. */
+  /**
+   * What the number is made of, listed in the same ⓘ under what it means. It opens like every
+   * other tip, on a click, a tap or the keyboard, never on a hover over the figure (Rachel, 2026-10-14).
+   */
   breakdown?: readonly Part[];
   breakdownLabel?: string;
   /** The number the screen is about: outlined, and largest on a phone. */
@@ -622,17 +627,32 @@ function Figure({
   className?: string;
 }) {
   return (
-    <div
-      // Focusable when it has more to show, so the keyboard and a tap reach what a hover does.
-      tabIndex={breakdown ? 0 : undefined}
-      className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${
-        breakdown ? "group relative cursor-help focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink" : ""
-      } ${className}`}
-    >
+    <div className={`rounded-card bg-surface px-4 py-2.5 short:py-1.5 ${highlight ? "border-2 border-accent" : "border border-line"} ${className}`}>
       <dt className="flex items-center gap-1 text-sm text-muted">
         {label}
-        {tip && !breakdown && <InfoTip term={tip} />}
-        {breakdown && <Info aria-hidden className="size-3.5" />}
+        {tip && (
+          <InfoTip term={tip}>
+            {breakdown && (
+              <div role="group" aria-label={breakdownLabel}>
+                {breakdown.length === 0 ? (
+                  <p>Nothing in this pay period.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {breakdown.map((part, index) => (
+                      <li key={index} className="flex items-baseline justify-between gap-3">
+                        <span className="min-w-0 break-words">{part.label}</span>
+                        <span data-amount className="shrink-0 font-semibold tabular-nums">
+                          {part.cents < 0 ? "−" : ""}
+                          {formatCents(Math.abs(part.cents))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </InfoTip>
+        )}
       </dt>
       <dd>
         <span data-amount className={`block font-bold tabular-nums ${highlight ? "text-3xl lg:text-2xl" : "text-xl lg:text-2xl"} lg:short:text-xl`}>
@@ -642,31 +662,6 @@ function Figure({
         <span data-amount title={note} className={`block text-sm tabular-nums lg:truncate ${warn ? "font-semibold text-danger" : "text-muted"}`}>
           {note}
         </span>
-        {breakdown && (
-          <div
-            role="group"
-            aria-label={breakdownLabel}
-            // Opens towards the middle of the screen: on a phone this figure sits in the right-hand column.
-            className="invisible absolute top-full right-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface p-3 text-sm opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 lg:right-auto lg:left-0"
-          >
-            {tip && <p className="mb-2 text-muted">{TERMS[tip].about}</p>}
-            {breakdown.length === 0 ? (
-              <p className="text-muted">Nothing in this pay period.</p>
-            ) : (
-              <ul className="space-y-1">
-                {breakdown.map((part, index) => (
-                  <li key={index} className="flex items-baseline justify-between gap-3">
-                    <span className="min-w-0 break-words">{part.label}</span>
-                    <span data-amount className="shrink-0 font-semibold tabular-nums">
-                      {part.cents < 0 ? "−" : ""}
-                      {formatCents(Math.abs(part.cents))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
       </dd>
     </div>
   );

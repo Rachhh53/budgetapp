@@ -1,5 +1,5 @@
 import { Info } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { type TermId, TERMS } from "../../help/terms";
 
 /** Never wider than this, and never closer to a screen edge than the page's own gutter. */
@@ -10,9 +10,10 @@ const GUTTER = 16;
  * An ⓘ beside a word that says what it means (`help/terms.ts`). It opens on a click or tap and
  * from the keyboard, unlike a hover `title`, which a phone never shows; Escape, a click elsewhere
  * or scrolling closes it. It is placed against the screen, not its card, so a card that clips
- * what overflows it (or the edge of a phone) never cuts it off.
+ * what overflows it (or the edge of a phone) never cuts it off. `children` adds more under the meaning,
+ * such as what a figure is made of.
  */
-export function InfoTip({ term, className = "" }: { term: TermId; className?: string }) {
+export function InfoTip({ term, className = "", children }: { term: TermId; className?: string; children?: ReactNode }) {
   const { term: name, about } = TERMS[term];
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
@@ -78,7 +79,7 @@ export function InfoTip({ term, className = "" }: { term: TermId; className?: st
           setOpen((was) => !was);
         }}
         // Small to look at, but a full-size target: the padding is pulled back with a negative margin.
-        className={`-m-[15px] inline-flex size-11 shrink-0 cursor-help items-center justify-center rounded-full align-middle text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-accent-ink ${className}`}
+        className={`-m-[15px] inline-flex size-11 shrink-0 cursor-help items-center justify-center rounded-full align-middle text-accent-ink hover:text-ink focus-visible:outline-2 focus-visible:outline-accent-ink ${className}`}
       >
         <Info aria-hidden className="size-3.5" />
       </button>
@@ -89,11 +90,19 @@ export function InfoTip({ term, className = "" }: { term: TermId; className?: st
           role="note"
           aria-label={name}
           onClick={(event) => event.stopPropagation()}
-          style={{ left: place?.left ?? 0, top: place?.top ?? 0, width: Math.min(WIDTH, window.innerWidth - GUTTER * 2), visibility: place ? "visible" : "hidden" }}
-          className="fixed z-50 rounded-lg border border-line bg-surface p-3 text-left text-sm font-normal text-ink normal-case shadow-lg"
+          style={{
+            left: place?.left ?? 0,
+            top: place?.top ?? 0,
+            width: Math.min(WIDTH, window.innerWidth - GUTTER * 2),
+            visibility: place ? "visible" : "hidden",
+          }}
+          // Solid accent with its own text color, like the main buttons, so it stands apart from the cards it
+          // opens over in light and dark alike (Rachel, 2026-10-14: "tooltips blend in too much").
+          className="fixed z-50 rounded-lg bg-accent p-3 text-left text-sm font-normal text-on-accent normal-case shadow-xl shadow-black/40"
         >
           <p className="font-semibold">{name}</p>
-          <p className="mt-1 text-muted">{about}</p>
+          <p className="mt-1">{about}</p>
+          {children && <div className="mt-2">{children}</div>}
         </div>
       )}
     </>

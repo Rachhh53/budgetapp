@@ -164,7 +164,7 @@ export function PeriodSearch() {
   const showList = open && typed.trim() !== "";
 
   return (
-    <div ref={boxRef} className="relative w-full sm:w-64">
+    <div ref={boxRef} className="relative w-full sm:w-64 lg:w-auto lg:max-w-64 lg:min-w-44 lg:flex-1">
       <label className="sr-only" htmlFor={`${listId}-input`}>
         Find a bill or one-off
       </label>
