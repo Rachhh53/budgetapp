@@ -197,7 +197,7 @@ public final class BudgetServer {
         PlannerRepository plannerHidden = new PlannerRepository(database.jdbi());
         PlannerService planner = new PlannerService(
                 database.jdbi(), plannerHidden, accounts, interest, loans, cards, income, items, ledger, payCalendar);
-        changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock));
+        changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock), SettingKey.thisPcOnlyKeys());
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;

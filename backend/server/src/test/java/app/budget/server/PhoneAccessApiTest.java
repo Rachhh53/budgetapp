@@ -243,6 +243,36 @@ class PhoneAccessApiTest {
         }
 
         @Test
+        void cantUndoTheseChangesEither() throws Exception {
+            String url = phoneAccessOn();
+            String phone = unlockFromPhone(url);
+
+            // The last change is phone access being turned on, on the PC: the phone can't take it back.
+            Reply undoOn = server.sendTo(url, "POST", "/api/undo", null, phone);
+            assertThat(undoOn.status()).isEqualTo(403);
+            assertThat(undoOn.error()).contains("can only be undone there");
+            assertThat(server.get("/api/phone-access", cookie).data().get("status").get("on").asBoolean()).isTrue();
+
+            server.put("/api/settings/start_with_windows", "{\"value\":\"true\"}", cookie);
+            assertThat(server.sendTo(url, "POST", "/api/undo", null, phone).status()).isEqualTo(403);
+            assertThat(server.get("/api/settings", cookie).data().get("start_with_windows").asText()).isEqualTo("true");
+
+            // The PC itself can.
+            assertThat(server.post("/api/undo", null, cookie).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).data().get("start_with_windows").asText()).isEqualTo("false");
+        }
+
+        @Test
+        void canStillUndoItsOwnChanges() throws Exception {
+            String url = phoneAccessOn();
+            String phone = unlockFromPhone(url);
+            server.sendTo(url, "PUT", "/api/settings/theme", "{\"value\":\"dark\"}", phone);
+
+            assertThat(server.sendTo(url, "POST", "/api/undo", null, phone).status()).isEqualTo(200);
+            assertThat(server.get("/api/settings", cookie).data().get("theme").asText()).isEqualTo("system");
+        }
+
+        @Test
         void thePinCantBeRemovedWhileItIsOn() throws Exception {
             phoneAccessOn();
 

@@ -2,6 +2,7 @@ package app.budget.server.changes;
 
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Requests;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.util.Set;
@@ -49,11 +50,17 @@ public final class ChangeRoutes {
     private static final int WAIT_SECONDS = 10;
 
     private final ChangeLog changes;
+    private final Set<String> thisPcOnlySettings;
     /** A semaphore, not a lock: nothing guarantees the same thread finishes a request that started it. */
     private final Semaphore turn = new Semaphore(1, true);
 
-    public ChangeRoutes(ChangeLog changes) {
+    /**
+     * @param thisPcOnlySettings settings only this PC may change (phone access, Start with Windows): Undo
+     *                           won't take back a change to one of them from a phone or another computer either
+     */
+    public ChangeRoutes(ChangeLog changes, Set<String> thisPcOnlySettings) {
         this.changes = changes;
+        this.thisPcOnlySettings = thisPcOnlySettings;
     }
 
     /** Register after the session gate, so a locked request is refused before anything is recorded. */
@@ -121,6 +128,11 @@ public final class ChangeRoutes {
     }
 
     private void undo(Context ctx) {
+        // Otherwise Undo would be a way round "this PC only" (spec §10, Phase 12).
+        if (!Requests.isFromThisPc(ctx) && changes.latestTouches("settings", "key", thisPcOnlySettings)) {
+            throw ApiException.forbidden(
+                    "That last change was made on the PC Budget is installed on, so it can only be undone there.");
+        }
         boolean undone = changes.undoLatest();
         ApiResponse.ok(ctx, new Undone(undone, changes.canUndo()));
     }

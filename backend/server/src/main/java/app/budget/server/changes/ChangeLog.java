@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.Update;
@@ -191,6 +192,29 @@ public final class ChangeLog {
             handle.createUpdate("DELETE FROM change_groups WHERE id = :group").bind("group", group).execute();
             return true;
         });
+    }
+
+    /**
+     * True when the change Undo would take back next wrote a row of {@code table} whose {@code column}
+     * was, before or after, one of {@code values}: how Undo tells that it would reach a setting only
+     * this PC may change (spec §10, Phase 12).
+     */
+    public boolean latestTouches(String table, String column, Set<String> values) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        SELECT before, after FROM change_log
+                        WHERE group_id = (SELECT MAX(id) FROM change_groups) AND table_name = :table
+                        """)
+                .bind("table", table)
+                // An inserted row has no before, a deleted one no after.
+                .map((rs, ctx) -> Stream.of(rs.getString("before"), rs.getString("after"))
+                        .filter(json -> json != null)
+                        .map(ChangeLog::parse)
+                        .toList())
+                .list()
+                .stream()
+                .flatMap(List::stream)
+                .anyMatch(row -> row.hasNonNull(column) && values.contains(row.get(column).asText())));
     }
 
     private record LoggedRow(String table, String op, String before, String after) {}

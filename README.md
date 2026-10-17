@@ -235,7 +235,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | GET | `/api/undo` | `{ available }`: whether there is a change to undo |
-| POST | `/api/undo` | undo the most recent change; `{ undone, available }` |
+| POST | `/api/undo` | undo the most recent change; `{ undone, available }`. From a phone or another computer, 403 when that change touched a setting only this PC may change (`start_with_windows`, `phone_access_address`) |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
 | GET | `/api/phone-access` | `{ status: { on, address, url, listening, problem }, fromThisPc, pinSet, networks }`. `problem` is `none`, `network_not_connected` or `port_in_use`; `networks` (`{ address, name, tunnel }`: VPNs and tunnels only, never Wi-Fi or a cable) is listed only for this PC |
 | PUT | `/api/phone-access` | this PC only: `{ address }` turns phone access on there (or moves it), `{ address: null }` turns it off and signs every other device out. 409 without a PIN or when the port is taken; 400 for an address that isn't one of this PC's VPNs right now |

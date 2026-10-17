@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Every setting the app knows, with its default and what counts as a valid value.
@@ -74,7 +75,7 @@ public enum SettingKey {
             "Please choose whether Budget starts with Windows.");
 
     /** Settings about this PC itself, which a phone or another computer may see but not change. */
-    private static final Set<SettingKey> THIS_PC_ONLY = Set.of(START_WITH_WINDOWS);
+    private static final Set<SettingKey> THIS_PC_ONLY = Set.of(START_WITH_WINDOWS, PHONE_ACCESS_ADDRESS);
 
     private static final Pattern MONTH_DAY = Pattern.compile("\\d{2}-\\d{2}");
     private static final int NOT_A_LEAP_YEAR = 2001;
@@ -129,6 +130,11 @@ public enum SettingKey {
     /** True when only this PC itself may change it. */
     public boolean thisPcOnly() {
         return THIS_PC_ONLY.contains(this);
+    }
+
+    /** The keys of the settings only this PC may change, as stored: Undo checks a change against them. */
+    public static Set<String> thisPcOnlyKeys() {
+        return THIS_PC_ONLY.stream().map(SettingKey::key).collect(Collectors.toUnmodifiableSet());
     }
 
     public boolean accepts(String value) {
