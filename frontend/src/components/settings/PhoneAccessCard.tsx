@@ -8,9 +8,13 @@ import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, LABEL } from "../ui";
 const SELECT = "min-h-11 w-full rounded-lg border border-line bg-surface px-3";
 const WARNING = "flex items-start gap-2 rounded-lg border border-warn-line bg-warn p-3 text-warn-ink";
 
-/** How a network reads in the list: its name, what kind it looks like, and the address. */
+/**
+ * How a network reads in the list: its name, what kind it looks like, and the address. A tunnel is
+ * only "VPN or tunnel": from this PC alone a VPN that links your devices (Tailscale) can't be told
+ * from one for browsing privately (Hotspot Shield), which a phone can never reach this PC through.
+ */
 function networkLabel(network: Network): string {
-  return `${network.name} · ${network.tunnel ? "VPN" : "not encrypted"} · ${network.address}`;
+  return `${network.name} · ${network.tunnel ? "VPN or tunnel" : "not encrypted"} · ${network.address}`;
 }
 
 /**
@@ -125,7 +129,9 @@ function OnThisPc({ view }: { view: PhoneAccessView }) {
         <p className="flex items-start gap-2 text-sm">
           <ShieldCheck aria-hidden className="mt-0.5 size-5 shrink-0 text-accent-ink" />
           <span>
-            <strong>{network.name}</strong> looks like a VPN, which encrypts the connection.
+            <strong>{network.name}</strong> looks like a VPN or tunnel. It only works if it's one that links your own
+            devices, like Tailscale or WireGuard, running on your phone too. A VPN for browsing privately (such as
+            Hotspot Shield, NordVPN or ExpressVPN) can't connect your phone to this PC.
           </span>
         </p>
       )}
@@ -174,7 +180,7 @@ function OnNow({ view, networkName }: { view: PhoneAccessView; networkName: stri
       </div>
       {status.listening ? (
         <p role="status" className="text-sm">
-          Ready for your phone now.
+          Listening for your phone now. If it still can't connect, check the steps below.
         </p>
       ) : (
         <p role="alert" className={WARNING}>
@@ -193,7 +199,9 @@ function OnNow({ view, networkName }: { view: PhoneAccessView; networkName: stri
           Safari tab.
         </li>
         <li>
-          If Windows asks whether to let Budget through its firewall, allow <strong>Private networks</strong> only.
+          If Windows asks whether to let Budget through its firewall, allow <strong>Private networks</strong> only. If
+          Windows calls this network Public, the firewall keeps your phone out: change the network to Private in
+          Windows Settings, and only for a network you trust.
         </li>
         <li>Your phone can only reach Budget while this PC is awake. If it goes to sleep, the phone says it can't connect.</li>
       </ol>

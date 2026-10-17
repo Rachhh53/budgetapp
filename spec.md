@@ -979,6 +979,7 @@ Also in this branch:
 - **The pay period tests now hold the date still** (October 9, 2026, inside their fixtures). Two had started failing once the real date passed a fixture's due date (October 16); nothing in the app was wrong.
 - The shell's own pages may now submit a form to the shell (`form-action 'self'`, was `'none'`); nothing else changed in its CSP.
 - Settings rows that only this PC may change are refused from elsewhere by the settings route too (`SettingKey.thisPcOnly`, `start_with_windows` so far).
+- **First try on the iPhone (Rachel, 2026-10-17): Safari kept loading and never opened.** Two causes, both on the PC: phone access had been turned on for the "HotspotShield WinTun" adapter, a private-browsing VPN whose address only exists on the PC (Tailscale was not installed), which the card had labelled "VPN"; and Windows calls both her networks Public, where the firewall blocks Budget (allowed on Private only). A tunnel is now labelled "VPN or tunnel", with a note that only a VPN linking your own devices (Tailscale, WireGuard) works and a private-browsing one never can; the card and Help say a Public network is blocked and how to make a trusted home Wi-Fi Private. Nothing was changed on her PC.
 
 ### Carried forward into later phases
 

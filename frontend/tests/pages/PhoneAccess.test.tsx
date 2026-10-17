@@ -42,19 +42,19 @@ describe("phone access", () => {
     const list = await within(phone).findByLabelText("Choose a network");
     expect(within(list).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Choose a network…",
-      "Tailscale · VPN · 100.101.102.103",
+      "Tailscale · VPN or tunnel · 100.101.102.103",
       "Wi-Fi · not encrypted · 192.168.1.20",
     ]);
 
     await userEvent.selectOptions(list, TAILSCALE.address);
-    expect(within(phone).getByText(/looks like a VPN, which encrypts the connection/)).toBeInTheDocument();
+    expect(within(phone).getByText(/looks like a VPN or tunnel. It only works if it's one that links your own/)).toBeInTheDocument();
     expect(within(phone).queryByText(/isn't encrypted/)).not.toBeInTheDocument();
     await userEvent.click(within(phone).getByRole("button", { name: "Turn on phone access" }));
 
     expect(bodiesSentTo(fetchMock, "PUT /api/phone-access")).toEqual([{ address: TAILSCALE.address }]);
     expect(await within(phone).findByText("http://100.101.102.103:4873/")).toBeInTheDocument();
     expect(within(phone).getByText(/On, through Tailscale/)).toBeInTheDocument();
-    expect(within(phone).getByRole("status")).toHaveTextContent("Ready for your phone now.");
+    expect(within(phone).getByRole("status")).toHaveTextContent(/Listening for your phone now/);
     expect(within(phone).getByText(/Add to Home Screen/)).toBeInTheDocument();
     expect(within(phone).getByText(/Private networks/)).toBeInTheDocument();
   });
