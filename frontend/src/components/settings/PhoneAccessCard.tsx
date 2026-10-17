@@ -8,20 +8,18 @@ import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, LABEL } from "../ui";
 const SELECT = "min-h-11 w-full rounded-lg border border-line bg-surface px-3";
 const WARNING = "flex items-start gap-2 rounded-lg border border-warn-line bg-warn p-3 text-warn-ink";
 
-/**
- * How a network reads in the list: its name, what kind it looks like, and the address. A tunnel is
- * only "VPN or tunnel": from this PC alone a VPN that links your devices (Tailscale) can't be told
- * from one for browsing privately (Hotspot Shield), which a phone can never reach this PC through.
- */
+/** How a VPN reads in the list: its name as Windows shows it, and this PC's address on it. */
 function networkLabel(network: Network): string {
-  return `${network.name} · ${network.tunnel ? "VPN or tunnel" : "not encrypted"} · ${network.address}`;
+  return `${network.name} · ${network.address}`;
 }
 
 /**
  * Settings → Phone access (spec §10, Phase 12): open Budget on a phone, through one of this PC's
- * networks. Off by default. A VPN (Tailscale, WireGuard…) is recommended; choosing home Wi-Fi or a
- * network cable says plainly that the connection over it isn't encrypted. It needs a PIN, and can
- * only be changed on this PC; opened from a phone, the card only says that it is on.
+ * VPNs. Off by default. Never Wi-Fi or a network cable (Rachel, 2026-10-17): this PC is a laptop that
+ * joins any Wi-Fi it is near, so the backend doesn't even list them. From this PC alone a VPN that links
+ * your devices (Tailscale) can't be told from one for browsing privately (Hotspot Shield), so the card
+ * says which kind works. It needs a PIN, and can only be changed on this PC; opened from a phone, the
+ * card only says that it is on.
  */
 export function PhoneAccessCard({ children }: { children?: ReactNode }) {
   const phoneAccess = usePhoneAccess();
@@ -64,14 +62,15 @@ function OnThisPc({ view }: { view: PhoneAccessView }) {
   return (
     <div className="space-y-4">
       <p className="text-muted">
-        Open Budget on your phone while this PC is on and Budget is open. Your data stays on this PC; the phone only
-        shows it, after your PIN.
+        Open Budget on your phone through a VPN that links your own devices, such as Tailscale or WireGuard, while this
+        PC is on and Budget is open. Your data stays on this PC; the phone only shows it, after your PIN. Wi-Fi is never
+        used: this PC goes wherever it goes, and a VPN keeps it private on any network.
       </p>
 
       {!pinSet && (
         <p className={WARNING}>
           <TriangleAlert aria-hidden className="mt-0.5 size-5 shrink-0" />
-          <span>Phone access needs a PIN, so nobody else on the network can open your budget. Please set one under Security first.</span>
+          <span>Phone access needs a PIN, so nobody else on the VPN can open your budget. Please set one under Security first.</span>
         </p>
       )}
 
@@ -79,12 +78,16 @@ function OnThisPc({ view }: { view: PhoneAccessView }) {
 
       {networks.length === 0 ? (
         <p className="text-muted">
-          This PC isn't connected to a network right now. Once it is (or once your VPN is running), it will appear here.
+          No VPN is connected on this PC right now. Install Tailscale (or WireGuard) on this PC and your phone, sign in to
+          the same account on both, and it will appear here.{" "}
+          <Link to="/help/settings" className="font-semibold text-accent-ink underline">
+            How to set one up
+          </Link>
         </p>
       ) : (
         <div>
           <label htmlFor="phone-network" className={LABEL}>
-            {status.on ? "Network" : "Choose a network"}
+            {status.on ? "VPN" : "Choose a VPN"}
           </label>
           <select
             id="phone-network"
@@ -97,7 +100,7 @@ function OnThisPc({ view }: { view: PhoneAccessView }) {
             }}
             className={SELECT}
           >
-            {!status.on && <option value="">Choose a network…</option>}
+            {!status.on && <option value="">Choose a VPN…</option>}
             {status.on && !current && <option value={status.address}>Not connected · {status.address}</option>}
             {networks.map((each) => (
               <option key={each.address} value={each.address}>
@@ -106,8 +109,7 @@ function OnThisPc({ view }: { view: PhoneAccessView }) {
             ))}
           </select>
           <p id="phone-network-hint" className="mt-1 text-sm text-muted">
-            A VPN such as Tailscale or WireGuard is the safe choice: it encrypts everything between your phone and this
-            PC, at home or away.{" "}
+            It encrypts everything between your phone and this PC, wherever this PC is.{" "}
             <Link to="/help/settings" className="font-semibold text-accent-ink underline">
               How to set one up
             </Link>
@@ -115,23 +117,13 @@ function OnThisPc({ view }: { view: PhoneAccessView }) {
         </div>
       )}
 
-      {network && !network.tunnel && (
-        <p role="note" className={WARNING}>
-          <TriangleAlert aria-hidden className="mt-0.5 size-5 shrink-0" />
-          <span>
-            <strong>{network.name}</strong> looks like your home Wi-Fi or a network cable, and Budget's connection over it
-            isn't encrypted. Anyone else on this network (a guest, or another device on it) could see your numbers and
-            your PIN as they go by. A VPN keeps them private.
-          </span>
-        </p>
-      )}
-      {network?.tunnel && (
+      {network && (
         <p className="flex items-start gap-2 text-sm">
           <ShieldCheck aria-hidden className="mt-0.5 size-5 shrink-0 text-accent-ink" />
           <span>
-            <strong>{network.name}</strong> looks like a VPN or tunnel. It only works if it's one that links your own
-            devices, like Tailscale or WireGuard, running on your phone too. A VPN for browsing privately (such as
-            Hotspot Shield, NordVPN or ExpressVPN) can't connect your phone to this PC.
+            <strong>{network.name}</strong> only works if it's a VPN that links your own devices, like Tailscale or
+            WireGuard, running on your phone too. A VPN for browsing privately (such as Hotspot Shield, NordVPN or
+            ExpressVPN) can't connect your phone to this PC.
           </span>
         </p>
       )}
@@ -188,7 +180,7 @@ function OnNow({ view, networkName }: { view: PhoneAccessView; networkName: stri
           <span>
             {status.problem === "port_in_use"
               ? "Your phone can't reach Budget right now: another program on this PC is using the port it needs. Closing that program should fix it; Budget tries again by itself."
-              : "Your phone can't reach Budget right now, because this network isn't connected. Budget opens it again by itself once it is (for a VPN, once it's running)."}
+              : "Your phone can't reach Budget right now, because this VPN isn't connected. Budget opens it again by itself once it's running."}
           </span>
         </p>
       )}
@@ -199,9 +191,8 @@ function OnNow({ view, networkName }: { view: PhoneAccessView; networkName: stri
           Safari tab.
         </li>
         <li>
-          If Windows asks whether to let Budget through its firewall, allow <strong>Private networks</strong> only. If
-          Windows calls this network Public, the firewall keeps your phone out: change the network to Private in
-          Windows Settings, and only for a network you trust.
+          If Windows asks whether to let Budget through its firewall, allow <strong>Private networks</strong> only. Never
+          change your Wi-Fi to Private for this.
         </li>
         <li>Your phone can only reach Budget while this PC is awake. If it goes to sleep, the phone says it can't connect.</li>
       </ol>

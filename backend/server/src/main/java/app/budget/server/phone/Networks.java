@@ -17,8 +17,8 @@ import org.slf4j.LoggerFactory;
  * <p>No VPN is named here: a VPN such as Tailscale or WireGuard is listed like any other network,
  * under the name Windows gives it. What tells the two kinds apart is that a VPN's adapter is a
  * tunnel with no hardware address, while Wi-Fi and Ethernet are network cards that have one.
- * That is a guess, so it only ever errs one way: anything with a hardware address gets the
- * "not encrypted" warning, even a VPN that happens to have one.
+ * That is a guess, so it only ever errs one way: phone access is offered on tunnels alone, and
+ * a VPN that happens to have a hardware address is simply not offered.
  */
 public interface Networks {
 

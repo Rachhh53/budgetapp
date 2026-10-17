@@ -62,10 +62,14 @@ class PhoneAccessApiTest {
         return server.put("/api/phone-access", "{\"address\":\"" + address + "\"}", cookie);
     }
 
-    /** Sets a PIN and turns phone access on at a real address; returns the address to open on the phone. */
+    /**
+     * Sets a PIN and turns phone access on at a real address; returns the address to open on the phone.
+     * The machine's real address stands in for a VPN's here (told to the server as a tunnel), since a
+     * test machine has no VPN; only a tunnel is ever listened on.
+     */
     private String phoneAccessOn() throws Exception {
         String address = realAddress();
-        networks.set(List.of(new Network(address, "Wi-Fi", false)));
+        networks.set(List.of(new Network(address, "Tailscale", true)));
         setPin();
         Reply on = turnOn(address);
         assertThat(on.status()).isEqualTo(200);
@@ -88,7 +92,7 @@ class PhoneAccessApiTest {
     }
 
     @Test
-    void isOffUntilTurnedOnAndListsThisPcsNetworks() throws Exception {
+    void isOffUntilTurnedOnAndOffersThisPcsVpnsOnly() throws Exception {
         networks.set(List.of(new Network("100.101.102.103", "Tailscale", true), new Network("192.168.1.20", "Wi-Fi", false)));
 
         Reply reply = server.get("/api/phone-access", cookie);
@@ -96,16 +100,42 @@ class PhoneAccessApiTest {
         assertThat(reply.status()).isEqualTo(200);
         assertThat(reply.data().get("status").get("on").asBoolean()).isFalse();
         assertThat(reply.data().get("fromThisPc").asBoolean()).isTrue();
-        assertThat(reply.data().get("networks").findValuesAsText("name")).containsExactly("Tailscale", "Wi-Fi");
-        assertThat(reply.data().get("networks").get(0).get("tunnel").asBoolean()).isTrue();
-        assertThat(reply.data().get("networks").get(1).get("tunnel").asBoolean()).isFalse();
+        // A laptop joins any Wi-Fi it is near: Wi-Fi and network cables are never offered.
+        assertThat(reply.data().get("networks").findValuesAsText("name")).containsExactly("Tailscale");
+    }
+
+    @Test
+    void neverListensOnWiFi() throws Exception {
+        networks.set(List.of(new Network("100.101.102.103", "Tailscale", true), new Network("192.168.1.20", "Wi-Fi", false)));
+        setPin();
+
+        Reply reply = turnOn("192.168.1.20");
+
+        assertThat(reply.status()).isEqualTo(400);
+        assertThat(reply.error()).contains("only works through a VPN");
+        assertThat(server.get("/api/phone-access", cookie).data().get("status").get("on").asBoolean()).isFalse();
+    }
+
+    @Test
+    void aWiFiChoiceSavedBeforeIsTurnedOff() throws Exception {
+        String address = realAddress();
+        networks.set(List.of(new Network(address, "Tailscale", true)));
+        setPin();
+        String url = turnOn(address).data().get("status").get("url").asText();
+
+        // The same address, now known to be a Wi-Fi card (as a choice made when Wi-Fi could be picked would be).
+        networks.set(List.of(new Network(address, "Wi-Fi", false)));
+        server.keepPhoneAccessUp();
+
+        assertThat(server.get("/api/phone-access", cookie).data().get("status").get("on").asBoolean()).isFalse();
+        assertThatThrownBy(() -> server.sendTo(url, "GET", "/api/health", null, null)).isInstanceOf(IOException.class);
     }
 
     @Test
     void cantBeTurnedOnWithoutAPin() throws Exception {
-        networks.set(List.of(new Network("192.168.1.20", "Wi-Fi", false)));
+        networks.set(List.of(new Network("100.101.102.103", "Tailscale", true)));
 
-        Reply reply = turnOn("192.168.1.20");
+        Reply reply = turnOn("100.101.102.103");
 
         assertThat(reply.status()).isEqualTo(409);
         assertThat(reply.error()).contains("set a PIN first");
@@ -114,7 +144,7 @@ class PhoneAccessApiTest {
 
     @Test
     void onlyListensOnAnAddressThisPcHas() throws Exception {
-        networks.set(List.of(new Network("192.168.1.20", "Wi-Fi", false)));
+        networks.set(List.of(new Network("100.101.102.103", "Tailscale", true)));
         setPin();
 
         assertThat(turnOn("0.0.0.0").status()).isEqualTo(400);
@@ -282,7 +312,7 @@ class PhoneAccessApiTest {
         @Test
         void turnsPhoneAccessOffToo() throws Exception {
             String address = realAddress();
-            networks.set(List.of(new Network(address, "Wi-Fi", false)));
+            networks.set(List.of(new Network(address, "Tailscale", true)));
             setPin();
             assertThat(turnOn(address).status()).isEqualTo(200);
             server.close();

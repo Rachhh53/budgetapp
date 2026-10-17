@@ -237,8 +237,8 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | GET | `/api/undo` | `{ available }`: whether there is a change to undo |
 | POST | `/api/undo` | undo the most recent change; `{ undone, available }` |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
-| GET | `/api/phone-access` | `{ status: { on, address, url, listening, problem }, fromThisPc, pinSet, networks }`. `problem` is `none`, `network_not_connected` or `port_in_use`; `networks` (`{ address, name, tunnel }`, VPNs first) is listed only for this PC |
-| PUT | `/api/phone-access` | this PC only: `{ address }` turns phone access on there (or moves it), `{ address: null }` turns it off and signs every other device out. 409 without a PIN or when the port is taken; 400 for an address this PC doesn't have |
+| GET | `/api/phone-access` | `{ status: { on, address, url, listening, problem }, fromThisPc, pinSet, networks }`. `problem` is `none`, `network_not_connected` or `port_in_use`; `networks` (`{ address, name, tunnel }`: VPNs and tunnels only, never Wi-Fi or a cable) is listed only for this PC |
+| PUT | `/api/phone-access` | this PC only: `{ address }` turns phone access on there (or moves it), `{ address: null }` turns it off and signs every other device out. 409 without a PIN or when the port is taken; 400 for an address that isn't one of this PC's VPNs right now |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
 
 Every request that changes something is recorded so it can be undone, and its answer carries the header

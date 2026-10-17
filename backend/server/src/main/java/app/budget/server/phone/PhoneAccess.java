@@ -10,12 +10,12 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Phone access (spec §10, Phase 12): whether the app can be opened from another device, and on
- * which of this PC's networks. Off by default; while it is off nothing but this PC can reach the app.
+ * which of this PC's VPNs. Off by default; while it is off nothing but this PC can reach the app.
  *
  * <p>The choice is saved as the network address to listen on. The listener follows it: opened
  * when phone access is turned on, closed when it is turned off, and kept in step by {@link #keepUp()},
  * which the app's timer calls every little while. That covers a VPN that is started after Budget,
- * a laptop that leaves the home Wi-Fi and comes back, and a PC that wakes from sleep.
+ * a VPN that reconnects after the laptop moves to another Wi-Fi, and a PC that wakes from sleep.
  *
  * <p>Phone access needs a PIN, always: it can't be turned on without one, the PIN can't be removed
  * while it is on, and should the PIN go some other way ({@code --reset-pin}), phone access goes with it.
@@ -28,7 +28,7 @@ public final class PhoneAccess {
     public enum Problem {
         /** Nothing is wrong. */
         NONE,
-        /** The chosen network isn't connected (the VPN isn't running, or the PC is on another Wi-Fi). */
+        /** The chosen VPN isn't connected right now (not running, or still reconnecting). */
         NETWORK_NOT_CONNECTED,
         /** Another program is using the port on that network. */
         PORT_IN_USE
@@ -66,9 +66,17 @@ public final class PhoneAccess {
         return !settings.get(SettingKey.PHONE_ACCESS_ADDRESS).isEmpty();
     }
 
-    /** The networks phone access can listen on now. */
+    /**
+     * The networks phone access can listen on now: VPNs and other tunnels only. Never Wi-Fi or a network
+     * cable (Rachel, 2026-10-17): this PC is a laptop that joins any Wi-Fi it is near, so listening on one
+     * would be safe only at home, and nothing should depend on remembering to change a setting elsewhere.
+     */
     public List<Networks.Network> networks() {
-        return networks.current();
+        return networks.current().stream().filter(Networks.Network::tunnel).toList();
+    }
+
+    private boolean isTunnel(String address) {
+        return networks().stream().anyMatch(network -> network.address().equals(address));
     }
 
     public synchronized Status status() {
@@ -120,6 +128,12 @@ public final class PhoneAccess {
         }
         if (!pins.status().pinSet()) {
             // Never open to the network without a PIN, whatever the setting says.
+            turnOff();
+            return;
+        }
+        if (networks.has(address) && !isTunnel(address)) {
+            // Saved when Wi-Fi could still be chosen, or the address now belongs to a network card:
+            // never listened on. Turned off rather than left waiting, so it can't come back by itself.
             turnOff();
             return;
         }

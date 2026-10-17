@@ -37,7 +37,7 @@ public final class PhoneAccessRoutes {
      * @param status     whether it is on, where, and whether a phone can reach it right now
      * @param fromThisPc true when asked on this PC: only then are the networks listed and can it be changed
      * @param pinSet     true when a PIN is set, which phone access needs
-     * @param networks   this PC's networks, VPNs first; empty when asked from another device
+     * @param networks   this PC's VPNs and other tunnels (never Wi-Fi or a cable); empty when asked from another device
      */
     public record View(PhoneAccess.Status status, boolean fromThisPc, boolean pinSet, List<Networks.Network> networks) {}
 
@@ -69,16 +69,17 @@ public final class PhoneAccessRoutes {
         }
         if (!pins.status().pinSet()) {
             throw ApiException.conflict(
-                    "Please set a PIN first. Anyone who can reach this network could otherwise open your budget.");
+                    "Please set a PIN first. Anyone who can reach this VPN could otherwise open your budget.");
         }
         // Only an address this PC has right now: nothing else can be listened on, and nothing typed is trusted.
         if (phoneAccess.networks().stream().noneMatch(network -> network.address().equals(address))) {
-            throw ApiException.badRequest("That network isn't connected to this PC right now. Please choose one from the list.");
+            throw ApiException.badRequest(
+                    "Phone access only works through a VPN that's connected to this PC right now. Please choose one from the list.");
         }
         if (!phoneAccess.turnOn(address)) {
             throw ApiException.conflict(
                     "Another program on this PC is using the port phone access needs, so it wasn't turned on. "
-                            + "Please close that program, or try a different network.");
+                            + "Please close that program, or try a different VPN.");
         }
         ApiResponse.ok(ctx, view(ctx));
     }

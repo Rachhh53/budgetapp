@@ -5,10 +5,10 @@ import type { PhoneAccessView } from "../../src/api/phoneAccess";
 import { bodiesSentTo, DEFAULT_SETTINGS, fakeBackend, PHONE_ACCESS_OFF, renderApp, UNLOCKED } from "../helpers";
 
 const TAILSCALE = { address: "100.101.102.103", name: "Tailscale", tunnel: true };
-const WIFI = { address: "192.168.1.20", name: "Wi-Fi", tunnel: false };
+const WIREGUARD = { address: "10.6.0.2", name: "WireGuard Tunnel", tunnel: true };
 
-/** Off, with a PIN set, on a PC with a VPN and home Wi-Fi. */
-const READY: PhoneAccessView = { ...PHONE_ACCESS_OFF, pinSet: true, networks: [TAILSCALE, WIFI] };
+/** Off, with a PIN set, on a PC with two VPNs (Wi-Fi is never listed). */
+const READY: PhoneAccessView = { ...PHONE_ACCESS_OFF, pinSet: true, networks: [TAILSCALE, WIREGUARD] };
 
 const ON_TAILSCALE: PhoneAccessView = {
   ...READY,
@@ -26,11 +26,11 @@ describe("phone access", () => {
 
     const phone = await card();
     expect(await within(phone).findByText(/Phone access needs a PIN/)).toBeInTheDocument();
-    expect(within(phone).getByLabelText("Choose a network")).toBeDisabled();
+    expect(within(phone).getByLabelText("Choose a VPN")).toBeDisabled();
     expect(within(phone).getByRole("button", { name: "Turn on phone access" })).toBeDisabled();
   });
 
-  it("lists the VPN first and turns phone access on there, without a warning", async () => {
+  it("lists this PC's VPNs and turns phone access on through one", async () => {
     const fetchMock = fakeBackend({
       "GET /api/session": () => ({ status: 200, data: { ...UNLOCKED, pinSet: true } }),
       "GET /api/phone-access": () => ({ status: 200, data: READY }),
@@ -39,16 +39,15 @@ describe("phone access", () => {
     renderApp("/settings");
 
     const phone = await card();
-    const list = await within(phone).findByLabelText("Choose a network");
+    const list = await within(phone).findByLabelText("Choose a VPN");
     expect(within(list).getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Choose a network…",
-      "Tailscale · VPN or tunnel · 100.101.102.103",
-      "Wi-Fi · not encrypted · 192.168.1.20",
+      "Choose a VPN…",
+      "Tailscale · 100.101.102.103",
+      "WireGuard Tunnel · 10.6.0.2",
     ]);
 
     await userEvent.selectOptions(list, TAILSCALE.address);
-    expect(within(phone).getByText(/looks like a VPN or tunnel. It only works if it's one that links your own/)).toBeInTheDocument();
-    expect(within(phone).queryByText(/isn't encrypted/)).not.toBeInTheDocument();
+    expect(within(phone).getByText(/only works if it.s a VPN that links your own devices/)).toBeInTheDocument();
     await userEvent.click(within(phone).getByRole("button", { name: "Turn on phone access" }));
 
     expect(bodiesSentTo(fetchMock, "PUT /api/phone-access")).toEqual([{ address: TAILSCALE.address }]);
@@ -59,14 +58,16 @@ describe("phone access", () => {
     expect(within(phone).getByText(/Private networks/)).toBeInTheDocument();
   });
 
-  it("warns plainly when home Wi-Fi is chosen", async () => {
+  it("says it never uses Wi-Fi, and that a private-browsing VPN can't work", async () => {
     fakeBackend({ "GET /api/phone-access": () => ({ status: 200, data: READY }) });
     renderApp("/settings");
 
     const phone = await card();
-    await userEvent.selectOptions(await within(phone).findByLabelText("Choose a network"), WIFI.address);
+    expect(await within(phone).findByText(/Wi-Fi is never used/)).toBeInTheDocument();
+    await userEvent.selectOptions(within(phone).getByLabelText("Choose a VPN"), WIREGUARD.address);
 
-    expect(within(phone).getByRole("note")).toHaveTextContent(/isn't encrypted.*your numbers and your PIN/);
+    expect(within(phone).getByText(/Hotspot Shield, NordVPN or ExpressVPN\) can't connect your phone/)).toBeInTheDocument();
+    expect(within(phone).queryByText(/Private network\b(?!s)/)).not.toBeInTheDocument();
   });
 
   it("says why the phone can't reach it, while it is on", async () => {
@@ -75,7 +76,7 @@ describe("phone access", () => {
         status: 200,
         data: {
           ...ON_TAILSCALE,
-          networks: [WIFI],
+          networks: [WIREGUARD],
           status: { ...ON_TAILSCALE.status, listening: false, problem: "network_not_connected" },
         },
       }),
@@ -83,8 +84,8 @@ describe("phone access", () => {
     renderApp("/settings");
 
     const phone = await card();
-    expect(await within(phone).findByRole("alert")).toHaveTextContent(/this network isn't connected/);
-    expect(within(phone).getByLabelText("Network")).toHaveValue(TAILSCALE.address);
+    expect(await within(phone).findByRole("alert")).toHaveTextContent(/this VPN isn.t connected/);
+    expect(within(phone).getByLabelText("VPN")).toHaveValue(TAILSCALE.address);
     expect(within(phone).getByRole("option", { name: "Not connected · 100.101.102.103" })).toBeInTheDocument();
   });
 
@@ -112,10 +113,10 @@ describe("phone access", () => {
 
     const phone = await card();
     expect(within(phone).queryByRole("button", { name: "Move phone access here" })).not.toBeInTheDocument();
-    await userEvent.selectOptions(await within(phone).findByLabelText("Network"), WIFI.address);
+    await userEvent.selectOptions(await within(phone).findByLabelText("VPN"), WIREGUARD.address);
     await userEvent.click(within(phone).getByRole("button", { name: "Move phone access here" }));
 
-    expect(bodiesSentTo(fetchMock, "PUT /api/phone-access")).toEqual([{ address: WIFI.address }]);
+    expect(bodiesSentTo(fetchMock, "PUT /api/phone-access")).toEqual([{ address: WIREGUARD.address }]);
   });
 
   it("shows what went wrong when it can't be turned on", async () => {
@@ -126,7 +127,7 @@ describe("phone access", () => {
     renderApp("/settings");
 
     const phone = await card();
-    await userEvent.selectOptions(await within(phone).findByLabelText("Choose a network"), TAILSCALE.address);
+    await userEvent.selectOptions(await within(phone).findByLabelText("Choose a VPN"), TAILSCALE.address);
     await userEvent.click(within(phone).getByRole("button", { name: "Turn on phone access" }));
 
     expect(await within(phone).findByRole("alert")).toHaveTextContent("Another program on this PC is using the port");
@@ -176,6 +177,6 @@ describe("phone access", () => {
     fakeBackend({ "GET /api/phone-access": () => ({ status: 200, data: { ...READY, networks: [] } }) });
     renderApp("/settings");
 
-    expect(await within(await card()).findByText(/isn't connected to a network right now/)).toBeInTheDocument();
+    expect(await within(await card()).findByText(/No VPN is connected on this PC right now/)).toBeInTheDocument();
   });
 });
