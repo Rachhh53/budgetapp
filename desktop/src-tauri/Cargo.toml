@@ -12,7 +12,8 @@ publish = false
 tauri-build = { version = "=2.7.0", features = [] }
 
 [dependencies]
-tauri = { version = "=2.12.0", features = [] }
+# tray-icon: the tray while phone access is on (spec §10, Phase 12); its crates come with Tauri itself.
+tauri = { version = "=2.12.0", features = ["tray-icon"] }
 tauri-plugin-single-instance = "=2.4.5"
 getrandom = "0.3"
 
@@ -20,3 +21,8 @@ getrandom = "0.3"
 opt-level = "s"
 lto = "thin"
 strip = true
+
+# The Windows startup entry for Start with Windows (spec §10, Phase 12). Already in the build through
+# Tauri's own tooling, so nothing new is downloaded; used directly in place of an autostart plugin.
+[target.'cfg(windows)'.dependencies]
+winreg = "=0.55.0"

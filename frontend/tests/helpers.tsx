@@ -22,6 +22,8 @@ export const DEFAULT_SETTINGS = {
   default_date: "",
   budget_year_start: "01-01",
   plan_reminder: "10-01",
+  phone_access_address: "",
+  start_with_windows: "false",
 };
 
 /** Plan next year in an app with nothing in it yet: no plans, and first-time setup on offer. */
@@ -45,7 +47,7 @@ export const NO_BACKUPS = {
 };
 
 /** Open, with no PIN, and the offer to set one already answered: how most tests want the app. */
-export const UNLOCKED = { unlocked: true, pinSet: false, retryAfterSeconds: 0, offerPin: false };
+export const UNLOCKED = { unlocked: true, pinSet: false, retryAfterSeconds: 0, offerPin: false, fromThisPc: true };
 
 /** What a brand-new install answers: default settings and nothing entered yet. */
 const FRESH_INSTALL: Record<string, Handler> = {
@@ -68,6 +70,15 @@ const FRESH_INSTALL: Record<string, Handler> = {
   "GET /api/annual-costs": () => ({ status: 200, data: NO_ANNUAL_COSTS }),
   "GET /api/plans": () => ({ status: 200, data: NO_PLANS }),
   "POST /api/planner": () => ({ status: 200, data: NOTHING_TO_COMPARE }),
+  "GET /api/phone-access": () => ({ status: 200, data: PHONE_ACCESS_OFF }),
+};
+
+/** Phone access as a fresh install has it: off, on a PC with no PIN and no networks to offer. */
+export const PHONE_ACCESS_OFF = {
+  status: { on: false, address: "", url: "", listening: false, problem: "none" as const },
+  fromThisPc: true,
+  pinSet: false,
+  networks: [],
 };
 
 /** Debt & decisions before any account that could take extra money exists. */

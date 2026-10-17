@@ -34,12 +34,16 @@ public final class BackupRoutes {
     private final FolderBrowser folders;
     private final SettingsRepository settings;
     private final SessionStore sessions;
+    private final Runnable afterRestore;
 
-    public BackupRoutes(BackupService backups, FolderBrowser folders, SettingsRepository settings, SessionStore sessions) {
+    /** @param afterRestore what else follows replacing the data (phone access turned off) */
+    public BackupRoutes(
+            BackupService backups, FolderBrowser folders, SettingsRepository settings, SessionStore sessions, Runnable afterRestore) {
         this.backups = backups;
         this.folders = folders;
         this.settings = settings;
         this.sessions = sessions;
+        this.afterRestore = afterRestore;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -128,6 +132,7 @@ public final class BackupRoutes {
         }
         // What was on screen belongs to the data that was replaced: everyone unlocks afresh.
         sessions.revokeAll();
+        afterRestore.run();
         ApiResponse.ok(ctx, new Restored(true));
     }
 

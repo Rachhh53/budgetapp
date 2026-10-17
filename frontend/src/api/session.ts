@@ -11,6 +11,11 @@ export interface SessionStatus {
   retryAfterSeconds: number;
   /** True while the first-launch offer to set a PIN has not been answered. */
   offerPin: boolean;
+  /**
+   * True on the PC Budget is installed on; false on a phone or another computer (spec §10, Phase 12).
+   * What only that PC may do (backups, Erase all data, phone access, Start with Windows) is shown only then.
+   */
+  fromThisPc: boolean;
 }
 
 /** The answer to setting a PIN or making a new recovery code. */

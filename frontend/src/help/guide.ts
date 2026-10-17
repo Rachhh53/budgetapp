@@ -340,7 +340,7 @@ export const TOPICS: readonly Topic[] = [
     id: "settings",
     title: "Settings, security and backups",
     path: "/settings",
-    summary: "How Budget looks and warns you, your PIN, and your backups.",
+    summary: "How Budget looks and warns you, your PIN, your backups, and opening Budget on your phone.",
     sections: [
       {
         heading: "Appearance and defaults",
@@ -363,9 +363,23 @@ export const TOPICS: readonly Topic[] = [
         ],
       },
       {
+        heading: "Phone access",
+        body: [
+          "Phone access opens Budget on your phone while this PC is on and awake, with Budget open. Your data stays on this PC, and the phone always needs your PIN. It's off until you choose a network under Phone access and press Turn on phone access; Turn off phone access signs every phone out at once.",
+          "Use a VPN: it encrypts everything between your phone and this PC, at home or away. With Tailscale, install it on this PC and on your iPhone (from the App Store), sign in to the same account on both, then choose Tailscale under Phone access. Tailscale's company can see which devices you have and when they're online, never your budget.",
+          "WireGuard keeps any company out of it, but needs a WireGuard server on this PC or on your router (many routers have one built in), and reaching it from away means opening one port on the router. Install WireGuard from the App Store and add the setup your router or PC gives you.",
+          "Home Wi-Fi or a network cable works too, but isn't encrypted: anyone else on that network could see your numbers and your PIN as they go by. Budget warns you when you choose one.",
+          "Never use a public tunnel such as Cloudflare Tunnel or ngrok. It puts Budget on the internet, and the company in the middle can see everything.",
+          "On the iPhone, open the address shown under Phone access in Safari, then Share › Add to Home Screen, and use Budget from the Home Screen rather than a Safari tab.",
+          "To keep your iPhone from holding on to anything: in the iPhone's Settings › Apps › Safari, turn off Search Engine Suggestions and Safari Suggestions; if it offers to save your Budget PIN in Passwords, choose Not Now; and don't use Summarize, Translate or other Apple Intelligence features on Budget.",
+          "If Windows asks whether to let Budget through its firewall, allow Private networks only. Allowed Public by mistake? Open Windows Defender Firewall with Advanced Security › Inbound Rules, delete Budget's rules, and Windows asks again next time.",
+          "A sleeping PC can't answer your phone. To keep it awake while it's plugged in, in Windows Settings › System › Power & battery, under Screen and sleep, set the sleep time when plugged in to Never. Budget never changes this for you.",
+        ],
+      },
+      {
         heading: "Your data",
         body: [
-          "Everything stays on this PC. Budget never sends anything anywhere. Erase all data, at the bottom, removes everything for good.",
+          "Everything stays on this PC. Budget never sends anything to the internet; with Phone access on, it only answers your own phone, after your PIN. Erase all data, at the bottom, removes everything for good.",
         ],
       },
     ],
@@ -404,6 +418,8 @@ export const TASKS: readonly Task[] = [
   { question: "How do I back up my data?", answer: "In Settings, under Backups: Choose folder…, then Back up now. Budget backs up daily after that.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "backup back up restore copy safe data" },
   { question: "How do I lock Budget with a PIN?", answer: "In Settings, under Security, Set a PIN. Keep the recovery code somewhere safe.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "pin lock password security protect" },
   { question: "I forgot my PIN.", answer: "On the lock screen, press I forgot my PIN and type your recovery code.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "forgot pin recovery code locked out reset" },
+  { question: "How do I use Budget on my phone?", answer: "Set a PIN, then in Settings, under Phone access, choose your VPN (or home Wi-Fi) and press Turn on phone access. Open the address it shows in Safari and add it to your Home Screen.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "phone iphone mobile remote tailscale wireguard vpn wifi away home screen" },
+  { question: "My phone can't reach Budget.", answer: "This PC has to be on and awake with Budget open, and the network chosen under Phone access connected (for a VPN, running on both). Settings says what's wrong.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "phone can't connect reach unreachable offline sleep vpn firewall" },
   { question: "How do I change the colors or dark mode?", answer: "In Settings, under Appearance.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "theme dark light color colour accent appearance" },
   { question: "How do I add a holiday that moves paydays?", answer: "In Settings, under Bank holidays, Add a holiday.", to: "/settings", button: "Go to Settings", topic: "settings", keywords: "holiday payday weekend bank" },
   { question: "How do I add or change categories?", answer: "On Categories & tags, or by typing a new name in any category picker.", to: "/categories", button: "Go to Categories & tags", topic: "categories", keywords: "category categories tag tags group label" },

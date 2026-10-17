@@ -8,6 +8,7 @@ import app.budget.server.auth.PinService.Outcome;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 /**
  * Unlocking, locking, the PIN, and the gate in front of every other API route.
@@ -33,15 +34,18 @@ public final class SessionRoutes {
 
     private final SessionStore sessions;
     private final PinService pins;
+    private final BooleanSupplier phoneAccessOn;
 
-    public SessionRoutes(SessionStore sessions, PinService pins) {
+    /** @param phoneAccessOn true while phone access is on: the PIN can't be removed then (spec §10, Phase 12) */
+    public SessionRoutes(SessionStore sessions, PinService pins, BooleanSupplier phoneAccessOn) {
         this.sessions = sessions;
         this.pins = pins;
+        this.phoneAccessOn = phoneAccessOn;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
         routes.before("/api/*", this::requireSession);
-        routes.get("/api/session", ctx -> ApiResponse.ok(ctx, status(sessions.touch(ctx.cookie(COOKIE)))));
+        routes.get("/api/session", ctx -> ApiResponse.ok(ctx, status(ctx, sessions.touch(ctx.cookie(COOKIE), Requests.isFromThisPc(ctx)))));
         routes.post("/api/session", this::unlock);
         routes.delete("/api/session", this::lock);
         routes.put("/api/pin", this::setPin);
@@ -56,8 +60,10 @@ public final class SessionRoutes {
      * @param pinSet            true when a PIN is needed to unlock
      * @param retryAfterSeconds after too many wrong tries, how long until the next one is looked at
      * @param offerPin          true when the first-launch offer to set a PIN has not been answered yet
+     * @param fromThisPc        true when the request comes from this PC itself, not a phone or another computer:
+     *                          what only this PC may do (backups, Erase all data, phone access) is shown only then
      */
-    public record SessionStatus(boolean unlocked, boolean pinSet, long retryAfterSeconds, boolean offerPin) {}
+    public record SessionStatus(boolean unlocked, boolean pinSet, long retryAfterSeconds, boolean offerPin, boolean fromThisPc) {}
 
     /** Request bodies. A PIN is text, never a number: it may start with zeros. */
     public record UnlockRequest(String pin) {}
@@ -75,14 +81,15 @@ public final class SessionRoutes {
         if (OPEN_ROUTES.contains(ctx.method() + " " + ctx.path())) {
             return;
         }
-        if (!sessions.touch(ctx.cookie(COOKIE))) {
+        if (!sessions.touch(ctx.cookie(COOKIE), Requests.isFromThisPc(ctx))) {
             throw ApiException.unauthorized();
         }
     }
 
-    private SessionStatus status(boolean unlocked) {
+    private SessionStatus status(Context ctx, boolean unlocked) {
         PinService.Status pin = pins.status();
-        return new SessionStatus(unlocked, pin.pinSet(), pin.retryAfterSeconds(), unlocked && pin.offerPending());
+        return new SessionStatus(
+                unlocked, pin.pinSet(), pin.retryAfterSeconds(), unlocked && pin.offerPending(), Requests.isFromThisPc(ctx));
     }
 
     private void unlock(Context ctx) {
@@ -94,13 +101,13 @@ public final class SessionRoutes {
             throw ApiException.forbidden("Please set a PIN on your PC before opening Budget from another device.");
         }
         startSession(ctx);
-        ApiResponse.send(ctx, 201, status(true));
+        ApiResponse.send(ctx, 201, status(ctx, true));
     }
 
     private void lock(Context ctx) {
         sessions.revoke(ctx.cookie(COOKIE));
         ctx.header("Set-Cookie", COOKIE + "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
-        ApiResponse.ok(ctx, status(false));
+        ApiResponse.ok(ctx, status(ctx, false));
     }
 
     /** Sets the first PIN, or changes it (which needs the one in use). */
@@ -118,20 +125,24 @@ public final class SessionRoutes {
         }
         // Anything else that was unlocked now has to give the new PIN.
         sessions.revokeAllExcept(ctx.cookie(COOKIE));
-        ApiResponse.ok(ctx, new PinSaved(recoveryCode, status(true)));
+        ApiResponse.ok(ctx, new PinSaved(recoveryCode, status(ctx, true)));
     }
 
     private void removePin(Context ctx) {
         if (pins.status().pinSet()) {
+            // Without a PIN, anyone who could reach this PC's network address would get straight in.
+            if (phoneAccessOn.getAsBoolean()) {
+                throw ApiException.conflict("Phone access is on, so the PIN keeps Budget safe. Please turn phone access off first.");
+            }
             requireCurrentPin(Inputs.body(ctx, CurrentPinRequest.class).currentPin());
             pins.removePin();
         }
-        ApiResponse.ok(ctx, status(true));
+        ApiResponse.ok(ctx, status(ctx, true));
     }
 
     private void dismissOffer(Context ctx) {
         pins.dismissOffer();
-        ApiResponse.ok(ctx, status(true));
+        ApiResponse.ok(ctx, status(ctx, true));
     }
 
     /** A forgotten PIN: the recovery code sets a new one, and is itself replaced, since it has now been used. */
@@ -148,7 +159,7 @@ public final class SessionRoutes {
         String recoveryCode = pins.newRecoveryCode();
         sessions.revokeAll();
         startSession(ctx);
-        ApiResponse.send(ctx, 201, new PinSaved(recoveryCode, status(true)));
+        ApiResponse.send(ctx, 201, new PinSaved(recoveryCode, status(ctx, true)));
     }
 
     private void newRecoveryCode(Context ctx) {
@@ -156,7 +167,7 @@ public final class SessionRoutes {
             throw ApiException.conflict("A recovery code goes with a PIN. Please set a PIN first.");
         }
         requireCurrentPin(Inputs.body(ctx, CurrentPinRequest.class).currentPin());
-        ApiResponse.ok(ctx, new PinSaved(pins.newRecoveryCode(), status(true)));
+        ApiResponse.ok(ctx, new PinSaved(pins.newRecoveryCode(), status(ctx, true)));
     }
 
     /**
@@ -179,6 +190,6 @@ public final class SessionRoutes {
     private void startSession(Context ctx) {
         // HttpOnly keeps the token away from page scripts; SameSite=Strict means no other site
         // can make the browser send it. No Max-Age: the cookie ends when the window closes.
-        ctx.header("Set-Cookie", COOKIE + "=" + sessions.issue() + "; Path=/; HttpOnly; SameSite=Strict");
+        ctx.header("Set-Cookie", COOKIE + "=" + sessions.issue(Requests.isFromThisPc(ctx)) + "; Path=/; HttpOnly; SameSite=Strict");
     }
 }

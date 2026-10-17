@@ -3,7 +3,7 @@ import { PIN_HINT, PIN_PATTERN } from "../../api/session";
 import { HINT, INPUT, LABEL } from "../ui";
 
 /**
- * One PIN box. The PIN is hidden as it is typed, the phone shows its number pad, and anything
+ * One PIN box. The PIN is hidden as it is typed (drawn as dots), the phone shows its number pad, and anything
  * that is not a digit is simply left out, so there is nothing to get wrong but the PIN itself.
  */
 export function PinInput({
@@ -27,10 +27,20 @@ export function PinInput({
       </label>
       <input
         id={id}
-        type="password"
+        // Not a password field: a browser or phone (Safari with iCloud Keychain, above all) offers to save
+        // and sync whatever goes in one, whatever the page asks. A plain box drawn as dots isn't one it
+        // recognises, and nothing about the PIN leaves this app (spec §10, Phase 12).
+        type="text"
         inputMode="numeric"
-        // Not a password for the browser to remember or fill in.
         autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        // Nor is it a word for the keyboard to learn and suggest later.
+        spellCheck={false}
+        // The same for password managers added to a browser, which go by their own markers.
+        data-1p-ignore
+        data-lpignore="true"
+        data-form-type="other"
         maxLength={8}
         value={value}
         // Both: the attribute for a page of its own (the lock screen), the marker for a dialog, which
@@ -39,7 +49,7 @@ export function PinInput({
         data-autofocus={autoFocus ? true : undefined}
         aria-describedby={hint ? `${id}-hint` : undefined}
         onChange={(event) => onChange(event.target.value.replace(/\D/g, ""))}
-        className={`${INPUT} text-lg tracking-[0.3em]`}
+        className={`${INPUT} text-lg tracking-[0.3em] [-webkit-text-security:disc]`}
       />
       {hint && (
         <p id={`${id}-hint`} className={HINT}>

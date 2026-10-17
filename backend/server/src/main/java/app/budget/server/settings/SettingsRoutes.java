@@ -2,6 +2,7 @@ package app.budget.server.settings;
 
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Requests;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
@@ -29,6 +30,9 @@ public final class SettingsRoutes {
 
     private void update(Context ctx) {
         SettingKey setting = SettingKey.find(ctx.pathParam("key")).orElseThrow(ApiException::notFound);
+        if (setting.thisPcOnly() && !Requests.isFromThisPc(ctx)) {
+            throw ApiException.forbidden("For safety, this can only be changed on the PC Budget is installed on.");
+        }
         SettingUpdate update;
         try {
             update = ctx.bodyAsClass(SettingUpdate.class);

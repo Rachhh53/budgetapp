@@ -57,7 +57,24 @@ public enum SettingKey {
             "Please choose the month and day your budget year starts."),
     /** The day of the year from which Budget suggests planning the next one. */
     PLAN_REMINDER("plan_reminder", "10-01", SettingKey::dayOfEveryYear,
-            "Please choose the month and day to be reminded to plan next year.");
+            "Please choose the month and day to be reminded to plan next year."),
+    /**
+     * The network address phone access listens on; empty means phone access is off (the default).
+     * Never accepted through the settings route: it is turned on and off under Phone access, which
+     * checks the address is this PC's, that a PIN is set, and that the request is from this PC
+     * (see PhoneAccessRoutes).
+     */
+    PHONE_ACCESS_ADDRESS("phone_access_address", "", value -> false,
+            "Please turn phone access on or off under Phone access."),
+    /**
+     * Whether Budget starts, hidden in the tray, when this PC's user signs in to Windows. The desktop
+     * shell writes or removes the Windows startup entry to match. Changed from this PC only.
+     */
+    START_WITH_WINDOWS("start_with_windows", "false", Set.of("true", "false")::contains,
+            "Please choose whether Budget starts with Windows.");
+
+    /** Settings about this PC itself, which a phone or another computer may see but not change. */
+    private static final Set<SettingKey> THIS_PC_ONLY = Set.of(START_WITH_WINDOWS);
 
     private static final Pattern MONTH_DAY = Pattern.compile("\\d{2}-\\d{2}");
     private static final int NOT_A_LEAP_YEAR = 2001;
@@ -107,6 +124,11 @@ public enum SettingKey {
 
     public String defaultValue() {
         return defaultValue;
+    }
+
+    /** True when only this PC itself may change it. */
+    public boolean thisPcOnly() {
+        return THIS_PC_ONLY.contains(this);
     }
 
     public boolean accepts(String value) {

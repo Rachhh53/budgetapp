@@ -33,6 +33,8 @@ public final class Main {
     private static final long FIRST_BACKUP_CHECK_SECONDS = 30;
     /** Often enough to catch midnight going by while the app stays open. */
     private static final long BACKUP_CHECK_EVERY_SECONDS = TimeUnit.HOURS.toSeconds(1);
+    /** Soon enough that a phone gets in shortly after the VPN or Wi-Fi comes back. */
+    private static final long PHONE_CHECK_EVERY_SECONDS = 30;
 
     /**
      * The daily backup (spec §7): made the first time the check runs on a calendar day, so
@@ -50,6 +52,10 @@ public final class Main {
         // Next year's plan takes effect on its first day (spec §4.10): checked straight away, so it is in
         // force by the time the first screen asks for anything, and again as often as the backup.
         timer.scheduleWithFixedDelay(server::activateDuePlan, 0, BACKUP_CHECK_EVERY_SECONDS, TimeUnit.SECONDS);
+        // Phone access follows the networks as they come and go: a VPN started after Budget, a laptop
+        // back on the home Wi-Fi, a PC waking from sleep. Cheap: it only lists this PC's own networks.
+        timer.scheduleWithFixedDelay(
+                server::keepPhoneAccessUp, PHONE_CHECK_EVERY_SECONDS, PHONE_CHECK_EVERY_SECONDS, TimeUnit.SECONDS);
     }
 
     private static long msSince(long startedNanos) {
@@ -97,6 +103,11 @@ public final class Main {
             startDailyBackups(server);
             System.out.println("READY port=" + port);
             System.out.flush();
+            // After READY, the shell keeps reading: what it needs to know about the tray and Start with Windows.
+            server.connectShell(line -> {
+                System.out.println(line);
+                System.out.flush();
+            });
             // Times only, no data: where a slow start went, read from the local log.
             LoggerFactory.getLogger(Main.class).info(
                     "Started: Java up after {} ms, database {} ms, routes {} ms, listening {} ms",
