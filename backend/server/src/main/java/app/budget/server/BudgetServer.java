@@ -221,6 +221,7 @@ public final class BudgetServer {
             JavalinDefaultRoutingApi routes = javalin.routes;
             routes.before(new HostGuard(config.allowedHosts()));
             routes.before(BudgetServer::addSecurityHeaders);
+            routes.before(BudgetServer::readTheWholeBody);
 
             // Registers the session gate first, so it runs ahead of every route added below.
             new SessionRoutes(sessions, pins, phoneAccess::isOn).register(routes);
@@ -358,6 +359,21 @@ public final class BudgetServer {
         // Every answer, the app's pages included, holds or leads to financial data: no browser keeps a
         // copy, on this PC, a phone or another computer (spec §10, Phase 12).
         ctx.header("Cache-Control", "no-store");
+    }
+
+    /**
+     * Reads a request's body before any route or refusal answers it. Jetty closes the connection after
+     * answering a request whose body it was not given in full, and a body can arrive just after its
+     * headers. The browser, or the tests' client, would then send its next change down a connection
+     * that is already closed and get no answer at all. Routes such as Undo take no body, and a refusal
+     * reads none. The body is kept, so routes still read it as usual, and Javalin's request size limit
+     * still applies. Uploads are left to the routes that read their parts: those can be large, and are
+     * refused without being read.
+     */
+    private static void readTheWholeBody(Context ctx) {
+        if (!ctx.isMultipart()) {
+            ctx.bodyAsBytes();
+        }
     }
 
     /**

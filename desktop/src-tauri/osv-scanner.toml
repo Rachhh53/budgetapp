@@ -2,8 +2,8 @@
 # vulnerability in code that Budget ships or builds with never belongs here.
 #
 # Cargo.lock records the dependencies of every platform Tauri supports, but Budget is only
-# built for Windows. The two crates listed below belong to Tauri's Linux (GTK)
-# backend and are not in the Windows build at all. To check:
+# built for Windows. The crates listed below belong to Tauri's Linux backend (GTK, and the
+# D-Bus crates zbus uses) and are not in the Windows build at all. To check:
 #   cargo tree --locked --target x86_64-pc-windows-msvc -e normal,build -i <crate>
 # prints "nothing to print" for each of them.
 #
@@ -20,3 +20,17 @@ reason = "glib 0.18 is only used by Tauri's Linux GTK backend; it is not compile
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0370"
 reason = "proc-macro-error (unmaintained) is a build-time macro of the Linux GTK crates; it is not in the Windows build."
+
+# zbus is Linux's D-Bus client; these three are its own crates, reported unmaintained on
+# 2026-10-16 with no fixed version. Not a known vulnerability, and none is built for Windows.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+reason = "zvariant (unmaintained) is only used by zbus, Linux's D-Bus client; it is not in the Windows build."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+reason = "zbus_names (unmaintained) is only used by zbus, Linux's D-Bus client; it is not in the Windows build."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+reason = "zvariant_derive (unmaintained) is a build-time macro of zbus, Linux's D-Bus client; it is not in the Windows build."
