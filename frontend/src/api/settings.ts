@@ -44,6 +44,10 @@ export interface Settings {
   budget_year_start: string;
   /** The day of the year, as `MM-DD`, from which planning next year is suggested. */
   plan_reminder: string;
+  /** The network address phone access listens on; empty when it is off. Changed only under Phone access. */
+  phone_access_address: string;
+  /** Whether Budget starts in the tray when this PC's user signs in to Windows. Changed from this PC only. */
+  start_with_windows: "true" | "false";
 }
 
 export const SETTINGS_KEY = ["settings"] as const;

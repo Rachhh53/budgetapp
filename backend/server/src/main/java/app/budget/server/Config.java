@@ -12,8 +12,9 @@ import java.util.stream.Collectors;
  * Everything the server needs to know about its surroundings, read once from environment
  * variables. Nothing here is hard-coded elsewhere; see {@code .env.example} for the list.
  *
- * @param bindHost       interface to listen on; loopback unless phone access is turned on
+ * @param bindHost       interface the desktop window is served on: loopback (phone access listens beside it)
  * @param port           first port to try; the next free one is used if it is taken
+ * @param phonePort      the port phone access listens on; fixed, so the address saved on a phone keeps working
  * @param dataDir        folder holding the database, logs, backups and attachments
  * @param parentPid      the desktop shell's process id, so the server can exit when it dies
  * @param shutdownToken  per-launch secret the desktop shell presents to stop the server
@@ -26,6 +27,7 @@ import java.util.stream.Collectors;
 public record Config(
         String bindHost,
         int port,
+        int phonePort,
         Path dataDir,
         Optional<Long> parentPid,
         Optional<String> shutdownToken,
@@ -69,6 +71,7 @@ public record Config(
         return new Config(
                 text(env, "BUDGET_BIND_HOST").orElse(DEFAULT_BIND_HOST),
                 number(env, "BUDGET_PORT", 0, 65_535).map(Long::intValue).orElse(DEFAULT_PORT),
+                number(env, "BUDGET_PHONE_PORT", 0, 65_535).map(Long::intValue).orElse(DEFAULT_PORT),
                 text(env, "BUDGET_DATA_DIR").map(Path::of).orElseGet(() -> defaultDataDir(env, platform)),
                 number(env, "BUDGET_PARENT_PID", 1, Long.MAX_VALUE),
                 text(env, "BUDGET_SHUTDOWN_TOKEN"),

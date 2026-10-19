@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Account } from "../../src/api/accounts";
 import type { Bucket } from "../../src/api/buckets";
 import type { Category } from "../../src/api/categories";
@@ -291,6 +291,16 @@ describe("pay period screen: investments", () => {
 });
 
 describe("pay period screen", () => {
+  // The screen works out what is past due from the real day, and these fixtures are October 2026:
+  // held at a day inside them, so the tests don't start failing as the real date moves past them.
+  // Only the date is held still; timers run as usual.
+  beforeAll(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-09T12:00:00") });
+  });
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
   it("points to Income when there is no paycheck to build periods from", async () => {
     fakeBackend();
     renderApp();

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en" translate="no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Budget</title>
+    <!-- Shown by the desktop shell the first time Budget opens on a computer with no budget of its
+         own yet, and when "Change where Budget opens…" is chosen from the tray (spec §10, Phase 12).
+         Static on purpose: no scripts, no external assets. The two choices are plain links and a
+         plain form, which the shell catches on their way and acts on. Colors pass WCAG AA in both themes. -->
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: system-ui, "Segoe UI", sans-serif;
+        background: #f1f3f5;
+        color: #1b1f27;
+      }
+      main { max-width: 34rem; padding: 1.5rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+      h2 { font-size: 1.1rem; margin: 0 0 0.4rem; }
+      p { line-height: 1.5; margin: 0 0 0.75rem; }
+      .muted { color: #566070; }
+      .choice { background: #ffffff; border: 1px solid #dfe3e8; border-radius: 0.75rem; padding: 1.25rem; margin-top: 1rem; }
+      .button {
+        display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+        min-height: 2.75rem; padding: 0 1rem; border-radius: 0.5rem; border: 0;
+        font: inherit; font-weight: 600; text-decoration: none; cursor: pointer;
+        background: #0f766e; color: #ffffff;
+      }
+      label { display: block; font-weight: 500; margin-bottom: 0.25rem; }
+      input {
+        box-sizing: border-box; width: 100%; min-height: 2.75rem; padding: 0 0.75rem; margin-bottom: 0.75rem;
+        border: 1px solid #8a94a3; border-radius: 0.5rem; font: inherit; background: #ffffff; color: #1b1f27;
+      }
+      :focus-visible { outline: 3px solid #0f766e; outline-offset: 2px; }
+      /* Shown only when the shell sends the page back with #bad-address or #not-private. */
+      .problem { display: none; border: 1px solid #e9b866; background: #fdf1dc; color: #6f4300; border-radius: 0.5rem; padding: 0.75rem; }
+      .problem:target { display: block; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #11151c; color: #e8ebf0; }
+        .muted { color: #a3adbb; }
+        .choice { background: #1a202b; border-color: #2d3644; }
+        input { background: #1a202b; color: #e8ebf0; border-color: #6b7686; }
+        .problem { background: #33250b; border-color: #6b4e14; color: #f6cf8a; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Where is your budget?</h1>
+      <p class="muted">Budget keeps your data on one computer only. Nothing is copied between computers or sent anywhere else.</p>
+
+      <section class="choice" aria-labelledby="this-pc">
+        <h2 id="this-pc">Keep my budget on this PC</h2>
+        <p>Your data lives on this computer. This is the usual choice.</p>
+        <a class="button" href="/use-this-pc">Keep my budget on this PC</a>
+      </section>
+
+      <section class="choice" aria-labelledby="other-pc">
+        <h2 id="other-pc">Connect to my other PC</h2>
+        <p>Use the budget kept on another of your computers. On that PC, turn on Phone access in Settings and type the address it shows here. That PC needs to be on, awake and running Budget.</p>
+        <p id="bad-address" class="problem" role="alert">That doesn't look like the address Settings shows. It's four numbers with dots, like 100.101.102.103:4873. Please check it and try again.</p>
+        <p id="not-private" class="problem" role="alert">That address is out on the internet, not on your own network or VPN, so Budget won't connect to it. Please use the address Phone access shows on your other PC.</p>
+        <form action="/connect" method="get">
+          <label for="address">Address from your other PC</label>
+          <input id="address" name="address" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="100.101.102.103:4873" required />
+          <button class="button" type="submit">Connect</button>
+        </form>
+        <p class="muted">Your other PC only offers Budget through a VPN that links your own devices, such as Tailscale, so the connection is always encrypted.</p>
+      </section>
+    </main>
+  </body>
+</html>

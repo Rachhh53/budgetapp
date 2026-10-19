@@ -20,6 +20,7 @@ import { EraseAllData } from "../components/EraseAllData";
 import { SecurityCard } from "../components/security/SecurityCard";
 import { BackupsCard } from "../components/settings/BackupsCard";
 import { DefaultDateSetting } from "../components/settings/DefaultDateSetting";
+import { PhoneAccessCard } from "../components/settings/PhoneAccessCard";
 import { YearDaySetting } from "../components/settings/YearDaySetting";
 import { HolidaysCard } from "../components/settings/HolidaysCard";
 import { PAGE_TITLE } from "../components/ui";
@@ -40,14 +41,16 @@ const ROW = "flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
 
 /**
  * Settings (design/settings.png). Every value is picked from a list or ticked, never typed,
- * and takes effect as soon as it is chosen. Only settings that do something today are here:
- * the budget year and the plan reminder arrive with Plan next year, phone access with its
- * own phase (decided 2026-10-11).
+ * and takes effect as soon as it is chosen. Phone access is the one card whose choice is
+ * confirmed with a button, since it opens Budget to a network.
  */
 export function SettingsPage() {
   const settings = useSettings();
   const update = useUpdateSetting();
-  const pinSet = useSession().data?.pinSet ?? false;
+  const session = useSession().data;
+  const pinSet = session?.pinSet ?? false;
+  // Until the session has answered, as on this PC: that is where Settings is nearly always opened.
+  const fromThisPc = session?.fromThisPc ?? true;
   const choose = (key: keyof Settings) => (value: string) => update.mutate({ key, value });
   const data = settings.data;
 
@@ -191,7 +194,23 @@ export function SettingsPage() {
                 />
               </SecurityCard>
             )}
-            {data && (
+            <PhoneAccessCard>
+              {data && fromThisPc && (
+                <SettingTick
+                  label="Start with Windows"
+                  hint="Budget opens in the tray when you sign in to Windows, so your phone can reach it after a restart."
+                  checked={data.start_with_windows === "true"}
+                  disabled={update.isPending}
+                  onChange={(checked) => choose("start_with_windows")(checked ? "true" : "false")}
+                />
+              )}
+            </PhoneAccessCard>
+            {data && !fromThisPc && (
+              <Card title="Backups">
+                <p className="text-muted">Backups are made and restored on the PC Budget is installed on.</p>
+              </Card>
+            )}
+            {data && fromThisPc && (
               <BackupsCard>
                 <SettingSelect
                   id="backup-keep"
@@ -208,7 +227,8 @@ export function SettingsPage() {
           </div>
         </div>
 
-        <EraseAllData />
+        {/* Only ever from the PC itself, never a phone or another computer (the backend refuses it too). */}
+        {fromThisPc && <EraseAllData />}
       </div>
     </>
   );

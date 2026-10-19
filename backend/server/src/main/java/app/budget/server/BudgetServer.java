@@ -50,7 +50,12 @@ import app.budget.server.ledger.LedgerRoutes;
 import app.budget.server.loans.LoansRepository;
 import app.budget.server.loans.LoansRoutes;
 import app.budget.server.lifecycle.PortFinder;
+import app.budget.server.lifecycle.ShellLink;
 import app.budget.server.lifecycle.ShutdownRoutes;
+import app.budget.server.phone.Networks;
+import app.budget.server.phone.PhoneAccess;
+import app.budget.server.phone.PhoneAccessRoutes;
+import app.budget.server.phone.PhoneListener;
 import app.budget.server.plans.PlanService;
 import app.budget.server.plans.PlansRepository;
 import app.budget.server.plans.PlansRoutes;
@@ -90,6 +95,8 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
+import java.util.function.Consumer;
+import org.eclipse.jetty.server.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -130,8 +137,15 @@ public final class BudgetServer {
     private final BackupService backups;
     private final PlanService plans;
     private final ChangeRoutes changes;
+    private final PhoneAccess phoneAccess;
+    private final ShellLink shell;
 
     public BudgetServer(Config config, Database database, Clock clock, Runnable onShutdown) {
+        this(config, database, clock, onShutdown, Networks.ofThisPc());
+    }
+
+    /** @param networks this PC's networks, for phone access (tests pass a list of their own) */
+    public BudgetServer(Config config, Database database, Clock clock, Runnable onShutdown, Networks networks) {
         this.config = config;
         byte[] indexHtml = readIndexHtml();
 
@@ -141,6 +155,10 @@ public final class BudgetServer {
                 () -> Duration.ofMinutes(Long.parseLong(settings.get(SettingKey.AUTO_LOCK_MINUTES))));
         AuthRepository auth = new AuthRepository(database.jdbi());
         PinService pins = new PinService(auth, clock);
+        // The Jetty server is only asked for once phone access opens, by which time it has started.
+        phoneAccess = new PhoneAccess(settings, pins, sessions, networks,
+                new PhoneListener(this::jetty), config.phonePort());
+        shell = new ShellLink(phoneAccess::isOn, () -> Boolean.parseBoolean(settings.get(SettingKey.START_WITH_WINDOWS)));
         backups = new BackupService(database, settings, auth, clock);
         FolderBrowser folders = new FolderBrowser(Path.of(System.getProperty("user.home")));
         AccountsRepository accounts = new AccountsRepository(database.jdbi(), clock);
@@ -179,7 +197,7 @@ public final class BudgetServer {
         PlannerRepository plannerHidden = new PlannerRepository(database.jdbi());
         PlannerService planner = new PlannerService(
                 database.jdbi(), plannerHidden, accounts, interest, loans, cards, income, items, ledger, payCalendar);
-        changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock));
+        changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock), SettingKey.thisPcOnlyKeys());
 
         app = Javalin.create(javalin -> {
             javalin.startup.showJavalinBanner = false;
@@ -195,15 +213,18 @@ public final class BudgetServer {
                     files.hostedPath = "/";
                     files.directory = STATIC_ROOT;
                     files.location = Location.CLASSPATH;
+                    // No browser keeps a copy of any part of the app (spec §10, Phase 12).
+                    files.headers = Map.of("Cache-Control", "no-store");
                 });
             }
 
             JavalinDefaultRoutingApi routes = javalin.routes;
             routes.before(new HostGuard(config.allowedHosts()));
             routes.before(BudgetServer::addSecurityHeaders);
+            routes.before(BudgetServer::readTheWholeBody);
 
             // Registers the session gate first, so it runs ahead of every route added below.
-            new SessionRoutes(sessions, pins).register(routes);
+            new SessionRoutes(sessions, pins, phoneAccess::isOn).register(routes);
             // Straight after the gate: everything a signed-in request changes from here on can be undone.
             changes.register(routes);
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
@@ -232,9 +253,19 @@ public final class BudgetServer {
             new PlansRoutes(plans, items).register(routes);
             new PlannerRoutes(planner, plannerHidden, accounts).register(routes);
             new SearchRoutes(entries, items, itemCalendar, payCalendar).register(routes);
-            new DataRoutes(database, sessions).register(routes);
-            new BackupRoutes(backups, folders, settings, sessions).register(routes);
+            // Erasing or restoring never leaves the app open to the network: phone access is turned
+            // off afterwards, even when the restored backup had it on, and has to be turned on again here.
+            new DataRoutes(database, sessions, phoneAccess::turnOff).register(routes);
+            new BackupRoutes(backups, folders, settings, sessions, phoneAccess::turnOff).register(routes);
+            new PhoneAccessRoutes(phoneAccess, pins).register(routes);
             new ShutdownRoutes(config.shutdownToken(), onShutdown).register(routes);
+            // Anything that changes data can change what the shell needs to know (phone access turned
+            // on or off, Start with Windows, a restore or Undo bringing back an older value).
+            routes.after("/api/*", ctx -> {
+                if (!ctx.method().name().equals("GET")) {
+                    shell.update();
+                }
+            });
 
             routes.exception(ApiException.class, (e, ctx) -> ApiResponse.fail(ctx, e.status(), e.getMessage()));
             routes.exception(HttpResponseException.class, (e, ctx) -> ApiResponse.fail(ctx, e.getStatus(),
@@ -254,11 +285,39 @@ public final class BudgetServer {
     public int start() throws IOException {
         int port = PortFinder.firstFree(config.bindHost(), config.port());
         app.start(config.bindHost(), port);
+        // Phone access, if it was left on: opened beside the desktop window's own listener.
+        phoneAccess.keepUp();
         return app.port();
     }
 
     public void stop() {
+        phoneAccess.stop();
         app.stop();
+    }
+
+    /**
+     * Starts telling the desktop shell about the tray and Start with Windows, over stdout. Only
+     * {@code Main} calls it, once READY is out: in tests nothing is printed.
+     */
+    public void connectShell(Consumer<String> out) {
+        shell.connect(out);
+    }
+
+    /** Keeps phone access in step with the networks, for the timer (started by {@code Main}, not by tests). */
+    public void keepPhoneAccessUp() {
+        try {
+            phoneAccess.keepUp();
+            // It may have turned itself off (the PIN went), which the shell needs to hear.
+            shell.update();
+        } catch (RuntimeException e) {
+            // Tried again on the next tick; the desktop window is unaffected either way.
+            log.error("Phone access could not be checked", e);
+        }
+    }
+
+    /** The running Jetty server underneath Javalin, which phone access adds its listener to. */
+    private Server jetty() {
+        return app.jettyServer().server();
     }
 
     /** The backup service, for the daily timer (started by {@code Main}, not by tests). */
@@ -297,9 +356,23 @@ public final class BudgetServer {
         ctx.header("Content-Security-Policy", CONTENT_SECURITY_POLICY);
         ctx.header("X-Content-Type-Options", "nosniff");
         ctx.header("Referrer-Policy", "no-referrer");
-        if (ctx.path().startsWith("/api/")) {
-            // API answers hold financial data; keep them out of any cache.
-            ctx.header("Cache-Control", "no-store");
+        // Every answer, the app's pages included, holds or leads to financial data: no browser keeps a
+        // copy, on this PC, a phone or another computer (spec §10, Phase 12).
+        ctx.header("Cache-Control", "no-store");
+    }
+
+    /**
+     * Reads a request's body before any route or refusal answers it. Jetty closes the connection after
+     * answering a request whose body it was not given in full, and a body can arrive just after its
+     * headers. The browser, or the tests' client, would then send its next change down a connection
+     * that is already closed and get no answer at all. Routes such as Undo take no body, and a refusal
+     * reads none. The body is kept, so routes still read it as usual, and Javalin's request size limit
+     * still applies. Uploads are left to the routes that read their parts: those can be large, and are
+     * refused without being read.
+     */
+    private static void readTheWholeBody(Context ctx) {
+        if (!ctx.isMultipart()) {
+            ctx.bodyAsBytes();
         }
     }
 

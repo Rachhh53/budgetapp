@@ -2,6 +2,7 @@ package app.budget.server;
 
 import app.budget.server.backups.BackupService;
 import app.budget.server.db.Database;
+import app.budget.server.phone.Networks;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
@@ -17,6 +18,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -88,9 +90,17 @@ public final class TestServer implements AutoCloseable {
     public final Path downloads;
 
     public TestServer(Path dataDir) throws IOException {
+        // No networks at all: phone access has nothing it could listen on unless a test gives it some.
+        this(dataDir, List::of);
+    }
+
+    /** @param networks the networks phone access may choose from, in place of this PC's real ones */
+    public TestServer(Path dataDir, Networks networks) throws IOException {
         downloads = java.nio.file.Files.createDirectories(dataDir.resolve("downloads-of-this-test"));
         Config config = Config.fromEnvironment(Map.of(
                 "BUDGET_PORT", "0",
+                // Any free port, so phone access in a test never collides with a running app.
+                "BUDGET_PHONE_PORT", "0",
                 "BUDGET_DATA_DIR", dataDir.toString(),
                 "BUDGET_DOWNLOADS_DIR", downloads.toString(),
                 "BUDGET_SHUTDOWN_TOKEN", SHUTDOWN_TOKEN));
@@ -99,8 +109,34 @@ public final class TestServer implements AutoCloseable {
                 config,
                 database,
                 clock,
-                () -> shutdownRequested.set(true));
+                () -> shutdownRequested.set(true),
+                networks);
         baseUrl = "http://" + config.bindHost() + ":" + server.start();
+    }
+
+    /** What the timer does every little while: keeps phone access in step with the networks. */
+    public void keepPhoneAccessUp() {
+        server.keepPhoneAccessUp();
+    }
+
+    /**
+     * A request to {@code url} (phone access's address, not this server's own loopback one), so it
+     * arrives the way a phone's would: from the network, not from this PC.
+     */
+    public Reply sendTo(String url, String method, String path, String jsonBody, String cookie)
+            throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url.replaceAll("/$", "") + path))
+                .timeout(ANSWER_WITHIN)
+                .method(method, jsonBody == null
+                        ? HttpRequest.BodyPublishers.noBody()
+                        : HttpRequest.BodyPublishers.ofString(jsonBody));
+        if (jsonBody != null) {
+            request.header("Content-Type", "application/json");
+        }
+        cookieHeader(cookie).forEach(request::header);
+        HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+        return new Reply(response.statusCode(), JSON.readTree(response.body()), response.headers().firstValue("Set-Cookie"),
+                response.headers());
     }
 
     /** The backup service itself, for what only the daily timer calls. */

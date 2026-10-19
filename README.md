@@ -103,6 +103,17 @@ separate apps: every install is "Budget" to Windows, and every install uses the 
 3. The shell moves its window to that address. The backend serves both the API and the UI, so
    there is a single origin and no CORS.
 4. Closing the window sends `POST /api/shutdown`; the backend also exits by itself if the shell dies.
+   While phone access is on, closing hides the window to the tray instead, and **Quit Budget** in the
+   tray stops both. The backend tells the shell when that applies, and whether to keep a Windows startup
+   entry, with `SHELL keep_in_tray=… start_with_windows=…` lines on the same stdout after READY.
+5. On a computer set to "Connect to my other PC", the shell starts no backend: the window opens the other
+   PC's phone access address, or a "Can't reach your PC" page with Try again.
+
+### Trying phone access in development
+
+Phone access listens on a real network address of this PC, so Windows may ask whether to let Java through its
+firewall. For the tests and the dev server that isn't needed (a request from this PC to itself doesn't pass
+the firewall): untick both boxes and press Cancel.
 
 ## API
 
@@ -112,7 +123,7 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 |---|---|---|
 | GET | `/api/health` | open |
 | POST | `/api/session` | open; unlock with `{ pin }`. With no PIN set, an empty body unlocks from this PC only. A wrong PIN is 401; too many are 429 with how long to wait |
-| GET | `/api/session` | open; `{ unlocked, pinSet, retryAfterSeconds, offerPin }` |
+| GET | `/api/session` | open; `{ unlocked, pinSet, retryAfterSeconds, offerPin, fromThisPc }` (`fromThisPc` is false on a phone or another computer) |
 | DELETE | `/api/session` | lock |
 | PUT | `/api/pin` | set or change the PIN `{ newPin, currentPin? }` (4 to 8 digits; `currentPin` once one is set). Setting the first one answers with the recovery code, shown once. Every other session ends |
 | DELETE | `/api/pin` | remove the PIN `{ currentPin }` |
@@ -224,8 +235,10 @@ Every response is `{ data, error, status }`. Every route needs a session cookie 
 | GET, POST | `/api/holidays` | bank holidays (US ones filled in locally); add your own `{ date, name }` |
 | PUT, DELETE | `/api/holidays/{id}` | change or switch off `{ date, name, enabled }`; remove |
 | GET | `/api/undo` | `{ available }`: whether there is a change to undo |
-| POST | `/api/undo` | undo the most recent change; `{ undone, available }` |
+| POST | `/api/undo` | undo the most recent change; `{ undone, available }`. From a phone or another computer, 403 when that change touched a setting only this PC may change (`start_with_windows`, `phone_access_address`) |
 | DELETE | `/api/data` | erase all data; this PC only; body `{ "confirm": "erase-all-data" }` |
+| GET | `/api/phone-access` | `{ status: { on, address, url, listening, problem }, fromThisPc, pinSet, networks }`. `problem` is `none`, `network_not_connected` or `port_in_use`; `networks` (`{ address, name, tunnel }`: VPNs and tunnels only, never Wi-Fi or a cable) is listed only for this PC |
+| PUT | `/api/phone-access` | this PC only: `{ address }` turns phone access on there (or moves it), `{ address: null }` turns it off and signs every other device out. 409 without a PIN or when the port is taken; 400 for an address that isn't one of this PC's VPNs right now |
 | POST | `/api/shutdown` | open to the shell only: loopback + `X-Budget-Shutdown-Token` |
 
 Every request that changes something is recorded so it can be undone, and its answer carries the header
@@ -240,8 +253,8 @@ before it is due a bill you pay by hand is pointed out; 0 is never), `auto_lock_
 `start_amounts_hidden` (`true` or `false`), `backup_keep_count` (7, 14, 30, 60 or 90), `default_date` (empty for
 today, or a day that is today or earlier: the date forms for new things open on), `budget_year_start` (`MM-DD`, the
 day a yearly plan takes effect; `01-01` unless changed) and `plan_reminder` (`MM-DD`, the day the Dashboard starts
-suggesting next year's plan; `10-01` unless changed). Neither takes Feb 29. `backup_folder` is read here
-but set with `PUT /api/backups/folder`.
+suggesting next year's plan; `10-01` unless changed). Neither takes Feb 29. `start_with_windows` (`true` or `false`; this PC only) makes the desktop shell start Budget in the tray at sign-in. `backup_folder` is read here
+but set with `PUT /api/backups/folder`, and `phone_access_address` with `PUT /api/phone-access`.
 
 ## CI and dependency checks
 

@@ -1,9 +1,19 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<!-- translate="no": no browser or phone offers to translate the page, which would mean sending its text away (spec §10, Phase 12). -->
+<html lang="en" data-theme="light" translate="no">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover: on an iPhone the app fills the screen, and keeps clear of the notch and home bar itself. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="google" content="notranslate" />
+    <!-- Add to Home Screen (spec §10, Phase 12): opens on its own, without Safari's address bar or tabs. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Budget" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Budget</title>
   </head>
   <body>

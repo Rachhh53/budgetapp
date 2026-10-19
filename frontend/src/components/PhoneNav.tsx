@@ -30,7 +30,7 @@ export function PhoneNav() {
           id="more-screens"
           role="dialog"
           aria-label="More screens"
-          className="fixed inset-x-0 top-0 bottom-14 z-10 overflow-y-auto bg-surface p-4"
+          className="fixed inset-x-0 top-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-10 overflow-y-auto bg-surface p-4 pt-[max(1rem,env(safe-area-inset-top))]"
         >
           <ul className="space-y-1">
             {MORE.map(({ path, label, icon: Icon }) => (
@@ -58,7 +58,8 @@ export function PhoneNav() {
 
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-20 flex h-14 border-t border-line bg-surface"
+        // On an iPhone from the Home Screen the bar sits above the home bar, not under it.
+        className="fixed inset-x-0 bottom-0 z-20 flex h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t border-line bg-surface pb-[env(safe-area-inset-bottom)]"
       >
         {PRIMARY.map(({ path, label, icon: Icon }) => (
           <NavLink

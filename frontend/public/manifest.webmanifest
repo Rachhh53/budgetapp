@@ -1,0 +1,14 @@
+{
+  "name": "Budget",
+  "short_name": "Budget",
+  "description": "Your budget, kept on your own PC.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f1f3f5",
+  "theme_color": "#f1f3f5",
+  "icons": [
+    { "src": "/icon-256.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

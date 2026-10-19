@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp, UNLOCKED } from "./helpers";
 
-const LOCKED = { unlocked: false, pinSet: true, retryAfterSeconds: 0, offerPin: false };
+const LOCKED = { unlocked: false, pinSet: true, retryAfterSeconds: 0, offerPin: false, fromThisPc: true };
 const UNLOCKED_WITH_PIN = { ...UNLOCKED, pinSet: true };
 const CODE = "K7QM-2XHP-9FTB-WRNC";
 
@@ -59,7 +59,10 @@ describe("the lock screen", () => {
     const pin = await screen.findByLabelText("PIN");
     await userEvent.type(pin, "4a8-2 9");
 
-    expect(pin).toHaveAttribute("type", "password");
+    // Drawn as dots, but not a password field, so no browser or phone offers to save it.
+    expect(pin).toHaveClass("[-webkit-text-security:disc]");
+    expect(pin).not.toHaveAttribute("type", "password");
+    expect(pin).toHaveAttribute("autocomplete", "off");
     expect(pin).toHaveValue("4829");
   });
 

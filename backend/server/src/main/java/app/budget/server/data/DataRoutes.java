@@ -22,10 +22,13 @@ public final class DataRoutes {
 
     private final Database database;
     private final SessionStore sessions;
+    private final Runnable afterErase;
 
-    public DataRoutes(Database database, SessionStore sessions) {
+    /** @param afterErase what else a fresh app needs once the data is gone (phone access turned off) */
+    public DataRoutes(Database database, SessionStore sessions, Runnable afterErase) {
         this.database = database;
         this.sessions = sessions;
+        this.afterErase = afterErase;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -53,6 +56,7 @@ public final class DataRoutes {
         database.eraseEverything();
         // A fresh app has no one signed in and no PIN: the rebuilt database has no auth row.
         sessions.revokeAll();
+        afterErase.run();
         ApiResponse.ok(ctx, new EraseResult(true));
     }
 }
