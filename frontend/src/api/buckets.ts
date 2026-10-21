@@ -46,8 +46,11 @@ export interface BucketChange {
   id: number;
   bucketId: number;
   date: string;
+  /** What was put in (+) or taken out (−); 0 on an amount set. */
   amountCents: number;
   note: string | null;
+  /** An amount set for the day: the bucket holds exactly this at the end of it; `null` for money put in or taken out. */
+  setToCents: number | null;
 }
 
 /** One bucket with what was moved in and out of it by hand, newest first. */
@@ -169,10 +172,65 @@ export function useMoveMoneyInto() {
   });
 }
 
+/** What a bucket held at the end of `on`, counting everything scheduled into and out of it until then. */
+export function useBucketHeldOn(id: number | undefined, on: string) {
+  return useQuery({
+    queryKey: [...BUCKETS_KEY, id, "held", on],
+    queryFn: () => api.get<{ date: string; heldCents: number }>(`/api/buckets/${id}/held?on=${on}`),
+    enabled: id !== undefined && on !== "",
+  });
+}
+
+/**
+ * Sets what a bucket held at the end of a day. The server records only the difference from what it held
+ * then, dated that day, so everything after it builds on the new amount.
+ */
+export function useSetBucketHeld(id: number) {
+  const refresh = useRefreshBuckets();
+  return useMutation({
+    mutationFn: (input: { date: string; amountCents: number }) => api.put<BucketDetail>(`/api/buckets/${id}/held`, input),
+    onSuccess: refresh,
+  });
+}
+
 export function useDeleteBucketChange(id: number) {
   const refresh = useRefreshBuckets();
   return useMutation({
     mutationFn: (changeId: number) => api.delete<BucketDetail>(`/api/buckets/${id}/changes/${changeId}`),
+    onSuccess: refresh,
+  });
+}
+
+/**
+ * Money moved out of a bucket to money not in a bucket (Rachel, 2026-10-20): the balance stays, what is
+ * available goes up, and the pay period lists it under Income with its category and tags.
+ */
+export interface MoveOut {
+  /** The bucket change it is saved as. */
+  id: number;
+  bucketId: number;
+  accountId: number;
+  date: string;
+  /** What came out of the bucket, more than 0. */
+  amountCents: number;
+  /** What it is, as listed under Income. */
+  note: string;
+  categoryId: number | null;
+  tagIds: number[];
+  /** The expense it pays yourself back for (Rachel, 2026-10-21); `null` when it pays none back. */
+  reimbursesEntryId: number | null;
+}
+
+export type MoveOutInput = Pick<MoveOut, "date" | "amountCents" | "note" | "categoryId" | "tagIds" | "reimbursesEntryId">;
+
+/** Moves money out of a bucket, or with `changeId` changes a move made before. */
+export function useSaveMoveOut() {
+  const refresh = useRefreshBuckets();
+  return useMutation({
+    mutationFn: ({ bucketId, changeId, ...input }: MoveOutInput & { bucketId: number; changeId?: number }) =>
+      changeId === undefined
+        ? api.post<{ id: number }>(`/api/buckets/${bucketId}/moves-out`, input)
+        : api.put<{ id: number }>(`/api/buckets/${bucketId}/moves-out/${changeId}`, input),
     onSuccess: refresh,
   });
 }

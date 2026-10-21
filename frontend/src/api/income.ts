@@ -143,6 +143,54 @@ export interface Paycheck {
   projectedCents: number | null;
   /** What goes straight to other accounts with this paycheck, never passing through the deposit account. */
   contributions: Contribution[];
+  /** Its gross pay; `null` when only take-home pay is known. */
+  grossCents: number | null;
+  /** What was taken out of it, its contributions among them. */
+  deductions: Deduction[];
+  /** Set for a one-off paycheck (a bonus), which is on no schedule; `null` for a regular one. */
+  oneOffId: number | null;
+  /** A one-off paycheck's own name ("Q3 bonus"); `null` for a regular one. */
+  name: string | null;
+}
+
+/** What a paycheck is called: "Acme paycheck", or a one-off's own name with its source, "Q3 bonus · Acme" (as the ledger says it). */
+export function paycheckName(paycheck: Paycheck): string {
+  return paycheck.name === null ? `${paycheck.sourceName} paycheck` : `${paycheck.name} · ${paycheck.sourceName}`;
+}
+
+/** A key unique among paychecks: a one-off can share its day, and its source, with a regular one. */
+export function paycheckKey(paycheck: Paycheck): string {
+  return paycheck.oneOffId === null ? `${paycheck.incomeSourceId}-${paycheck.scheduledDate}` : `one-off-${paycheck.oneOffId}`;
+}
+
+/**
+ * A bonus, or any extra pay, from an income source that arrives once on its own day, with a
+ * paycheck's figures but no place in the schedule.
+ */
+export interface OneOffPaycheck {
+  id: number;
+  incomeSourceId: number;
+  payDate: string;
+  name: string;
+  /** `null` when only take-home pay was given. */
+  grossCents: number | null;
+  netCents: number;
+  deductions: Deduction[];
+  /** The employer's match is added by the source's own rule. */
+  matched: boolean;
+  /** What that rule adds to this paycheck; `null` when nothing is matched. */
+  matchCents: number | null;
+  /** The pay stub it was saved from, if any. */
+  payStubId: number | null;
+}
+
+export interface OneOffPaycheckInput {
+  payDate: string;
+  name: string;
+  grossCents: number | null;
+  netCents: number;
+  deductions: DeductionInput[];
+  matched: boolean;
 }
 
 export interface PayPeriod {
@@ -288,6 +336,34 @@ export function useEditPaycheck() {
         `/api/income-sources/${paycheck.incomeSourceId}/paychecks/${paycheck.scheduledDate}`,
         { netCents },
       ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+  });
+}
+
+/** One source's one-off paychecks, newest first. Kept under the pay key: they move balances and periods. */
+export function useOneOffPaychecks(sourceId: number) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "one-off-paychecks", sourceId],
+    queryFn: () => api.get<OneOffPaycheck[]>(`/api/income-sources/${sourceId}/one-off-paychecks`),
+  });
+}
+
+/** Adds a one-off paycheck to a source, or changes the one with `id`. */
+export function useSaveOneOffPaycheck(sourceId: number, id?: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: OneOffPaycheckInput) =>
+      id === undefined
+        ? api.post<OneOffPaycheck>(`/api/income-sources/${sourceId}/one-off-paychecks`, input)
+        : api.put<OneOffPaycheck>(`/api/income-sources/${sourceId}/one-off-paychecks/${id}`, input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+  });
+}
+
+export function useDeleteOneOffPaycheck(sourceId: number, id: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete<{ done: boolean }>(`/api/income-sources/${sourceId}/one-off-paychecks/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
   });
 }

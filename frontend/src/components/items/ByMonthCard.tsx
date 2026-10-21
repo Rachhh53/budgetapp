@@ -6,6 +6,7 @@ import type { Item } from "../../api/items";
 import { useItemSuggestion } from "../../api/plans";
 import { formatCents } from "../../lib/money";
 import { Card } from "../Card";
+import { CHART_TOOLTIP } from "../ui";
 
 const MONTH_SHORT = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
 const MONTH_LONG = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" });
@@ -76,8 +77,7 @@ function Year({ costs, item }: { costs: CostsByMonth; item: Item }) {
             <Tooltip
               formatter={(value, name) => [formatCents(Number(value)), name]}
               labelFormatter={(_, payload) => String(payload[0]?.payload?.label ?? "")}
-              contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
-              itemStyle={{ color: "var(--text)" }}
+              {...CHART_TOOLTIP}
             />
             {hasLastYear && (
               <Line

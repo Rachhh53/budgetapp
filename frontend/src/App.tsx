@@ -30,6 +30,7 @@ import { PlanYearPage } from "./pages/PlanYearPage";
 import { RecurringItemDetailPage } from "./pages/RecurringItemDetailPage";
 import { RecurringItemsPage } from "./pages/RecurringItemsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { RetirementPage } from "./pages/RetirementPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useApplyTheme } from "./theme/useApplyTheme";
 
@@ -43,6 +44,7 @@ const PAGES: Record<string, ReactNode> = {
   "/expenses": <ExpensesPage />,
   "/plan": <PlanYearPage />,
   "/planner": <PlannerPage />,
+  "/retirement": <RetirementPage />,
   "/categories": <CategoriesPage />,
   "/settings": <SettingsPage />,
   "/help": <HelpPage />,

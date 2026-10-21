@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
+import { forgetWhereLeft } from "../src/lib/sectionMemory";
 
 // jsdom has no matchMedia; the theme hook needs one. Tests override `matches` when they care.
 window.matchMedia = vi.fn().mockImplementation((query: string) => ({
@@ -15,4 +16,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("style");
+  // What a screen remembers in this browser (a folded warning, say) must not carry into the next test.
+  window.localStorage.clear();
+  forgetWhereLeft();
 });

@@ -70,7 +70,7 @@ export function InterestCard({ detail }: { detail: AccountDetail }) {
               <dd>{interest.destination === "bucket" && intoBucket ? `Into ${intoBucket.name}` : DESTINATION_LABELS[interest.destination]}</dd>
             </div>
           </dl>
-          <p className={HINT}>Each month's interest is projected as an estimate; entering the real balance replaces it.</p>
+          <p className={HINT}>Each month's interest is projected as an estimate. When you know the real amount, open it in Transactions below and type it in; entering the real balance also replaces it.</p>
         </>
       ) : (
         <p className="text-muted">Enter this account's APY and each month's interest is projected for you, as an estimate.</p>

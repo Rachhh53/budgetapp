@@ -1,8 +1,10 @@
 package app.budget.engine.schedule;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
@@ -54,8 +56,19 @@ public final class ScheduleGenerator {
         }
 
         switch (rule.frequency()) {
-            case WEEKLY -> addEveryDays(dates, rule.startDate(), 7, first, last);
-            case BIWEEKLY -> addEveryDays(dates, rule.startDate(), 14, first, last);
+            case WEEKLY, BIWEEKLY -> {
+                // Weekly can be every few weeks (Rachel, 2026-10-20: a pack paid "about every 10 weeks").
+                int step = rule.frequency() == Frequency.WEEKLY ? 7 * rule.interval() : 14;
+                if (rule.weekdays().isEmpty()) {
+                    addEveryDays(dates, rule.startDate(), step, first, last);
+                } else {
+                    // Each chosen day keeps the start's weekly (or fortnightly) rhythm: its first one is in the start's week.
+                    LocalDate weekOf = rule.startDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+                    for (DayOfWeek day : rule.weekdays()) {
+                        addEveryDays(dates, weekOf.with(TemporalAdjusters.nextOrSame(day)), step, first, last);
+                    }
+                }
+            }
             case SEMI_MONTHLY -> {
                 for (YearMonth month : months(first, last)) {
                     dates.add(dayOf(month, rule.day1()));
@@ -85,8 +98,10 @@ public final class ScheduleGenerator {
                     "every_pay_period follows the paydays; resolve it against the pay periods instead");
             case MANUAL_DATES -> throw new IllegalStateException("handled above");
         }
-        // Whole months were added above; trim the days that fall outside the window.
-        return new TreeSet<>(dates.subSet(first, true, last, true));
+        // Whole months were added above; trim the days that fall outside the window, and any in a month it doesn't run in.
+        TreeSet<LocalDate> kept = new TreeSet<>(dates.subSet(first, true, last, true));
+        kept.removeIf(date -> !rule.runsIn(date));
+        return kept;
     }
 
     private static void addEveryDays(TreeSet<LocalDate> dates, LocalDate anchor, int step, LocalDate first, LocalDate last) {

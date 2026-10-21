@@ -3,6 +3,7 @@ import type { Account, BalanceEntry } from "../../api/accounts";
 import type { Loan } from "../../api/loans";
 import { formatDate, todayIso, yearTicks } from "../../lib/dates";
 import { formatCents, shortDollars } from "../../lib/money";
+import { CHART_TOOLTIP } from "../ui";
 
 const YEAR = new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: "UTC" });
 
@@ -84,7 +85,7 @@ export function LoanLifetimeChart({ account, balances, loan }: { account: Accoun
             <Tooltip
               formatter={(value, name) => [formatCents(Number(value)), name]}
               labelFormatter={(time) => formatDate(new Date(Number(time)).toISOString().slice(0, 10))}
-              contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
+              {...CHART_TOOLTIP}
             />
             <Line name="Entered by you" dataKey="entered" stroke={account.color} strokeWidth={2.5} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
             <Line

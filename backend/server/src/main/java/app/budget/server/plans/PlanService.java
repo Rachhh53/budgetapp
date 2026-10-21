@@ -33,6 +33,7 @@ import app.budget.server.plans.PlansRepository.Status;
 import app.budget.server.reports.AnnualCostsRunner;
 import app.budget.server.settings.SettingKey;
 import app.budget.server.settings.SettingsRepository;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.MonthDay;
 import java.time.YearMonth;
@@ -529,7 +530,10 @@ public final class PlanService {
         }
         Map<Long, Integer> paychecksInYear = new HashMap<>();
         for (Paycheck paycheck : pay.paychecks(plan.startsOn(), plan.endsOn())) {
-            paychecksInYear.merge(paycheck.incomeSourceId(), 1, Integer::sum);
+            // A plan's amount is take-home per regular paycheck; a one-off (a bonus) is not one of them.
+            if (paycheck.scheduled()) {
+                paychecksInYear.merge(paycheck.incomeSourceId(), 1, Integer::sum);
+            }
         }
 
         List<Row> rows = new ArrayList<>();
@@ -587,7 +591,10 @@ public final class PlanService {
             Terms terms = item.versionOn(plan.startsOn()).terms();
             AnnualAmount.PerYear perYear = AnnualAmount.perYear(terms.schedule(), payRule, plan.startsOn().getYear());
             Money set = Money.ofCents(terms.amountCents());
-            long current = (terms.amountMode() == AmountMode.ANNUAL ? set : AnnualAmount.yearly(set, perYear)).cents();
+            // Billed by use is a cost each time at about so many times, which the calendar turns into a year.
+            long current = terms.billedByUse()
+                    ? calendar.amounts(terms).perYearCents()
+                    : (terms.amountMode() == AmountMode.ANNUAL ? set : AnnualAmount.yearly(set, perYear)).cents();
 
             boolean cost = item.kind() == ItemKind.BILL || item.kind() == ItemKind.BUDGET;
             ScheduleRule first = item.versions().getFirst().terms().schedule();
@@ -612,7 +619,10 @@ public final class PlanService {
             rows.add(new Row(
                     ITEM, stepOf(item, terms, loans), item.id(), item.name(), item.kind(), terms.schedule().frequency(),
                     last, suggestion.trendBp(), suggested, suggestion.reason(), current, chosen, amount != null && !plan.setup(),
-                    AnnualAmount.perOccurrence(Money.ofCents(chosen), perYear).cents(),
+                    // Billed by use, the plan changes what each time costs, in step with the year.
+                    terms.billedByUse()
+                            ? (current == 0 ? set.cents() : set.times(BigDecimal.valueOf(chosen).divide(BigDecimal.valueOf(current), 20, Money.ROUNDING)).cents())
+                            : AnnualAmount.perOccurrence(Money.ofCents(chosen), perYear).cents(),
                     occurrences,
                     paydays == 0 ? 0 : Math.round((double) chosen / paydays),
                     terms.saveUpBucketId() != null,

@@ -1,4 +1,5 @@
 import { Outlet } from "react-router";
+import { useRememberWhereLeft } from "../lib/sectionMemory";
 import { AddItemProvider } from "./add/AddItem";
 import { useApplyHideAmounts } from "./HideAmounts";
 import { PhoneNav } from "./PhoneNav";
@@ -14,6 +15,7 @@ import { UndoToast } from "./UndoToast";
  */
 export function AppShell() {
   useApplyHideAmounts();
+  useRememberWhereLeft();
   return (
     <AddItemProvider>
       <div className="flex h-dvh">

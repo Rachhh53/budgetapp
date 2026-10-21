@@ -2,6 +2,7 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import type { IncomeGroupBy, ReportGroupBy } from "../../api/reports";
 import { isHexColor } from "../../lib/color";
 import { formatCents } from "../../lib/money";
+import { CHART_TOOLTIP } from "../ui";
 
 /** With names down the side, more bars than this stop being readable; the table has them all. */
 const MOST_NAMED_BARS = 12;
@@ -66,7 +67,7 @@ export function ReportChart({ report, said = "Spent" }: { report: Charted; said?
       cursor={{ fill: "var(--bg)" }}
       formatter={(value) => [formatCents(Number(value)), said]}
       labelFormatter={(_, payload) => String(payload[0]?.payload?.label ?? "")}
-      contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
+      {...CHART_TOOLTIP}
     />
   );
 

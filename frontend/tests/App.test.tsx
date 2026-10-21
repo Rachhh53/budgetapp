@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { contrastRatio } from "../src/lib/color";
+import { REMEMBER_FOR_MS, returnTo } from "../src/lib/sectionMemory";
 import { calls, DEFAULT_SETTINGS, fakeBackend, renderApp, UNLOCKED } from "./helpers";
 
 const DEFAULTS = DEFAULT_SETTINGS;
@@ -19,7 +20,7 @@ describe("app shell", () => {
     const sidebar = (await screen.findAllByRole("navigation", { name: "Main" }))[0]!;
     expect(within(sidebar).getByRole("link", { name: "Pay periods" })).toHaveAttribute("aria-current", "page");
     // Reports and Annual costs are tabs of the Dashboard, not entries of their own; Help is the last entry.
-    expect(within(sidebar).getAllByRole("link")).toHaveLength(11);
+    expect(within(sidebar).getAllByRole("link")).toHaveLength(12);
     expect(within(sidebar).getByRole("link", { name: "Help" })).toHaveAttribute("href", "/help");
     expect(within(sidebar).queryByRole("link", { name: "Reports" })).not.toBeInTheDocument();
     expect(screen.getByText("Data stored only on this PC")).toBeInTheDocument();
@@ -33,6 +34,19 @@ describe("app shell", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
     expect(within(sidebar()).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("goes back to where a screen was left a few minutes ago, and its own start after that", async () => {
+    fakeBackend({ "GET /api/settings": () => ({ status: 200, data: DEFAULTS }) });
+    renderApp("/dashboard/reports");
+
+    await screen.findByRole("heading", { level: 1 });
+    await userEvent.click(within(sidebar()).getByRole("link", { name: "Accounts" }));
+
+    // Dashboard leads back to its Reports tab, and the screen it is on leads to its own start.
+    expect(within(sidebar()).getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/dashboard/reports");
+    expect(within(sidebar()).getByRole("link", { name: "Accounts" })).toHaveAttribute("href", "/accounts");
+    expect(returnTo("/dashboard", "/accounts", Date.now() + REMEMBER_FOR_MS + 1)).toBe("/dashboard");
   });
 
   it("says so kindly when an address leads nowhere", async () => {

@@ -92,7 +92,7 @@ export function BillingForm({ account, settings, onClose }: { account: Account; 
           label="Estimated spending a month (optional)"
           value={estimate}
           onChange={setEstimate}
-          hint="For a card you don't enter charge by charge: one estimate is added when each statement closes, and the real statement replaces it. Leave it empty if you add charges as they happen."
+          hint="What the month comes to in all. Charges you do enter count toward it, and only the rest is added when each statement closes; the real statement replaces it."
         />
         {failure && (
           <p role="alert" className="text-danger">

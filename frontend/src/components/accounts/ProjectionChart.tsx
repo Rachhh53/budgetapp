@@ -3,7 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { type Account, type AccountPoint, type BalanceEntry, useAccountProjectionBetween } from "../../api/accounts";
 import { formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
-import { INPUT, LABEL } from "../ui";
+import { CHART_TOOLTIP, INPUT, LABEL } from "../ui";
 
 const MS_PER_DAY = 86_400_000;
 const MONTH_AND_YEAR = new Intl.DateTimeFormat("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
@@ -274,7 +274,7 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
               <Tooltip
                 formatter={(value, name) => [formatCents(Number(value)), name]}
                 labelFormatter={(time) => formatDate(toIso(Number(time)))}
-                contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
+                {...CHART_TOOLTIP}
               />
               <Line name="Entered by you" dataKey="entered" stroke={account.color} strokeWidth={2.5} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
               <Line

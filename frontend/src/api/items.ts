@@ -31,7 +31,7 @@ export type ItemFrequency = (typeof ITEM_FREQUENCIES)[number];
 
 export interface ItemSchedule {
   frequency: ItemFrequency;
-  /** Months apart, for `every_n_months`. */
+  /** Months apart, for `every_n_months`; weeks apart, for `weekly` (1 or `null` for every week). */
   interval: number | null;
   /** Day of the month, 1–31; 31 means the last day. */
   day1: number | null;
@@ -41,7 +41,18 @@ export interface ItemSchedule {
   startDate: string;
   endDate: string | null;
   weekendRule: WeekendRule;
+  /**
+   * The months it runs in, 1–12 (snowplowing November to March, say); empty or left out, every
+   * month. A date it names in any other month doesn't happen, and a yearly total is shared over the
+   * dates in these months alone (spec §4.6).
+   */
+  months?: number[];
+  /** Weekly or every two weeks: the days of the week, 1 (Monday) to 7 (Sunday); empty or left out, just the start date's day. */
+  weekdays?: number[];
 }
+
+/** What the uses of something billed by use are counted per. */
+export type UsesPer = "week" | "month";
 
 /** What "this and all future" can change about an item. */
 export interface ItemTerms {
@@ -54,6 +65,26 @@ export interface ItemTerms {
    * moving no money, until an invoice is entered for them, and the invoice is what is paid (spec §4.6).
    */
   billedLater?: boolean;
+  /**
+   * A bill paid up front (a course, say): each date in its schedule is a session that uses up some
+   * of what was paid ahead, moving no money itself (spec §4.6).
+   */
+  paidAhead?: boolean;
+  /** Paid ahead as a pack: how many sessions the amount (then the pack's price) buys; `null` for an amount per session. */
+  packSessions?: number | null;
+  /**
+   * A pack paid on a schedule of its own (every 10 weeks, say); `null` for the next pack due when the
+   * sessions use up the last. The item's own schedule stays its sessions (spec §4.6).
+   */
+  packSchedule?: ItemSchedule | null;
+  /**
+   * Billed by use (snowplowing, say): about how many times it is used, in hundredths (2.5 is 250); `null`
+   * for any other bill. The amount is then what each time costs, and it is billed monthly on its schedule's
+   * day for every use since the last bill, counting only the schedule's months (spec §4.6).
+   */
+  usesHundredths?: number | null;
+  /** Billed by use: what the uses are counted per. */
+  usesPer?: UsesPer | null;
   categoryId: number | null;
   payFromAccountId: number;
   /** Where a transfer or card payment goes; `null` otherwise. */
@@ -83,6 +114,8 @@ export interface NextOccurrence {
 
 /** One version of an item, for its price history. */
 export interface PricePoint {
+  /** The version it is, to remove it from the history. */
+  versionId: number;
   effectiveFrom: string;
   perOccurrenceCents: number;
   perYearCents: number;
@@ -204,6 +237,13 @@ export function itemAsInput(item: Item): ItemInput {
     amountCents: item.amountCents,
     amountMode: item.amountMode,
     estimate: item.estimate,
+    // Left out, the backend reads these as off, so a quick change would quietly turn them off.
+    billedLater: item.billedLater ?? false,
+    paidAhead: item.paidAhead ?? false,
+    packSessions: item.packSessions ?? null,
+    packSchedule: item.packSchedule ?? null,
+    usesHundredths: item.usesHundredths ?? null,
+    usesPer: item.usesPer ?? null,
     categoryId: item.categoryId,
     payFromAccountId: item.payFromAccountId,
     payToAccountId: item.payToAccountId,
@@ -230,6 +270,15 @@ export function useEndItems() {
           api.put<Item>(`/api/items/${item.id}`, { ...itemAsInput(item), schedule: { ...item.schedule, endDate }, effectiveFrom }),
         ),
       ),
+    onSuccess: refresh,
+  });
+}
+
+/** Removes one amount from an item's history; the one before it carries on through its dates. */
+export function useRemoveVersion(itemId: number) {
+  const refresh = useRefreshItems();
+  return useMutation({
+    mutationFn: (versionId: number) => api.delete<Item>(`/api/items/${itemId}/versions/${versionId}`),
     onSuccess: refresh,
   });
 }

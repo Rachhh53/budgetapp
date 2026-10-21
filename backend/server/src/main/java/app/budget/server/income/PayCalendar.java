@@ -35,12 +35,15 @@ import java.util.stream.Collectors;
 public final class PayCalendar {
 
     private final IncomeRepository income;
+    private final OneOffPaychecksRepository oneOffs;
     private final HolidaysRepository holidays;
     private final SettingsRepository settings;
     private final Clock clock;
 
-    public PayCalendar(IncomeRepository income, HolidaysRepository holidays, SettingsRepository settings, Clock clock) {
+    public PayCalendar(
+            IncomeRepository income, OneOffPaychecksRepository oneOffs, HolidaysRepository holidays, SettingsRepository settings, Clock clock) {
         this.income = income;
+        this.oneOffs = oneOffs;
         this.holidays = holidays;
         this.settings = settings;
         this.clock = clock;
@@ -56,6 +59,11 @@ public final class PayCalendar {
      * @param projectedCents what the app showed before the user typed over it; {@code null} if untouched
      * @param contributions  what goes straight into other accounts with this paycheck, never passing
      *                       through the deposit account: deductions that name an account, and the employer's match
+     * @param grossCents     its gross pay; {@code null} when only take-home pay is known
+     * @param deductions     what was taken out of it, its contributions among them
+     * @param oneOffId       set for a one-off paycheck (a bonus), which is on no schedule; {@code null} for
+     *                       one the schedule names. A one-off's scheduled date is its pay date.
+     * @param name           a one-off paycheck's own name ("Q3 bonus"); {@code null} for a regular one
      */
     public record Paycheck(
             long incomeSourceId,
@@ -66,7 +74,22 @@ public final class PayCalendar {
             long netCents,
             boolean estimate,
             Long projectedCents,
-            List<Contribution> contributions) {}
+            List<Contribution> contributions,
+            Long grossCents,
+            List<Deduction> deductions,
+            Long oneOffId,
+            String name) {
+
+        /** A regular paycheck, the one its source's schedule names on that day. */
+        public boolean scheduled() {
+            return oneOffId == null;
+        }
+
+        /** "Northwind Health", or "Q3 bonus · Northwind Health" for a one-off: how it is listed. */
+        public String label() {
+            return name == null ? sourceName : name + " · " + sourceName;
+        }
+    }
 
     /** A contribution's {@code kind} when it is the employee's own money. */
     public static final String CONTRIBUTION = "contribution";
@@ -239,15 +262,36 @@ public final class PayCalendar {
                 PaycheckOverride override = edited.get(occurrence.scheduled());
                 paychecks.add(override == null
                         ? new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
-                                pay.netCents(), pay.netIsEstimate(), null, contributions)
+                                pay.netCents(), pay.netIsEstimate(), null, contributions, pay.grossCents(), pay.deductions(), null, null)
                         // An amount the user typed is the amount: it is no longer an estimate.
                         : new Paycheck(source.id(), source.name(), source.depositAccountId(), occurrence.scheduled(), occurrence.date(),
-                                override.netCents(), false, override.projectedCents(), contributions));
+                                override.netCents(), false, override.projectedCents(), contributions, pay.grossCents(), pay.deductions(),
+                                null, null));
             }
         }
-        // Sources arrive primary-first, and the sort is stable, so the primary leads on a shared payday.
+        Map<Long, Source> byId = sources.stream().collect(Collectors.toMap(Source::id, source -> source));
+        for (OneOffPaychecksRepository.OneOff oneOff : oneOffs.between(from, to)) {
+            Source source = byId.get(oneOff.incomeSourceId());
+            if (source != null) {
+                Pay pay = payOf(oneOff, source);
+                paychecks.add(new Paycheck(source.id(), source.name(), source.depositAccountId(), oneOff.payDate(), oneOff.payDate(),
+                        pay.netCents(), false, null, contributions(pay), pay.grossCents(), pay.deductions(), oneOff.id(), oneOff.name()));
+            }
+        }
+        // Sources arrive primary-first, and the sort is stable, so the primary leads on a shared payday, and a
+        // one-off paycheck follows the regular one it shares a day with.
         paychecks.sort(Comparator.comparing(Paycheck::payDate));
         return paychecks;
+    }
+
+    /**
+     * What a one-off paycheck comes to, as a paycheck's figures: its own gross, take-home and
+     * deductions, and the employer's match by the source's own rule on the day it is paid, when it
+     * is matched. A formula is then worked out on this paycheck's gross and what it puts in.
+     */
+    public static Pay payOf(OneOffPaychecksRepository.OneOff oneOff, Source source) {
+        Match match = oneOff.matched() ? source.termsOn(oneOff.payDate()).pay().match() : null;
+        return new Pay(oneOff.grossCents(), oneOff.netCents(), false, oneOff.deductions(), match);
     }
 
     /** A schedule generator that knows the closed days around the range, a year either side. */

@@ -246,5 +246,9 @@ public final class TestServer implements AutoCloseable {
     public void close() {
         server.stop();
         database.close();
+        // Each client's selector waits on a virtual thread that holds a carrier thread while it does.
+        // Left open until garbage collection, a few hundred tests' clients held every carrier, and the
+        // next request never ran (the suite hung, 2026-10-19). Closing it ends that wait.
+        http.close();
     }
 }

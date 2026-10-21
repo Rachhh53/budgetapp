@@ -43,6 +43,8 @@ const PERFORMANCE: AccountPerformance = {
     { entryId: 31, date: "2026-10-01", amountCents: 4000000, changeCents: 100000, depositsCents: 45000, growthCents: 55000 },
     { entryId: 30, date: "2026-09-01", amountCents: 3900000, changeCents: null, depositsCents: null, growthCents: null },
   ],
+  // A month apart: too short to put as a rate a year.
+  actualGrowth: { from: "2026-09-01", to: "2026-10-01", growthCents: 55000, assumedCents: 23100, yearlyRateBp: null },
 };
 
 const SALARY: IncomeSource = {
@@ -200,6 +202,7 @@ describe("investment account screen", () => {
 
   it("shows a loss as a loss", async () => {
     const down: AccountPerformance = {
+      ...PERFORMANCE,
       thisYear: { ...PERFORMANCE.thisYear!, nowCents: 3920000, changeCents: 20000, growthCents: -47500 },
       balances: [{ ...PERFORMANCE.balances[0]!, changeCents: 20000, growthCents: -25000 }, PERFORMANCE.balances[1]!],
     };
@@ -208,6 +211,95 @@ describe("investment account screen", () => {
 
     const entered = await screen.findByRole("region", { name: "Balances you entered" });
     expect(await within(entered).findByText("-$250.00")).toBeInTheDocument();
+  });
+});
+
+describe("investment account screen: actual growth", () => {
+  /** The figure's own block: its label, the figure and the line under it. */
+  const actualGrowth = async () => (await screen.findByText("Actual growth")).parentElement!;
+
+  it("sets the rate it really grew at beside the one assumed", async () => {
+    const sixMonths: AccountPerformance = {
+      ...PERFORMANCE,
+      actualGrowth: { from: "2026-04-01", to: "2026-10-01", growthCents: 162000, assumedCents: 131500, yearlyRateBp: 840 },
+    };
+    withInvestments({ "GET /api/accounts/2/performance": () => ({ status: 200, data: sixMonths }) });
+    renderApp("/accounts/2");
+
+    const figure = await actualGrowth();
+    expect(figure).toHaveTextContent("+8.40%");
+    expect(figure).toHaveTextContent(
+      "a year, from the balances you entered Apr 1, 2026 to Oct 1, 2026 · +$1,620.00 growth, $1,315.00 assumed",
+    );
+    // The assumption stays beside it, as before.
+    expect(screen.getByText("Assumed growth", { selector: "p" }).parentElement).toHaveTextContent("7.00%");
+  });
+
+  it("says a loss with its sign", async () => {
+    const down: AccountPerformance = {
+      ...PERFORMANCE,
+      actualGrowth: { from: "2026-04-01", to: "2026-10-01", growthCents: -90000, assumedCents: 131500, yearlyRateBp: -450 },
+    };
+    withInvestments({ "GET /api/accounts/2/performance": () => ({ status: 200, data: down }) });
+    renderApp("/accounts/2");
+
+    const figure = await actualGrowth();
+    expect(figure).toHaveTextContent("-4.50%");
+    expect(figure).toHaveTextContent("-$900.00 growth");
+  });
+
+  it("gives the dollars alone for balances under three months apart, and says why", async () => {
+    withInvestments();
+    renderApp("/accounts/2");
+
+    const figure = await actualGrowth();
+    expect(figure).toHaveTextContent("+$550.00");
+    expect(figure).toHaveTextContent("from the balances you entered Sep 1, 2026 to Oct 1, 2026, $231.00 assumed.");
+    expect(figure).toHaveTextContent("Enter balances at least 3 months apart to see a yearly rate.");
+    expect(figure).not.toHaveTextContent("%");
+  });
+
+  it("asks for another balance until there are two", async () => {
+    withInvestments({ "GET /api/accounts/2/performance": () => ({ status: 200, data: { ...PERFORMANCE, actualGrowth: null } }) });
+    renderApp("/accounts/2");
+
+    expect(await actualGrowth()).toHaveTextContent("Enter another balance to see how it really grew.");
+  });
+
+  it("leaves out what was assumed when no growth is assumed", async () => {
+    withInvestments({
+      "GET /api/accounts/2": () => ({ status: 200, data: { ...RETIREMENT_DETAIL, rates: [] } }),
+      "GET /api/accounts/2/performance": () => ({
+        status: 200,
+        data: { ...PERFORMANCE, actualGrowth: { ...PERFORMANCE.actualGrowth!, assumedCents: 0 } },
+      }),
+    });
+    renderApp("/accounts/2");
+
+    expect(await actualGrowth()).not.toHaveTextContent("assumed");
+  });
+
+  it("hides its dollar amounts with Hide amounts", async () => {
+    withInvestments();
+    renderApp("/accounts/2");
+
+    const figure = await actualGrowth();
+    const amounts = [...figure.querySelectorAll("[data-amount]")].map((amount) => amount.textContent);
+    expect(amounts).toEqual(["+$550.00", "$231.00"]);
+  });
+
+  it("is not shown on a checking account", async () => {
+    withInvestments({
+      "GET /api/accounts/1": () => ({
+        status: 200,
+        data: { ...RETIREMENT_DETAIL, account: { ...CHECKING, latestBalance: RETIREMENT.latestBalance }, rates: [] },
+      }),
+      "GET /api/accounts/1/performance": () => ({ status: 200, data: { ...PERFORMANCE, actualGrowth: null } }),
+    });
+    renderApp("/accounts/1");
+
+    expect(await screen.findByText("Change this year")).toBeInTheDocument();
+    expect(screen.queryByText("Actual growth")).not.toBeInTheDocument();
   });
 });
 

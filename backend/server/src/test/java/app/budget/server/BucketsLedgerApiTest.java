@@ -76,6 +76,104 @@ class BucketsLedgerApiTest extends ApiTestBase {
         assertThat(reply.error()).isEqualTo(message);
     }
 
+    /** Money moved out of a bucket to money not in a bucket (Rachel, 2026-10-20), listed under Income. */
+    @Nested
+    class MovesOut {
+
+        long gifts;
+
+        @BeforeEach
+        void aBucketHoldingSomething() throws Exception {
+            gifts = bucket(checking, "Holiday gifts", 30000);
+        }
+
+        private Reply moveOut(String body) throws Exception {
+            return server.post("/api/buckets/" + gifts + "/moves-out", body, cookie);
+        }
+
+        @Test
+        void raisesWhatIsAvailableAndIsListedWithItsLabels() throws Exception {
+            long gift = created("/api/categories", "{\"name\":\"Gifts\",\"color\":\"#a16207\"}");
+            long tag = created("/api/tags", "{\"name\":\"Holidays\",\"color\":\"#475569\"}");
+            long availableBefore = account(period("2026-10-01"), checking).get("availableCents").asLong();
+            long endingBefore = account(period("2026-10-01"), checking).get("endingCents").asLong();
+
+            Reply moved = moveOut("""
+                    {"date":"2026-10-03","amountCents":12000,"note":"Back to spending","categoryId":%d,"tagIds":[%d]}"""
+                    .formatted(gift, tag));
+
+            assertThat(moved.status()).isEqualTo(201);
+            JsonNode period = period("2026-10-01");
+            JsonNode listed = period.get("movesOut").get(0);
+            assertThat(listed.get("bucketId").asLong()).isEqualTo(gifts);
+            assertThat(listed.get("accountId").asLong()).isEqualTo(checking);
+            assertThat(listed.get("date").asText()).isEqualTo("2026-10-03");
+            assertThat(listed.get("amountCents").asLong()).isEqualTo(12000);
+            assertThat(listed.get("note").asText()).isEqualTo("Back to spending");
+            assertThat(listed.get("categoryId").asLong()).isEqualTo(gift);
+            assertThat(listed.get("tagIds").get(0).asLong()).isEqualTo(tag);
+            // The balance stays; what is available goes up by what left the bucket.
+            assertThat(account(period, checking).get("endingCents").asLong()).isEqualTo(endingBefore);
+            assertThat(account(period, checking).get("availableCents").asLong()).isEqualTo(availableBefore + 12000);
+            assertThat(bucketIn(period, gifts).get("endingCents").asLong()).isEqualTo(18000);
+            // Only in the period it is dated in.
+            assertThat(period("2026-10-15").get("movesOut")).isEmpty();
+        }
+
+        @Test
+        void canBeChangedAndDeleted() throws Exception {
+            long id = moveOut("{\"date\":\"2026-10-03\",\"amountCents\":12000,\"note\":\"Back to spending\"}").data().get("id").asLong();
+
+            // All of it may come out once what this move took is counted back.
+            Reply changed = server.put("/api/buckets/" + gifts + "/moves-out/" + id,
+                    "{\"date\":\"2026-10-04\",\"amountCents\":30000,\"note\":\"All of it\",\"tagIds\":[]}", cookie);
+
+            assertThat(changed.status()).isEqualTo(200);
+            JsonNode listed = period("2026-10-01").get("movesOut").get(0);
+            assertThat(listed.get("amountCents").asLong()).isEqualTo(30000);
+            assertThat(listed.get("note").asText()).isEqualTo("All of it");
+            assertThat(listed.get("categoryId").isNull()).isTrue();
+
+            assertThat(server.delete("/api/buckets/" + gifts + "/changes/" + id, cookie).status()).isEqualTo(200);
+            assertThat(period("2026-10-01").get("movesOut")).isEmpty();
+        }
+
+        @Test
+        void takesNoMoreThanTheBucketHoldsThatDay() throws Exception {
+            Reply refused = moveOut("{\"date\":\"2026-10-03\",\"amountCents\":30001,\"note\":\"Too much\"}");
+
+            assertThat(refused.status()).isEqualTo(409);
+            assertThat(refused.error()).isEqualTo(
+                    "That is more than Holiday gifts holds on that day. Please enter a smaller amount, or choose a later day.");
+        }
+
+        @Test
+        void asksForTheDateTheAmountAndWhatItIs() throws Exception {
+            assertError(moveOut("{\"amountCents\":1000,\"note\":\"x\"}"), "Please choose the date.");
+            assertError(moveOut("{\"date\":\"2026-10-03\",\"amountCents\":0,\"note\":\"x\"}"),
+                    "Please enter how much to move out of the bucket, more than $0.00.");
+            assertThat(moveOut("{\"date\":\"2026-10-03\",\"amountCents\":1000}").status()).isEqualTo(400);
+            assertError(moveOut("{\"date\":\"2026-10-03\",\"amountCents\":1000,\"note\":\"x\",\"categoryId\":999}"),
+                    "Please choose the category from the list.");
+            assertError(moveOut("{\"date\":\"2026-10-03\",\"amountCents\":1000,\"note\":\"x\",\"tagIds\":[999]}"),
+                    "Please choose tags from the list.");
+        }
+
+        @Test
+        void aMoveThatIsNotThereIsNotFound() throws Exception {
+            assertThat(server.post("/api/buckets/9999/moves-out", "{\"date\":\"2026-10-03\",\"amountCents\":1000,\"note\":\"x\"}", cookie)
+                    .status()).isEqualTo(404);
+            assertThat(server.put("/api/buckets/" + gifts + "/moves-out/9999",
+                    "{\"date\":\"2026-10-03\",\"amountCents\":1000,\"note\":\"x\"}", cookie).status()).isEqualTo(404);
+        }
+
+        @Test
+        void needsTheAppUnlocked() throws Exception {
+            assertThat(server.post("/api/buckets/" + gifts + "/moves-out", "{}", null).status()).isEqualTo(401);
+            assertThat(server.put("/api/buckets/" + gifts + "/moves-out/1", "{}", null).status()).isEqualTo(401);
+        }
+    }
+
     @Nested
     class RecurringBucketMoves {
         long gifts;
@@ -97,6 +195,22 @@ class BucketsLedgerApiTest extends ApiTestBase {
             assertThat(account.get("endingCents").asLong()).isEqualTo(370058);
             assertThat(account.get("bucketsCents").asLong()).isEqualTo(20000);
             assertThat(account.get("availableCents").asLong()).isEqualTo(350058);
+        }
+
+        @Test
+        void thePeriodStartsWithWhatIsAvailable() throws Exception {
+            JsonNode first = account(period("2026-10-01"), checking);
+
+            // The 150.00 set aside on Oct 1 and the paycheck's 50.00 belong to the period, like anything on any other day.
+            assertThat(first.get("startingCents").asLong()).isEqualTo(121438);
+            assertThat(first.get("startingBucketsCents").asLong()).isZero();
+            assertThat(first.get("startingAvailableCents").asLong()).isEqualTo(121438);
+
+            // The next period starts with exactly what this one ended on (Rachel, 2026-10-21: "available after buckets =
+            // starting available for next").
+            JsonNode second = account(period("2026-10-15"), checking);
+            assertThat(second.get("startingBucketsCents").asLong()).isEqualTo(first.get("bucketsCents").asLong());
+            assertThat(second.get("startingAvailableCents").asLong()).isEqualTo(first.get("availableCents").asLong());
         }
 
         @Test
@@ -132,6 +246,80 @@ class BucketsLedgerApiTest extends ApiTestBase {
             server.put("/api/items/" + item + "/occurrences/2026-10-15", "{\"skipped\":true}", cookie);
 
             assertThat(bucketIn(period("2026-10-15"), gifts).get("endingCents").asLong()).isEqualTo(20000);
+        }
+
+        @Test
+        void saysWhatItHeldOnAnEarlierDay() throws Exception {
+            server.clock.advance(Duration.ofDays(19));
+            cookie = server.unlock();
+
+            Reply reply = server.get("/api/buckets/" + gifts + "/held?on=2026-10-01", cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            // 150.00 by hand plus the Oct 1 paycheck's 50.00; Oct 15's comes later.
+            assertThat(reply.data().get("heldCents").asLong()).isEqualTo(20000);
+        }
+
+        @Test
+        void anAmountAsOfAnEarlierDayIsBuiltOnByWhatCameAfter() throws Exception {
+            server.clock.advance(Duration.ofDays(19));
+            cookie = server.unlock();
+
+            Reply reply = server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-10-01\",\"amountCents\":30000}", cookie);
+
+            assertThat(reply.status()).isEqualTo(200);
+            // 300.00 at the end of Oct 1, then Oct 15's 50.00 on top: not 300.00 today.
+            assertThat(reply.data().get("bucket").get("balanceCents").asLong()).isEqualTo(35000);
+            // The amount itself is kept, for the day it was set.
+            assertThat(reply.data().get("changes").get(0).get("setToCents").asLong()).isEqualTo(30000);
+            assertThat(reply.data().get("changes").get(0).get("date").asText()).isEqualTo("2026-10-01");
+        }
+
+        @Test
+        void anAmountSetStillHoldsWhenSomethingBeforeItIsEnteredLater() throws Exception {
+            // Rachel, 2026-10-20: "I have been back entering balances and changing dates, but this should adjust".
+            server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-10-01\",\"amountCents\":30000}", cookie);
+            server.post("/api/buckets/" + gifts + "/changes", "{\"date\":\"2026-09-20\",\"amountCents\":8720}", cookie);
+
+            assertThat(server.get("/api/buckets/" + gifts + "/held?on=2026-10-01", cookie).data().get("heldCents").asLong()).isEqualTo(30000);
+            // Before the day set, what was entered counts (its starting 150.00 is dated Oct 1); after it, what comes
+            // builds on the amount set.
+            assertThat(server.get("/api/buckets/" + gifts + "/held?on=2026-09-30", cookie).data().get("heldCents").asLong())
+                    .isEqualTo(8720);
+            assertThat(bucketIn(period("2026-10-15"), gifts).get("endingCents").asLong()).isEqualTo(35000);
+        }
+
+        @Test
+        void settingADayAgainReplacesWhatWasSetForIt() throws Exception {
+            server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-10-01\",\"amountCents\":30000}", cookie);
+            Reply reply = server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-10-01\",\"amountCents\":25000}", cookie);
+
+            assertThat(reply.data().get("changes")).hasSize(2);
+            assertThat(reply.data().get("changes").get(0).get("setToCents").asLong()).isEqualTo(25000);
+            assertThat(server.get("/api/buckets/" + gifts + "/held?on=2026-10-01", cookie).data().get("heldCents").asLong()).isEqualTo(25000);
+        }
+
+        @Test
+        void removingAnAmountSetGoesBackToWhatWasMovedIn() throws Exception {
+            Reply set = server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-10-01\",\"amountCents\":30000}", cookie);
+            long id = set.data().get("changes").get(0).get("id").asLong();
+
+            server.delete("/api/buckets/" + gifts + "/changes/" + id, cookie);
+
+            assertThat(server.get("/api/buckets/" + gifts + "/held?on=2026-10-01", cookie).data().get("heldCents").asLong()).isEqualTo(20000);
+        }
+
+        @Test
+        void anAmountForADayToComeIsTurnedAway() throws Exception {
+            assertError(server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-11-01\",\"amountCents\":30000}", cookie),
+                    "Please choose today or an earlier day for that amount.");
+        }
+
+        @Test
+        void whatItHeldNeedsTheAppUnlocked() throws Exception {
+            assertThat(server.get("/api/buckets/" + gifts + "/held?on=2026-10-01", null).status()).isEqualTo(401);
+            assertThat(server.put("/api/buckets/" + gifts + "/held", "{\"date\":\"2026-10-01\",\"amountCents\":1}", null).status())
+                    .isEqualTo(401);
         }
 
         @Test

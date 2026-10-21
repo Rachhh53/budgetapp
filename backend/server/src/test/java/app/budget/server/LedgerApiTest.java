@@ -251,6 +251,36 @@ class LedgerApiTest extends ApiTestBase {
         }
 
         @Test
+        void oneOccurrenceCanBePaidFromAnotherAccountJustThisOnce() throws Exception {
+            long checkingOut = account(period("2026-10-01"), checking).get("outCents").asLong();
+            long savingsOut = account(period("2026-10-01"), savings).get("outCents").asLong();
+
+            Reply moved = server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"payFromAccountId\":%d}".formatted(savings), cookie);
+
+            assertThat(moved.status()).isEqualTo(200);
+            assertThat(moved.data().get("payFromAccountId").asLong()).isEqualTo(savings);
+            assertThat(account(period("2026-10-01"), checking).get("outCents").asLong()).isEqualTo(checkingOut - 14000);
+            assertThat(account(period("2026-10-01"), savings).get("outCents").asLong()).isEqualTo(savingsOut + 14000);
+            // November's is still paid from checking.
+            assertThat(account(period("2026-11-01"), checking).get("outCents").asLong()).isEqualTo(30000 + 20000 + 41200 + 14000);
+
+            // Choosing the item's own account again puts it back.
+            server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"payFromAccountId\":%d}".formatted(checking), cookie);
+            assertThat(account(period("2026-10-01"), checking).get("outCents").asLong()).isEqualTo(checkingOut);
+        }
+
+        @Test
+        void aOneTimeAccountHasToBeOneThatCanPayIt() throws Exception {
+            long transfer = item("Top up", "transfer", 5000, monthly(20), "\"payToAccountId\":" + savings);
+
+            Reply toItself = server.put("/api/items/" + transfer + "/occurrences/2026-10-20", "{\"payFromAccountId\":%d}".formatted(savings), cookie);
+            assertThat(toItself.status()).isEqualTo(400);
+            assertThat(toItself.error()).isEqualTo("Please choose an account other than the one this goes to.");
+            Reply missing = server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"payFromAccountId\":999}", cookie);
+            assertThat(missing.error()).isEqualTo("Please choose the account this one is paid from.");
+        }
+
+        @Test
         void typingOverOneOccurrenceChangesOnlyThatPeriod() throws Exception {
             server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"amountCents\":15250}", cookie);
 

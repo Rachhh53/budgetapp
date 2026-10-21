@@ -3,7 +3,7 @@ import { STEPS, TASKS, TOPICS, topicForPath } from "../../src/help/guide";
 import { searchHelp } from "../../src/help/search";
 
 /** Every screen a guide button may lead to: the sidebar's and the Dashboard's tabs. */
-const SCREENS = ["/", "/dashboard", "/dashboard/reports", "/dashboard/annual", "/recurring", "/accounts", "/income", "/expenses", "/plan", "/planner", "/categories", "/settings"];
+const SCREENS = ["/", "/dashboard", "/dashboard/reports", "/dashboard/annual", "/recurring", "/accounts", "/income", "/expenses", "/plan", "/planner", "/retirement", "/categories", "/settings"];
 
 describe("the guide", () => {
   it("only sends people to screens that exist, and files every question under a chapter", () => {

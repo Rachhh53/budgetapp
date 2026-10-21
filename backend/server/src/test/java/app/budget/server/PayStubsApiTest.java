@@ -377,6 +377,65 @@ class PayStubsApiTest extends ApiTestBase {
         }
 
         @Test
+        void aBonusStubBecomesAOneOffPaycheckAndLeavesTheSourceAlone() throws Exception {
+            long id = reviewed();
+
+            Reply saved = server.post("/api/pay-stubs/" + id + "/save", "{\"apply\":\"one_off\",\"name\":\"Q3 bonus\"}", cookie);
+
+            assertThat(saved.status()).as(saved.body().toString()).isEqualTo(200);
+            assertThat(saved.data().get("applied").asText()).isEqualTo("one_off");
+            // The regular pay is untouched.
+            assertThat(source().get("grossCents").isNull()).isTrue();
+            assertThat(source().get("deductions")).isEmpty();
+            JsonNode oneOffs = server.get("/api/income-sources/" + salary + "/one-off-paychecks", cookie).data();
+            assertThat(oneOffs).hasSize(1);
+            JsonNode bonus = oneOffs.get(0);
+            assertThat(bonus.get("name").asText()).isEqualTo("Q3 bonus");
+            assertThat(bonus.get("payDate").asText()).isEqualTo("2026-10-01");
+            assertThat(bonus.get("grossCents").asLong()).isEqualTo(360_000);
+            assertThat(bonus.get("netCents").asLong()).isEqualTo(248_620);
+            assertThat(bonus.get("payStubId").asLong()).isEqualTo(id);
+            assertThat(bonus.get("deductions")).extracting(deduction -> deduction.get("name").asText())
+                    .containsExactly("401(k)", "HSA", "Medical", "Dental", "Vision");
+            assertThat(bonus.get("deductions").get(0).get("toAccountId").asLong()).isEqualTo(retirement);
+            // It is paid beside the regular paycheck of the same day, which the stub no longer stands for.
+            JsonNode paychecks = server.get("/api/paychecks?from=2026-10-01&to=2026-10-01", cookie).data();
+            assertThat(paychecks).hasSize(2);
+            assertThat(paychecks.get(0).get("oneOffId").isNull()).isTrue();
+            assertThat(paychecks.get(1).get("name").asText()).isEqualTo("Q3 bonus");
+        }
+
+        @Test
+        void savingABonusStubAgainChangesItsPaycheckRatherThanAddingAnother() throws Exception {
+            long id = reviewed();
+            server.post("/api/pay-stubs/" + id + "/save", "{\"apply\":\"one_off\",\"name\":\"Q3 bonus\"}", cookie);
+            assertThat(server.post("/api/pay-stubs/" + id + "/reopen", "", cookie).status()).isEqualTo(200);
+
+            assertThat(save(id, "one_off").status()).isEqualTo(200);
+
+            JsonNode oneOffs = server.get("/api/income-sources/" + salary + "/one-off-paychecks", cookie).data();
+            assertThat(oneOffs).hasSize(1);
+            // Saved again without a name, it keeps the one it was given.
+            assertThat(oneOffs.get(0).get("name").asText()).isEqualTo("Q3 bonus");
+        }
+
+        @Test
+        void aBonusStubIsNotTakenForTheRegularPaycheckItSharesADayWith() throws Exception {
+            long id = reviewed();
+            server.post("/api/pay-stubs/" + id + "/save", "{\"apply\":\"one_off\"}", cookie);
+
+            JsonNode report = server.post("/api/reports/run",
+                    "{\"definition\":{\"kind\":\"income\",\"range\":\"this_year\",\"show\":\"table\",\"incomeInclude\":[\"paychecks\"]}}",
+                    cookie).data();
+
+            JsonNode regular = StreamSupport.stream(report.get("rows").spliterator(), false)
+                    .filter(row -> row.get("date").asText().equals("2026-10-01") && row.get("description").asText().equals("Acme Corp paycheck"))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(regular.get("fromStub").asBoolean()).isFalse();
+        }
+
+        @Test
         void keepingAStubWithoutChangingAnythingLeavesTheSourceAsItWas() throws Exception {
             long id = reviewed();
 

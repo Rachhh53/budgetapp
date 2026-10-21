@@ -1,15 +1,16 @@
-import { ChevronLeft, ChevronRight, Clock, PartyPopper, ReceiptText, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, PartyPopper, ReceiptText, TriangleAlert, X } from "lucide-react";
 import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
-import { type Bucket, useBuckets } from "../api/buckets";
+import { type Bucket, type MoveOut, useBuckets } from "../api/buckets";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import type { Unbilled } from "../api/invoices";
-import { type PayPeriod, type Paycheck, useEditPaycheck, usePayPeriods } from "../api/income";
-import { type Item, useChangeItemAmount, useEndItems, useItems } from "../api/items";
+import type { RunningOut } from "../api/paidAhead";
+import { type PayPeriod, type Paycheck, paycheckKey, paycheckName, useEditPaycheck, usePayPeriods } from "../api/income";
+import { type Item, useChangeItemAmount, useItems } from "../api/items";
 import { usePlans } from "../api/plans";
 import { useSettings } from "../api/settings";
 import {
@@ -28,8 +29,11 @@ import { Card } from "../components/Card";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { FIND_PARAM, PeriodSearch } from "../components/period/PeriodSearch";
+import { GoToDate } from "../components/period/GoToDate";
 import { foundEntry, foundOccurrence } from "../api/search";
-import { ItemForm } from "../components/items/ItemForm";
+import { OneOffPaycheckOpener } from "../components/income/OneOffPaychecksCard";
+import { PackDateForm } from "../components/items/PackForms";
+import { PrepaymentForm } from "../components/items/PrepaymentForm";
 import { InvoiceForm } from "../components/period/InvoiceForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { PaycheckForm } from "../components/period/PaycheckForm";
@@ -85,6 +89,8 @@ export function PayPeriodPage() {
   const next = at >= 0 ? nearby[at + 1] : undefined;
 
   useArrowKeys(previous?.start, next?.start);
+  const navigate = useNavigate();
+  const pathTo = usePeriodPath();
 
   // The + Add item form adds to the period on screen, and previews against it.
   const { setPeriod } = useAddItem();
@@ -94,8 +100,6 @@ export function PayPeriodPage() {
     return () => setPeriod(undefined);
   }, [detail, setPeriod]);
 
-  // A bucket's own recurring amount opens its bucket's form; every other row opens that one time it comes round.
-  const [editingItem, setEditingItem] = useState<Item>();
   const [editingOccurrence, setEditingOccurrence] = useState<Occurrence>();
 
   const failure =
@@ -141,7 +145,6 @@ export function PayPeriodPage() {
     categories: categories.data,
     tags: tags.data,
     items: items.data,
-    editItem: setEditingItem,
     editOccurrence: setEditingOccurrence,
     statementFor: (occurrence) => {
       const paid = (detail.statementsPaid ?? []).find(
@@ -163,7 +166,7 @@ export function PayPeriodPage() {
   };
 
   return (
-    <div className="flex flex-col gap-3 lg:h-full">
+    <div className="flex flex-col gap-3">
       {/* The two halves share a row while they fit and wrap onto two when the window is too narrow,
           so a resized window never has one drawn over the other; the search box gives up width first. */}
       <header className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-y-2">
@@ -182,6 +185,7 @@ export function PayPeriodPage() {
             </div>
           </div>
           <PeriodLink to={next} label="Next pay period" icon={ChevronRight} />
+          <GoToDate shownStart={detail.start} onGo={(to) => void navigate(pathTo(to))} />
           {detail.current && (
             <span className="hidden rounded-full bg-accent px-3 py-1 text-sm font-semibold text-on-accent lg:inline">Current</span>
           )}
@@ -224,29 +228,35 @@ export function PayPeriodPage() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-3">
-        {/* On a phone, what needs doing by hand comes first (design/phone-pay-period.png). */}
-        <div className="flex flex-col gap-3 lg:order-2 lg:min-h-0">
-          <ManualPanel
-            occurrences={lists.manual}
-            carriedOver={detail.carriedOver}
-            oneOffs={lists.oneOffs}
-            unbilled={detail.unbilled ?? []}
-            context={context}
-          />
-        </div>
-        <div className="flex flex-col gap-3 lg:order-1 lg:min-h-0 lg:overflow-y-auto">
+      {/* Income with what is paid by hand under it, auto-pay in the middle, and the accounts with the budgets
+          beside them (Rachel, 2026-10-20: "swap pay manually with auto-pay card and move budgets card to under
+          accounts and buckets"), so the first column no longer has to scroll. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div className="flex flex-col gap-3">
           {/* An investment's assumed growth is not income: it shows on that account's own tab instead. */}
           <IncomePanel
             paychecks={detail.paychecks}
             moneyIn={lists.moneyIn}
             interest={detail.interest.filter((line) => !context.isInvestment(line.accountId))}
+            movesOut={detail.movesOut ?? []}
             context={context}
           />
-          <AutoPanel occurrences={lists.auto} context={context} />
-          <BudgetsPanel occurrences={lists.budgets} context={context} />
+          {/* On a phone, what needs doing by hand comes first (design/phone-pay-period.png). */}
+          <div className="order-first flex flex-col lg:order-none lg:flex-1">
+            <ManualPanel
+              occurrences={lists.manual}
+              carriedOver={detail.carriedOver}
+              oneOffs={lists.oneOffs}
+              unbilled={detail.unbilled ?? []}
+              runningOut={detail.paidAheadRunningOut ?? []}
+              context={context}
+            />
+          </div>
         </div>
-        <div className="flex flex-col gap-3 lg:order-3 lg:min-h-0 lg:overflow-y-auto">
+        <div className="flex flex-col gap-3">
+          <AutoPanel occurrences={lists.auto} context={context} />
+        </div>
+        <div className="flex flex-col gap-3">
           <AccountsPanel
             balances={detail.accounts}
             accounts={accounts.data}
@@ -259,19 +269,13 @@ export function PayPeriodPage() {
             interest={detail.interest}
             promosEnding={detail.promosEnding ?? []}
           />
+          <BudgetsPanel occurrences={lists.budgets} context={context} />
         </div>
       </div>
 
-      {editingItem && (
-        <ItemForm
-          item={editingItem}
-          accounts={accounts.data}
-          categories={categories.data}
-          tags={tags.data}
-          onClose={() => setEditingItem(undefined)}
-          pageLink
-        />
-      )}
+      <SkippedPanel occurrences={lists.skipped} />
+
+      {/* Every row opens the one time it comes round; a bucket's own recurring amount is a link to its account. */}
       {editingOccurrence && (
         <OccurrenceForm
           occurrence={editingOccurrence}
@@ -297,7 +301,6 @@ interface RowContext {
   categories: readonly Category[];
   tags: readonly Tag[];
   items: readonly Item[];
-  editItem: (item: Item) => void;
   /** Opens the short form for one time an item comes round: its amount, and whether and how it was paid. */
   editOccurrence: (occurrence: Occurrence) => void;
   /** For a card payment that follows its card: what the amount is, and which statement it is for. */
@@ -357,9 +360,10 @@ interface Lists {
   budgets: Occurrence[];
   moneyIn: Entry[];
   oneOffs: Entry[];
+  skipped: Occurrence[];
 }
 
-/** Sorts a period's contents into the panels of the screen. Skipped occurrences are left out. */
+/** Sorts a period's contents into the panels of the screen. Skipped occurrences have a list of their own. */
 function sortIntoLists(period: PeriodDetail): Lists {
   const active = period.occurrences.filter((occurrence) => !occurrence.skipped);
   const byDay = (a: Occurrence, b: Occurrence) => a.payBy.localeCompare(b.payBy) || a.name.localeCompare(b.name);
@@ -369,7 +373,50 @@ function sortIntoLists(period: PeriodDetail): Lists {
     manual: active.filter((occurrence) => occurrence.kind !== "budget" && !occurrence.autopay).sort(byDay),
     moneyIn: period.entries.filter((entry) => entry.kind === "money_in"),
     oneOffs: period.entries.filter((entry) => entry.kind !== "money_in"),
+    skipped: period.occurrences.filter((occurrence) => occurrence.skipped).sort(byDay),
   };
+}
+
+/**
+ * What was skipped this pay period, each with Put back: skipped from a row's form, it is out of every list and
+ * figure above, so this is the one place it can be found again. Nothing shows when nothing is skipped.
+ */
+function SkippedPanel({ occurrences }: { occurrences: readonly Occurrence[] }) {
+  const save = useEditOccurrence();
+  if (occurrences.length === 0) {
+    return null;
+  }
+  return (
+    <Panel title="Skipped this pay period" aside="Left out of everything above">
+      <ul className="divide-y divide-line">
+        {occurrences.map((occurrence) => (
+          <li key={`${occurrence.itemId}-${occurrence.scheduledDate}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2">
+            <p className="min-w-0">
+              <span className="font-medium">{occurrence.name}</span>
+              <span className="text-sm text-muted">
+                {" "}
+                · {formatDay(occurrence.dueDate)} · <span data-amount>{formatCents(occurrence.amountCents)}</span>
+              </span>
+            </p>
+            <button
+              type="button"
+              disabled={save.isPending}
+              onClick={() => save.mutate({ occurrence, edit: { skipped: false } })}
+              aria-label={`Put back ${occurrence.name}, ${formatDay(occurrence.dueDate)}`}
+              className="min-h-11 rounded-lg border border-line bg-surface px-3 font-semibold"
+            >
+              Put back
+            </button>
+          </li>
+        ))}
+      </ul>
+      {save.error && (
+        <p role="alert" className="text-danger">
+          {save.error.message}
+        </p>
+      )}
+    </Panel>
+  );
 }
 
 function NoPeriods({ hasIncome }: { hasIncome: boolean }) {
@@ -503,13 +550,17 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
   const plain = (cents: number) => formatCents(cents).replace("$", "");
   return (
     <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {/* What the period starts with to spend, buckets left out (Rachel, 2026-10-20: "Starting balance should be starting
+          available balance"). The note keeps the balance itself, which the sum under Projected ending starts from. */}
       <Figure
-        label="Starting balance"
-        tip="startingBalance"
-        cents={balance.startingCents}
+        label="Starting available"
+        tip="startingAvailable"
+        cents={balance.startingAvailableCents}
         // A balance dated after this period is the first one entered: nothing earlier is counted, and the note says so.
-        note={`${account.name} · ${formatDay(balance.startingOn)}${
+        note={`${formatDay(balance.startingOn)}${
           balance.entered ? " · set by you" : balance.startingOn > detail.end ? " · first balance, entered later" : ""
+        } · ${account.name} ${formatCents(balance.startingCents)}${
+          balance.startingBucketsCents === 0 ? "" : ` − ${formatCents(balance.startingBucketsCents)} in buckets`
         }`}
         className="order-2 lg:order-1"
       />
@@ -571,7 +622,7 @@ function comingInto(balance: AccountPeriod, detail: PeriodDetail, grows = false)
   const parts: Part[] = [
     ...detail.paychecks
       .filter((paycheck) => paycheck.depositAccountId === here)
-      .map((paycheck) => ({ label: `${paycheck.sourceName} paycheck`, cents: paycheck.netCents })),
+      .map((paycheck) => ({ label: paycheckName(paycheck), cents: paycheck.netCents })),
     ...detail.entries
       .filter((entry) => (entry.kind === "money_in" ? entry.accountId === here : entry.kind === "transfer" && entry.toAccountId === here))
       .map((entry) => ({ label: entry.kind === "transfer" ? `${entry.description} (transfer)` : entry.description, cents: entry.amountCents })),
@@ -582,7 +633,7 @@ function comingInto(balance: AccountPeriod, detail: PeriodDetail, grows = false)
     ...detail.paychecks.flatMap((paycheck) =>
       paycheck.contributions
         .filter((contribution) => contribution.toAccountId === here)
-        .map((contribution) => ({ label: `${contribution.label} · ${paycheck.sourceName}`, cents: contribution.amountCents })),
+        .map((contribution) => ({ label: `${contribution.label} · ${paycheck.name ?? paycheck.sourceName}`, cents: contribution.amountCents })),
     ),
     ...detail.interest
       .filter((line) => line.accountId === here)
@@ -667,26 +718,32 @@ function Figure({
   );
 }
 
-/** One panel of the screen: a titled region that scrolls inside itself as a last resort. */
+/**
+ * One panel of the screen: a titled region as tall as what it holds. The page scrolls, never a panel inside it
+ * (Rachel, 2026-10-20: "there are scrolls within scrolls on pay period screen - either the cards scroll or the screen does pick one").
+ * The last panel of each column fills it, so the three columns end on one line ("it will look weird if some are very long
+ * and some are very short").
+ */
 function Panel({
   title,
   aside,
   tip,
-  grow = false,
+  fill = false,
   children,
 }: {
   title: string;
   aside?: string;
   /** A word whose meaning an ⓘ beside the title gives. */
   tip?: TermId;
-  grow?: boolean;
+  /** The last in its column: stretches to the bottom of the tallest column on a wide screen. */
+  fill?: boolean;
   children: ReactNode;
 }) {
   const headingId = useId();
   return (
     <section
       aria-labelledby={headingId}
-      className={`flex flex-col rounded-card border border-line bg-surface px-4 py-3 ${grow ? "lg:min-h-0 lg:flex-1" : ""}`}
+      className={`flex flex-col rounded-card border border-line bg-surface px-4 py-3 ${fill ? "lg:flex-1" : ""}`}
     >
       <div className="mb-1 flex items-baseline justify-between gap-3">
         <div className="flex items-center gap-1">
@@ -697,8 +754,7 @@ function Panel({
         </div>
         {aside && <p className="text-sm text-muted">{aside}</p>}
       </div>
-      {/* The side padding (taken back by the margin) leaves room for a focus ring, which scrolling would otherwise clip. */}
-      <div className={grow ? "lg:-mx-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:px-2" : ""}>{children}</div>
+      <div>{children}</div>
     </section>
   );
 }
@@ -780,10 +836,16 @@ function ItemName({ occurrence, context }: { occurrence: Occurrence; context: Ro
   if (item === undefined) {
     return <>{occurrence.name}</>;
   }
-  // Setting money aside belongs to its bucket, whose form is where it is changed. Anything else opens this one time;
-  // the item itself is a link away, on its own page.
-  const open = () => (item.kind === "bucket_move" ? context.editItem(item) : context.editOccurrence(occurrence));
-  return <EditName name={occurrence.name} onClick={open} />;
+  // Setting money aside belongs to its bucket, changed only on that account (Rachel, 2026-10-19: "the bucket should live
+  // only in the account"), so it is a link there. Anything else opens this one time; the item is a link away, on its page.
+  if (item.kind === "bucket_move") {
+    return (
+      <Link to={`/accounts/${item.payFromAccountId}`} className="cursor-pointer font-medium hover:underline">
+        {occurrence.name}
+      </Link>
+    );
+  }
+  return <EditName name={occurrence.name} onClick={() => context.editOccurrence(occurrence)} />;
 }
 
 /** The amount of one occurrence, typed over in place: just this one, or this and all future. */
@@ -803,6 +865,10 @@ function OccurrenceAmount({ occurrence, context }: { occurrence: Occurrence; con
     }
   };
 
+  // Money set aside in a bucket is changed only on the bucket's account, so here it is shown, not typed over.
+  if (occurrence.kind === "bucket_move") {
+    return <Amount cents={occurrence.amountCents} estimate={occurrence.estimate} />;
+  }
   return (
     <InlineAmount
       name={occurrence.name}
@@ -880,35 +946,38 @@ function IncomePanel({
   paychecks,
   moneyIn,
   interest,
+  movesOut,
   context,
 }: {
   paychecks: readonly Paycheck[];
   moneyIn: readonly Entry[];
   interest: readonly InterestLine[];
+  movesOut: readonly MoveOut[];
   context: RowContext;
 }) {
-  // Which paycheck's own form is open, by the date its schedule names.
-  const [open, setOpen] = useState<{ incomeSourceId: number; scheduledDate: string }>();
-  const opened = paychecks.find(
-    (paycheck) => paycheck.incomeSourceId === open?.incomeSourceId && paycheck.scheduledDate === open.scheduledDate,
-  );
+  // Which paycheck's own form is open, by its key: a regular one by the date its schedule names, a one-off by its own id.
+  const [open, setOpen] = useState<string>();
+  const opened = paychecks.find((paycheck) => paycheckKey(paycheck) === open);
+  const { moveOut } = useAddItem();
   return (
     <Panel title="Income">
-      {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 ? (
+      {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 && movesOut.length === 0 ? (
         <Empty>Nothing is coming in this period.</Empty>
       ) : (
         <ul className="divide-y divide-line">
           {paychecks.map((paycheck) => (
             <Row
-              key={`${paycheck.incomeSourceId}-${paycheck.scheduledDate}`}
-              title={
-                <EditName
-                  name={`${paycheck.sourceName} paycheck`}
-                  onClick={() => setOpen({ incomeSourceId: paycheck.incomeSourceId, scheduledDate: paycheck.scheduledDate })}
-                />
-              }
+              key={paycheckKey(paycheck)}
+              title={<EditName name={paycheckName(paycheck)} onClick={() => setOpen(paycheckKey(paycheck))} />}
               detail={paycheckDetail(paycheck, context)}
-              amount={<PaycheckAmount paycheck={paycheck} />}
+              // A one-off's amount is its own, changed on its form; only a scheduled paycheck can be typed over "just this once".
+              amount={
+                paycheck.oneOffId === null ? (
+                  <PaycheckAmount paycheck={paycheck} />
+                ) : (
+                  <Amount cents={paycheck.netCents} className="w-28 font-semibold" />
+                )
+              }
             />
           ))}
           {moneyIn.map((entry) => (
@@ -920,18 +989,32 @@ function IncomePanel({
               amount={<EntryAmount entry={entry} />}
             />
           ))}
-          {/* Worked out from the balance and the rate, so it is not typed over: entering the real balance replaces it. */}
+          {/* Worked out from the balance and the rate; the real amount is typed over in the account's transactions. */}
           {interest.map((line) => (
             <Row
               key={`${line.accountId}-${line.date}`}
               title="Interest"
               detail={`${formatDay(line.date)} → ${context.accountName(line.accountId)} · ${formatRate(line.rateBp)} APY`}
-              amount={<Amount cents={line.amountCents} estimate className="w-28 font-semibold" />}
+              amount={<Amount cents={line.amountCents} estimate={line.estimate} className="w-28 font-semibold" />}
+            />
+          ))}
+          {/* Money moved out of a bucket: no new money, but now free to spend (Rachel, 2026-10-20). */}
+          {movesOut.map((move) => (
+            <Row
+              key={`move-out-${move.id}`}
+              title={<EditName name={move.note} onClick={() => moveOut(move)} />}
+              detail={`Out of ${context.bucketName(move.bucketId) ?? "a bucket"} · ${formatDay(move.date)} · ${context.accountName(move.accountId)}`}
+              amount={<Amount cents={move.amountCents} className="w-28 font-semibold" />}
             />
           ))}
         </ul>
       )}
-      {opened && <PaycheckForm paycheck={opened} accountName={context.accountName} onClose={() => setOpen(undefined)} />}
+      {opened && opened.oneOffId !== null && (
+        <OneOffPaycheckOpener sourceId={opened.incomeSourceId} oneOffId={opened.oneOffId} onClose={() => setOpen(undefined)} />
+      )}
+      {opened && opened.oneOffId === null && (
+        <PaycheckForm paycheck={opened} accountName={context.accountName} onClose={() => setOpen(undefined)} />
+      )}
     </Panel>
   );
 }
@@ -969,7 +1052,7 @@ function whereItGoes(occurrence: Occurrence, context: RowContext): string {
 
 function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[]; context: RowContext }) {
   return (
-    <Panel title="Auto-pay & transfers" aside="before next paycheck">
+    <Panel title="Auto-pay & transfers" aside="before next paycheck" fill>
       {occurrences.length === 0 ? (
         <Empty>Nothing is paid automatically this period.</Empty>
       ) : (
@@ -1000,7 +1083,7 @@ function AutoPanel({ occurrences, context }: { occurrences: readonly Occurrence[
 function BudgetsPanel({ occurrences, context }: { occurrences: readonly Occurrence[]; context: RowContext }) {
   const total = occurrences.reduce((sum, occurrence) => sum + occurrence.amountCents, 0);
   return (
-    <Panel title="Budgets" aside="this paycheck">
+    <Panel title="Budgets" aside="this paycheck" fill>
       {occurrences.length === 0 ? (
         <Empty>No budgets this period. Add one as a recurring item of the Budget type.</Empty>
       ) : (
@@ -1048,7 +1131,8 @@ function pastDue(bills: readonly Occurrence[]): Occurrence[] {
   const today = todayIso();
   const seen = new Set<string>();
   return bills
-    .filter((bill) => !bill.paid && !bill.skipped && !bill.autopay && bill.kind !== "budget" && bill.dueDate < today)
+    // A planned pack is paid by recording the payment, not by a tick; its own row says when it was due.
+    .filter((bill) => !bill.paid && !bill.skipped && !bill.autopay && !bill.plannedPack && bill.kind !== "budget" && bill.dueDate < today)
     .filter((bill) => {
       const key = `${bill.itemId}-${bill.scheduledDate}`;
       return !seen.has(key) && seen.add(key);
@@ -1075,21 +1159,95 @@ function dueSoon(bill: Occurrence, days: number): string | null {
 }
 
 /**
- * The warning at the top of the screen while anything is past due. Said in words and set apart,
- * with an icon, never by color alone: a missed bill is the first thing to see. Paying late is
- * allowed: ticking the bill records the day it was paid, and the warning goes.
+ * Where this browser remembers the past-due warning folded to one line, and the bills it was
+ * dismissed for. Only a convenience: without storage the warning simply opens in full each time.
  */
-function PastDue({ bills }: { bills: readonly Occurrence[] }) {
-  if (bills.length === 0) {
+const PAST_DUE_FOLDED_KEY = "budget.pastDueFolded";
+const PAST_DUE_DISMISSED_KEY = "budget.pastDueDismissed";
+
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
     return null;
   }
+}
+
+function store(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // See readStored.
+  }
+}
+
+/** The bills a warning is about, as one string: a dismissal holds until this changes. */
+function pastDueSignature(bills: readonly Occurrence[]): string {
+  return bills.map((bill) => `${bill.itemId}-${bill.scheduledDate}`).join(",");
+}
+
+/**
+ * The warning at the top of the screen while anything is past due. Said in words and set apart,
+ * with an icon, never by color alone: a missed bill is the first thing to see. Paying late is
+ * allowed: ticking the bill records the day it was paid, and the warning goes. A long list pushed
+ * the columns down until they scrolled, so it folds to one line, and stays folded on this PC until
+ * opened again; or it can be dismissed until another bill is past due, each bill's own row still
+ * saying so (Rachel, 2026-10-20: "I just want to be able to make it smaller or dismiss it").
+ */
+function PastDue({ bills }: { bills: readonly Occurrence[] }) {
+  const [folded, setFolded] = useState(() => readStored(PAST_DUE_FOLDED_KEY) === "1");
+  const [dismissedFor, setDismissedFor] = useState(() => readStored(PAST_DUE_DISMISSED_KEY));
+  const signature = pastDueSignature(bills);
+  if (bills.length === 0 || dismissedFor === signature) {
+    return null;
+  }
+  const toggle = () => {
+    store(PAST_DUE_FOLDED_KEY, folded ? "0" : "1");
+    setFolded(!folded);
+  };
+  const dismiss = () => {
+    store(PAST_DUE_DISMISSED_KEY, signature);
+    setDismissedFor(signature);
+  };
+  const total = bills.reduce((sum, bill) => sum + bill.amountCents, 0);
   return (
-    <section role="alert" aria-label="Past due" className="rounded-card border-2 border-danger bg-surface px-4 py-3">
-      <p className="flex items-center gap-2 text-lg font-bold text-danger">
-        <TriangleAlert aria-hidden className="size-6 shrink-0" />
-        {bills.length === 1 ? "1 bill is past due" : `${bills.length} bills are past due`}
-      </p>
-      <ul className="mt-1 space-y-0.5">
+    <section role="alert" aria-label="Past due" className={`rounded-card border-2 border-danger bg-surface px-4 ${folded ? "py-1" : "py-3"}`}>
+      <div className="flex items-center gap-2">
+        <p className={`flex min-w-0 flex-1 items-center gap-2 font-bold text-danger ${folded ? "" : "text-lg"}`}>
+          <TriangleAlert aria-hidden className={`shrink-0 ${folded ? "size-5" : "size-6"}`} />
+          <span className="min-w-0 truncate">
+            {bills.length === 1 ? "1 bill is past due" : `${bills.length} bills are past due`}
+            {folded && (
+              <>
+                {" · "}
+                <span data-amount>{formatCents(total)}</span>
+              </>
+            )}
+          </span>
+        </p>
+        <button type="button" onClick={toggle} aria-expanded={!folded} className="flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded px-2 font-medium hover:bg-bg">
+          {folded ? "Show" : "Hide"}
+          {folded ? <ChevronDown aria-hidden className="size-4" /> : <ChevronUp aria-hidden className="size-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={dismiss}
+          aria-label="Dismiss until another bill is past due"
+          title="Dismiss until another bill is past due"
+          className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-bg"
+        >
+          <X aria-hidden className="size-5" />
+        </button>
+      </div>
+      {!folded && <PastDueList bills={bills} />}
+    </section>
+  );
+}
+
+function PastDueList({ bills }: { bills: readonly Occurrence[] }) {
+  return (
+    <>
+      <ul className="space-y-0.5">
         {bills.map((bill) => (
           <li key={`${bill.itemId}-${bill.scheduledDate}`} className="font-semibold">
             {bill.name} · <span data-amount>{formatCents(bill.amountCents)}</span> · was due {formatDate(bill.dueDate)}
@@ -1097,7 +1255,7 @@ function PastDue({ bills }: { bills: readonly Occurrence[] }) {
         ))}
       </ul>
       <p className="mt-1 text-sm text-muted">Tick each one under Pay manually when it is paid. The day you tick it is kept as the day it was paid.</p>
-    </section>
+    </>
   );
 }
 
@@ -1106,6 +1264,7 @@ function ManualPanel({
   carriedOver,
   oneOffs,
   unbilled,
+  runningOut,
   context,
 }: {
   occurrences: readonly Occurrence[];
@@ -1113,21 +1272,32 @@ function ManualPanel({
   oneOffs: readonly Entry[];
   /** Billed-later visits waiting for an invoice: on the current period only. */
   unbilled: readonly Unbilled[];
+  /** Paid-ahead items whose money runs out this period: a warning, never a bill. */
+  runningOut: readonly RunningOut[];
   context: RowContext;
 }) {
   // Something carried over is listed once, even when it also belongs to this period.
   const carried = carriedOver.filter(
     (late) => !occurrences.some((occurrence) => occurrence.itemId === late.itemId && occurrence.scheduledDate === late.scheduledDate),
   );
-  const bills = [...carried, ...occurrences];
+  // A planned pack has its own row: it is paid by recording the payment, which replaces it, so it is never ticked.
+  const all = [...carried, ...occurrences];
+  const packs = all.filter((occurrence) => occurrence.plannedPack);
+  const bills = all.filter((occurrence) => !occurrence.plannedPack);
   const paid = bills.filter((occurrence) => occurrence.paid).length;
 
   return (
-    <Panel title="Pay manually & one-offs" tip="payManually" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} grow>
-      {bills.length === 0 && oneOffs.length === 0 && unbilled.length === 0 ? (
+    <Panel title="Pay manually & one-offs" tip="payManually" aside={bills.length === 0 ? undefined : `${paid} of ${bills.length} paid`} fill>
+      {bills.length === 0 && packs.length === 0 && oneOffs.length === 0 && unbilled.length === 0 && runningOut.length === 0 ? (
         <Empty>Nothing to pay by hand this period, and no one-offs. Use + Add item for a one-time purchase.</Empty>
       ) : (
         <ul className="divide-y divide-line">
+          {runningOut.map((item) => (
+            <RunningOutRow key={`running-out-${item.itemId}`} item={item} context={context} />
+          ))}
+          {packs.map((pack) => (
+            <PlannedPackRow key={`pack-${pack.itemId}-${pack.scheduledDate}`} pack={pack} context={context} />
+          ))}
           {unbilled.map((waiting) => (
             <UnbilledRow key={`unbilled-${waiting.itemId}`} unbilled={waiting} context={context} />
           ))}
@@ -1152,6 +1322,115 @@ function ManualPanel({
         </ul>
       )}
     </Panel>
+  );
+}
+
+/**
+ * Something paid ahead whose money runs out this period (spec §4.6). It only warns (Rachel,
+ * 2026-10-19: "Just warn me"): nothing is planned to pay for it, and **Record a payment** is there
+ * for when she pays again.
+ */
+function RunningOutRow({ item, context }: { item: RunningOut; context: RowContext }) {
+  const [paying, setPaying] = useState(false);
+  const detail =
+    item.leftCents < 0
+      ? `Ran out · ${formatCents(-item.leftCents)} of sessions not paid for`
+      : `Runs out · the session on ${formatDay(item.firstUncovered)} isn't covered`;
+  return (
+    <>
+      <Row
+        lead={<TriangleAlert aria-hidden className="size-4 shrink-0 text-danger" />}
+        title={
+          <>
+            <Link to={`/recurring/${item.itemId}`} className="cursor-pointer hover:underline">
+              {item.name}
+            </Link>{" "}
+            <InfoTip term="paidAhead" />
+          </>
+        }
+        detail={`${detail} · ${context.accountName(item.payFromAccountId)}`}
+        wrap
+        amount={<Amount cents={Math.max(item.leftCents, 0)} />}
+        below={
+          <button
+            type="button"
+            onClick={() => setPaying(true)}
+            className="mt-1 inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-semibold lg:min-h-9"
+          >
+            Record a payment
+          </button>
+        }
+      />
+      {paying && <PrepaymentForm itemId={item.itemId} name={item.name} payFromAccountId={item.payFromAccountId} onClose={() => setPaying(false)} />}
+    </>
+  );
+}
+
+/**
+ * The next pack of something paid ahead as a pack (spec §4.6; Rachel, 2026-10-19: "I pay 1275 for a
+ * 20 session pack… Yes, plan it"). Budget plans it on the first session nothing paid covers. It is
+ * never ticked: **Record a payment** saves what was paid, and the plan moves on to the pack after.
+ */
+function PlannedPackRow({ pack, context }: { pack: Occurrence; context: RowContext }) {
+  const [paying, setPaying] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const late = pack.dueDate < todayIso();
+  const covers = pack.coversThrough ? ` · covers sessions through ${formatDay(pack.coversThrough)}` : "";
+  return (
+    <>
+      <Row
+        find={foundOccurrence(pack.itemId, pack.dueDate)}
+        lead={<CategoryDot categoryId={pack.categoryId} tagIds={[]} context={context} />}
+        title={
+          <>
+            <Link to={`/recurring/${pack.itemId}`} className="cursor-pointer hover:underline">
+              {pack.name}
+            </Link>{" "}
+            <InfoTip term="paidAhead" />
+          </>
+        }
+        detail={`Next pack · ${late ? "was due" : "due"} ${formatDay(pack.dueDate)}${covers} · ${context.accountName(pack.payFromAccountId)}`}
+        wrap
+        amount={<Amount cents={pack.amountCents} />}
+        below={
+          <span className="mt-1 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setPaying(true)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-semibold lg:min-h-9"
+            >
+              Record a payment
+            </button>
+            {/* Its own date can be changed (Rachel, 2026-10-20: "the option to just change the date"). */}
+            <button
+              type="button"
+              onClick={() => setMoving(true)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-semibold lg:min-h-9"
+            >
+              Change date
+            </button>
+          </span>
+        }
+      />
+      {paying && (
+        <PrepaymentForm
+          itemId={pack.itemId}
+          name={pack.name}
+          payFromAccountId={pack.payFromAccountId}
+          priceCents={pack.amountCents}
+          onClose={() => setPaying(false)}
+        />
+      )}
+      {moving && (
+        // A planned pack is named by the day it was planned for, its scheduled date; its due date is where it is now.
+        <PackDateForm
+          item={{ id: pack.itemId, name: pack.name }}
+          planned={pack.scheduledDate}
+          due={pack.dueDate}
+          onClose={() => setMoving(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -1525,7 +1804,7 @@ function BucketRow({
   periodEnd: string;
   saving: readonly Item[];
 }) {
-  const stop = useEndItems();
+
   const moved = period.endingCents - period.startingCents;
   const goal = bucket.goalCents;
   const goalReached = goal !== null && goal > 0 && period.endingCents >= goal;
@@ -1575,25 +1854,12 @@ function BucketRow({
               <span className="text-muted"> for {formatDate(bucket.goalDate ?? "")}</span>
             </div>
           )}
-          {/* Only where it would change something: a move still running, in this period or a later one. */}
+          {/* Only where it would change something: a move still running, in this period or a later one. It is
+              stopped on the bucket's own account, the one place a bucket is changed. */}
           {goalReached && saving.length > 0 && periodEnd >= todayIso() && (
-            <div className="mt-1">
-              <button
-                type="button"
-                disabled={stop.isPending}
-                onClick={() => stop.mutate({ items: saving, endDate: periodEnd, effectiveFrom: todayIso() })}
-                aria-label={`Stop saving into ${bucket.name}`}
-                title={`Ends ${saving.map((item) => item.name).join(", ")} after this pay period. You can undo it straight afterwards.`}
-                className="min-h-11 rounded-lg border border-line px-3 text-sm font-semibold lg:min-h-8"
-              >
-                {stop.isPending ? "Stopping…" : "Stop saving"}
-              </button>
-              {stop.error && (
-                <p role="alert" className="text-sm text-danger">
-                  {stop.error.message}
-                </p>
-              )}
-            </div>
+            <Link to={`/accounts/${bucket.accountId}`} className="mt-1 inline-block text-sm font-semibold text-accent-ink underline">
+              Still saving into it: stop on its account
+            </Link>
           )}
         </div>
         <span data-amount className="shrink-0 font-semibold tabular-nums">

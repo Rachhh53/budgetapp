@@ -8,6 +8,7 @@ import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
+import app.budget.server.buckets.BucketsRepository.MoveOut;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.entries.EntriesRepository.Entry;
@@ -112,8 +113,9 @@ public final class EntriesRoutes {
      *
      * @param paybacks   an expense: the money that came in to pay it back, oldest first
      * @param reimburses money coming in: the expense it pays back; {@code null} when it pays none back
+     * @param movesOut   an expense: the money moved out of a bucket to pay it back, oldest first
      */
-    public record EntryDetail(Entry entry, List<Entry> paybacks, Entry reimburses) {}
+    public record EntryDetail(Entry entry, List<Entry> paybacks, Entry reimburses, List<MoveOut> movesOut) {}
 
     /** @param years the years that have one-off spending in them, newest first */
     public record Years(List<Integer> years) {}
@@ -145,7 +147,8 @@ public final class EntriesRoutes {
         ApiResponse.ok(ctx, new EntryDetail(
                 entry,
                 entry.kind() == EntryKind.MONEY_OUT ? entries.paybacksOf(entry.id()) : List.of(),
-                entry.reimbursesEntryId() == null ? null : entries.find(entry.reimbursesEntryId()).orElse(null)));
+                entry.reimbursesEntryId() == null ? null : entries.find(entry.reimbursesEntryId()).orElse(null),
+                entry.kind() == EntryKind.MONEY_OUT ? buckets.movesOutPayingBack(entry.id()) : List.of()));
     }
 
     private void create(Context ctx) {

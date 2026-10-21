@@ -549,7 +549,10 @@ public final class PlannerService {
     /** How many paychecks each income source brings in the year from tomorrow. */
     private Map<Long, Integer> paychecksAYear(LocalDate today) {
         Map<Long, Integer> counts = new HashMap<>();
-        pay.paychecks(today.plusDays(1), today.plusYears(1)).forEach(paycheck -> counts.merge(paycheck.incomeSourceId(), 1, Integer::sum));
+        // Regular paychecks only: the extra is shared over the paychecks that come every time, not a bonus.
+        pay.paychecks(today.plusDays(1), today.plusYears(1)).stream()
+                .filter(PayCalendar.Paycheck::scheduled)
+                .forEach(paycheck -> counts.merge(paycheck.incomeSourceId(), 1, Integer::sum));
         return counts;
     }
 

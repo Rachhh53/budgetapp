@@ -2,8 +2,8 @@ package app.budget.engine.interest;
 
 import app.budget.engine.BasisPoints;
 import app.budget.engine.Money;
+import app.budget.engine.Roots;
 import java.math.BigDecimal;
-import java.math.MathContext;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
@@ -22,15 +22,9 @@ public final class SavingsInterest {
     /** A credit day of 31 means "the last day of the month", as it does for schedules. */
     public static final int LAST_DAY = 31;
 
-    /** 34 significant digits: far more than cents on any household balance can need. */
-    private static final MathContext PRECISION = MathContext.DECIMAL128;
-
     private static final int MONTHS_IN_YEAR = 12;
 
     private static final int DAYS_IN_YEAR = 365;
-
-    /** Newton's method settles in a handful of steps; this only stops a rate that never would. */
-    private static final int MAX_STEPS = 60;
 
     /** 100%, in basis points. */
     private static final int WHOLE_BP = 10_000;
@@ -75,21 +69,7 @@ public final class SavingsInterest {
         if (apy.value() <= -WHOLE_BP) {
             throw new IllegalArgumentException("A yearly loss must be less than 100%");
         }
-        BigDecimal count = BigDecimal.valueOf(parts);
-        BigDecimal target = BigDecimal.ONE.add(apy.toFraction());
-        // Newton's method on x^parts = target, starting from the simple-interest guess.
-        BigDecimal root = BigDecimal.ONE.add(apy.toFraction().divide(count, PRECISION));
-        for (int step = 0; step < MAX_STEPS; step++) {
-            BigDecimal oneFewer = root.pow(parts - 1, PRECISION);
-            BigDecimal next = root.subtract(
-                    oneFewer.multiply(root, PRECISION).subtract(target).divide(count.multiply(oneFewer, PRECISION), PRECISION),
-                    PRECISION);
-            if (next.compareTo(root) == 0) {
-                break;
-            }
-            root = next;
-        }
-        return root.subtract(BigDecimal.ONE);
+        return Roots.nth(BigDecimal.ONE.add(apy.toFraction()), parts).subtract(BigDecimal.ONE);
     }
 
     /** The interest one month earns on {@code balance}. An overdrawn or empty account earns nothing. */

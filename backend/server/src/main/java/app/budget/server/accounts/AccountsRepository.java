@@ -118,6 +118,7 @@ public final class AccountsRepository {
                 .createQuery("""
                         SELECT EXISTS (SELECT 1 FROM income_sources WHERE deposit_account_id = :id)
                             OR EXISTS (SELECT 1 FROM paycheck_deductions WHERE to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM one_off_paycheck_deductions WHERE to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM income_pay_changes WHERE match_to_account_id = :id)
                         """)

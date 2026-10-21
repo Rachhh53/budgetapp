@@ -5,7 +5,8 @@ import { type IncomeSource, type PayTerms, useDeletePayChange, useIncomeSources,
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
-import { IncomeSourceForm } from "../components/income/IncomeSourceForm";
+import { type IncomePart, IncomeSourceForm } from "../components/income/IncomeSourceForm";
+import { OneOffPaychecksCard } from "../components/income/OneOffPaychecksCard";
 import { describeSchedule, WEEKEND_LABELS } from "../components/income/schedule";
 import { UpcomingPaychecks } from "../components/income/UpcomingPaychecks";
 import { PayStubsCard, TaxesAndBenefitsCard } from "../components/stubs/StubCards";
@@ -15,8 +16,11 @@ import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
 import { HelpLink } from "../components/help/HelpLink";
 
-/** What the form is open for: the source as it is today, one entry of its pay history, or a new change of pay. */
-type FormState = { terms?: PayTerms; payChange?: boolean } | null;
+/**
+ * What the form is open for: the source as it is today (opened on one card's screen when that
+ * card's Edit was used), one entry of its pay history, or a new change of pay.
+ */
+type FormState = { terms?: PayTerms; payChange?: boolean; startAt?: IncomePart } | null;
 
 /**
  * One income source, laid out like an account's page: the big figures first (what a paycheck
@@ -91,15 +95,17 @@ export function IncomeDetailPage() {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-4">
-            <Card title="Schedule">
+            {/* Each card's pencil opens the source's form on that card's own screen (§6: a visible Edit for anything editable). */}
+            <Card title="Schedule" action={<EditButton name="schedule" onClick={() => setForm({ startAt: "when" })} />}>
               <dl className="grid gap-4 sm:grid-cols-3">
                 <Fact term="Paid">{describeSchedule(source.schedule)}</Fact>
                 <Fact term="On a weekend or holiday">{WEEKEND_LABELS[source.schedule.weekendRule]}</Fact>
                 <Fact term="Deposits to">{accountName(source.depositAccountId) ?? "An account that was removed"}</Fact>
               </dl>
             </Card>
-            <DeductionsCard source={source} accountName={accountName} />
-            <MatchCard source={source} accountName={accountName} />
+            <DeductionsCard source={source} accountName={accountName} onEdit={() => setForm({ startAt: "deductions" })} />
+            <MatchCard source={source} accountName={accountName} onEdit={() => setForm({ startAt: "match" })} />
+            <OneOffPaychecksCard source={source} accounts={allAccounts} />
             <TaxesAndBenefitsCard source={source} />
             <PayHistory source={source} onEditTerms={(terms) => setForm({ terms })} />
           </div>
@@ -115,6 +121,7 @@ export function IncomeDetailPage() {
           source={source}
           terms={form.terms}
           startAsPayChange={form.payChange}
+          startAt={form.startAt}
           isFirst={false}
           accounts={allAccounts}
           onClose={() => setForm(null)}
@@ -130,9 +137,12 @@ function Figures({ source }: { source: IncomeSource }) {
   const year = useIncomeThisYear(source.id);
   const current = source.payHistory.find((entry) => entry.current);
 
+  // A row each for take-home and gross (Rachel, 2026-10-19: "put gross and take home in their own rows"),
+  // the same three across both — a paycheck, so far this year, the whole year — so each column reads down.
+  const row = "grid grid-cols-1 gap-4 sm:grid-cols-3";
   return (
     <Card>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={row} aria-label="Take-home" role="group">
         <div>
           <p className="text-muted">Take-home</p>
           <Amount cents={source.netCents} estimate={source.netIsEstimate} className="-ml-2 text-3xl font-bold" />
@@ -141,17 +151,6 @@ function Figures({ source }: { source: IncomeSource }) {
             {current?.effectiveDate && ` · since ${formatDate(current.effectiveDate)}`}
             {source.netIsEstimate && " · an estimate until you type the real amount into a paycheck"}
           </p>
-        </div>
-        <div>
-          <p className="text-muted">Gross</p>
-          {source.grossCents === null ? (
-            <p className="mt-1 font-medium">Not entered.</p>
-          ) : (
-            <p data-amount className="text-2xl font-bold tabular-nums">
-              {formatCents(source.grossCents)}
-            </p>
-          )}
-          <p className="text-muted">a paycheck, before anything comes out</p>
         </div>
         {year.isError ? (
           <p role="alert" className="text-danger sm:col-span-2">
@@ -173,10 +172,26 @@ function Figures({ source }: { source: IncomeSource }) {
                   : "Adding it up…"
               }
             />
-            {/* The year's gross, added as figures of their own under the take-home they go with (Rachel, 2026-10-12). */}
+          </>
+        )}
+      </div>
+      <div className={`${row} mt-4 border-t border-line pt-4`} aria-label="Gross" role="group">
+        <div>
+          <p className="text-muted">Gross</p>
+          {source.grossCents === null ? (
+            <p className="mt-1 font-medium">Not entered.</p>
+          ) : (
+            <p data-amount className="text-2xl font-bold tabular-nums">
+              {formatCents(source.grossCents)}
+            </p>
+          )}
+          <p className="text-muted">a paycheck, before anything comes out</p>
+        </div>
+        {/* With the year not added up, its error is already said once in the row above. */}
+        {!year.isError && (
+          <>
             <Stat
               label="Gross so far this year"
-              className="lg:col-start-3"
               cents={year.data && year.data.grossPaychecksSoFar > 0 ? year.data.grossSoFarCents : undefined}
               note={year.data ? grossNote(year.data.grossPaychecksSoFar, year.data.paychecksSoFar, year.data.year) : "Adding it up…"}
             />
@@ -209,9 +224,9 @@ function grossNote(counted: number, all: number, year: number): string {
     : `before anything comes out, from ${counted} of ${paychecks(all)} in ${year}; the others have no gross amount entered`;
 }
 
-function Stat({ label, cents, note, className }: { label: string; cents: number | undefined; note: string; className?: string }) {
+function Stat({ label, cents, note }: { label: string; cents: number | undefined; note: string }) {
   return (
-    <div className={className}>
+    <div>
       <p className="text-muted">{label}</p>
       <p data-amount className="text-2xl font-bold tabular-nums">
         {cents === undefined ? "—" : formatCents(cents)}
@@ -224,14 +239,14 @@ function Stat({ label, cents, note, className }: { label: string; cents: number 
 type AccountName = (accountId: number | null) => string | undefined;
 
 /** What is taken out of each paycheck before it lands, and which of it goes to the user's own accounts. */
-function DeductionsCard({ source, accountName }: { source: IncomeSource; accountName: AccountName }) {
+function DeductionsCard({ source, accountName, onEdit }: { source: IncomeSource; accountName: AccountName; onEdit: () => void }) {
   const total = source.deductions.reduce((sum, deduction) => sum + deduction.amountCents, 0);
   return (
-    <Card title="Coming out of every paycheck">
+    <Card title="Coming out of every paycheck" action={<EditButton name="what comes out of every paycheck" onClick={onEdit} />}>
       {source.deductions.length === 0 ? (
         <p className="text-muted">
-          Nothing is set to come out. If a 401(k), HSA or anything else is taken out before your pay reaches you, choose Edit and add it
-          under "Goes to your accounts".
+          Nothing is set to come out. If a 401(k), HSA or anything else is taken out before your pay reaches you, add it with the
+          pencil above.
         </p>
       ) : (
         <ul className="divide-y divide-line">
@@ -257,17 +272,16 @@ function DeductionsCard({ source, accountName }: { source: IncomeSource; account
 }
 
 /** The employer's match, with a nudge when some of it is going unclaimed. */
-function MatchCard({ source, accountName }: { source: IncomeSource; accountName: AccountName }) {
+function MatchCard({ source, accountName, onEdit }: { source: IncomeSource; accountName: AccountName; onEdit: () => void }) {
   const { match, matchFigures } = source;
   // What is put in is whatever the deductions send to the account the match goes to. With none
   // pointed there, nothing can be said about the cap: it is not that nothing is being put in.
   const seesContribution = match !== null && source.deductions.some((deduction) => deduction.toAccountId === match.toAccountId);
   return (
-    <Card title="Employer match">
+    <Card title="Employer match" action={<EditButton name="employer match" onClick={onEdit} />}>
       {match === null ? (
         <p className="text-muted">
-          No employer match is set up. If your employer adds to a retirement account when you do, choose Edit and add it under "Employer
-          match".
+          No employer match is set up. If your employer adds to a retirement account when you do, add it with the pencil above.
         </p>
       ) : (
         <>

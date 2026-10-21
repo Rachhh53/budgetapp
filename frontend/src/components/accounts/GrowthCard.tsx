@@ -38,8 +38,8 @@ export function GrowthCard({ detail }: { detail: AccountDetail }) {
             <span className="text-muted">a year, since {formatDate(current.effectiveDate)}</span>
           </p>
           <p className={HINT}>
-            An assumption you chose, not a prediction. It is added at the end of each month to project the balance forward; entering the
-            real balance replaces it. Gains and losses are only ever worked out from balances you entered.
+            An assumption you chose, not a prediction. A little is added every day to project the balance forward; entering the real
+            balance replaces it. Gains and losses are only ever worked out from balances you entered.
           </p>
         </>
       ) : (

@@ -9,6 +9,7 @@ import app.budget.engine.interest.InterestTerms.RateChange;
 import app.budget.engine.schedule.PayPeriod;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /** Interest inside the balance projection (spec §5.4), with pay periods Oct 1–14, Oct 15–31, Nov 1–14 and Nov 15–30. */
@@ -192,6 +193,60 @@ class InterestProjectionTest {
                 List.of(anchor("2026-10-01", 1_000_000)), movements, PERIODS, LAST_DAY_AT_410).balances()) {
             assertThat(balance.ending()).isEqualTo(balance.starting().plus(balance.in()).minus(balance.out()));
         }
+    }
+
+    @Test
+    void anAmountTypedOverTheEstimateBecomesTheMonthsInterest() {
+        InterestTerms typed = LAST_DAY_AT_410.withTyped(Map.of(date("2026-10-31"), cents(5_000)));
+        Projection projection = BalanceProjector.project(List.of(anchor("2026-10-01", 1_000_000)), List.of(), PERIODS, typed);
+
+        InterestCredit october = projection.interest().getFirst();
+        assertThat(october.amount()).isEqualTo(cents(5_000));
+        assertThat(october.typed()).isTrue();
+        assertThat(projection.balances().get(1).ending()).isEqualTo(cents(1_005_000));
+        // November is still estimated, on the balance October's typed amount left.
+        InterestCredit november = projection.interest().get(1);
+        assertThat(november.typed()).isFalse();
+        assertThat(november.balance()).isEqualTo(cents(1_005_000));
+    }
+
+    @Test
+    void interestTypedOverAsNothingStaysListedSoItCanBePutBack() {
+        InterestTerms typed = LAST_DAY_AT_410.withTyped(Map.of(date("2026-10-31"), Money.ZERO));
+        Projection projection = BalanceProjector.project(List.of(anchor("2026-10-01", 1_000_000)), List.of(), PERIODS, typed);
+
+        assertThat(projection.interest().getFirst().amount()).isEqualTo(Money.ZERO);
+        assertThat(projection.interest().getFirst().typed()).isTrue();
+        assertThat(projection.balances().get(1).ending()).isEqualTo(cents(1_000_000));
+    }
+
+    @Test
+    void aMonthOfGrowthTypedOverIsAddedWholeOnItsLastDay() {
+        InterestTerms typed = GROWING_AT_7.withTyped(Map.of(date("2026-10-01"), cents(20_000)));
+        Projection projection = BalanceProjector.project(List.of(anchor("2026-10-01", 4_000_000)), List.of(), PERIODS, typed);
+
+        List<InterestCredit> october = projection.interest().stream().filter(credit -> credit.date().getMonthValue() == 10).toList();
+        assertThat(october).singleElement().satisfies(credit -> {
+            assertThat(credit.date()).isEqualTo(date("2026-10-31"));
+            assertThat(credit.amount()).isEqualTo(cents(20_000));
+            assertThat(credit.typed()).isTrue();
+        });
+        assertThat(projection.balances().get(1).ending()).isEqualTo(cents(4_020_000));
+        // November grows a little every day again, from the balance October left.
+        InterestCredit first = projection.interest().stream().filter(credit -> credit.date().equals(date("2026-11-01"))).findFirst().orElseThrow();
+        assertThat(first.typed()).isFalse();
+        assertThat(first.balance()).isEqualTo(cents(4_020_000));
+    }
+
+    @Test
+    void aBalanceEnteredOnTheLastDayHoldsTheTypedGrowthAlready() {
+        InterestTerms typed = GROWING_AT_7.withTyped(Map.of(date("2026-10-01"), cents(20_000)));
+        Projection projection = BalanceProjector.project(
+                List.of(anchor("2026-10-01", 4_000_000), anchor("2026-10-31", 4_050_000)), List.of(), PERIODS, typed);
+
+        assertThat(projection.balances().get(1).ending()).isEqualTo(cents(4_050_000));
+        assertThat(projection.interest().stream().filter(credit -> credit.date().equals(date("2026-10-31"))).findFirst().orElseThrow()
+                .inEnteredBalance()).isTrue();
     }
 
     private static PayPeriod period(String start, String end) {

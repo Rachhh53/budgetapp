@@ -1,6 +1,9 @@
 package app.budget.server.items;
 
+import app.budget.engine.Money;
+import app.budget.engine.items.PaidAhead;
 import app.budget.engine.items.Placement;
+import app.budget.engine.items.UsageBill;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.api.Inputs;
 import app.budget.server.schedule.ScheduleRules;
@@ -10,6 +13,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -67,6 +71,11 @@ public final class ItemsRepository {
      * @param saveUpBucketId the bucket a share of the bill is set aside in every paycheck; {@code null} when it is not saved up for
      * @param fromBucketId   the bucket of the paying account this comes out of; {@code null} for money that is not in a bucket
      * @param billedLater    a bill whose schedule names visits, paid when an invoice for them arrives (spec §4.6)
+     * @param paidAhead      a bill whose schedule names sessions that use up what was paid ahead for them (spec §4.6)
+     * @param packSessions   paid ahead as a pack: how many sessions the amount (the pack's price) buys, and the next
+     *                       pack is planned as a bill; {@code null} for an amount per session
+     * @param usage          billed by use: about how often it is used, the amount being the cost of each use and the
+     *                       schedule the monthly bill day and the months it can happen in; {@code null} otherwise
      */
     public record Terms(
             long amountCents,
@@ -82,16 +91,105 @@ public final class ItemsRepository {
             Long bucketId,
             Long saveUpBucketId,
             Long fromBucketId,
-            boolean billedLater) {
+            boolean billedLater,
+            boolean paidAhead,
+            Integer packSessions,
+            ScheduleRule packSchedule,
+            UsageBill.Usage usage) {
+
+        /** Terms that are not billed by use. */
+        public Terms(
+                long amountCents,
+                AmountMode amountMode,
+                boolean estimate,
+                Long categoryId,
+                long payFromAccountId,
+                Long payToAccountId,
+                boolean autopay,
+                Placement placement,
+                ScheduleRule schedule,
+                int daysAfterPayday,
+                Long bucketId,
+                Long saveUpBucketId,
+                Long fromBucketId,
+                boolean billedLater,
+                boolean paidAhead,
+                Integer packSessions,
+                ScheduleRule packSchedule) {
+            this(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId, autopay, placement, schedule,
+                    daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater, paidAhead, packSessions, packSchedule, null);
+        }
+
+        /** Terms with no pack schedule: a pack, if any, is due when the sessions use up what was paid. */
+        public Terms(
+                long amountCents,
+                AmountMode amountMode,
+                boolean estimate,
+                Long categoryId,
+                long payFromAccountId,
+                Long payToAccountId,
+                boolean autopay,
+                Placement placement,
+                ScheduleRule schedule,
+                int daysAfterPayday,
+                Long bucketId,
+                Long saveUpBucketId,
+                Long fromBucketId,
+                boolean billedLater,
+                boolean paidAhead,
+                Integer packSessions) {
+            this(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId, autopay, placement, schedule,
+                    daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater, paidAhead, packSessions, null);
+        }
+
+        /** Terms with no pack: everything but something paid ahead as a pack. */
+        public Terms(
+                long amountCents,
+                AmountMode amountMode,
+                boolean estimate,
+                Long categoryId,
+                long payFromAccountId,
+                Long payToAccountId,
+                boolean autopay,
+                Placement placement,
+                ScheduleRule schedule,
+                int daysAfterPayday,
+                Long bucketId,
+                Long saveUpBucketId,
+                Long fromBucketId,
+                boolean billedLater,
+                boolean paidAhead) {
+            this(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId, autopay, placement, schedule,
+                    daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater, paidAhead, null, null);
+        }
 
         Terms withAmount(long cents) {
-            return new Terms(cents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
-                    autopay, placement, schedule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater);
+            return new Terms(cents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId, autopay, placement, schedule,
+                    daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater, paidAhead, packSessions, packSchedule, usage);
+        }
+
+        Terms withUsage(UsageBill.Usage chosen) {
+            return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId, autopay, placement, schedule,
+                    daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater, paidAhead, packSessions, packSchedule, chosen);
         }
 
         Terms withSchedule(ScheduleRule rule) {
-            return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId,
-                    autopay, placement, rule, daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater);
+            return withSchedules(rule, packSchedule);
+        }
+
+        Terms withSchedules(ScheduleRule rule, ScheduleRule packRule) {
+            return new Terms(amountCents, amountMode, estimate, categoryId, payFromAccountId, payToAccountId, autopay, placement, rule,
+                    daysAfterPayday, bucketId, saveUpBucketId, fromBucketId, billedLater, paidAhead, packSessions, packRule, usage);
+        }
+
+        /** True when it is billed by use: an estimate of each month's uses at the cost of each. */
+        public boolean billedByUse() {
+            return usage != null;
+        }
+
+        /** The pack it is bought in, when it is paid ahead as one; empty otherwise. */
+        public Optional<PaidAhead.Pack> pack() {
+            return paidAhead && packSessions != null ? Optional.of(new PaidAhead.Pack(Money.ofCents(amountCents), packSessions)) : Optional.empty();
         }
     }
 
@@ -105,6 +203,7 @@ public final class ItemsRepository {
      * @param periodOverride  first day of the pay period it was moved into
      * @param projectedCents  what the app showed before the amount was first typed over
      * @param checkNumber     the check it was paid with, when it is paid from a checking account that way
+     * @param payFromAccountId the account this one is paid from instead of the item's own (migration V35)
      */
     public record Override(
             long itemId,
@@ -118,11 +217,12 @@ public final class ItemsRepository {
             String note,
             boolean skipped,
             Long projectedCents,
-            String checkNumber) {
+            String checkNumber,
+            Long payFromAccountId) {
 
         /** An occurrence nobody has touched yet. */
         public static Override untouched(long itemId, LocalDate originalDueDate) {
-            return new Override(itemId, originalDueDate, null, null, null, false, null, null, null, false, null, null);
+            return new Override(itemId, originalDueDate, null, null, null, false, null, null, null, false, null, null, null);
         }
     }
 
@@ -188,7 +288,8 @@ public final class ItemsRepository {
                                 UPDATE item_versions
                                 SET pay_from_account_id = :payFrom, pay_to_account_id = :payTo, autopay = :autopay,
                                     placement = :placement, bucket_id = :bucketId, save_up_bucket_id = :saveUpBucketId,
-                                    from_bucket_id = :fromBucketId, billed_later = :billedLater
+                                    from_bucket_id = :fromBucketId, billed_later = :billedLater, paid_ahead = :paidAhead,
+                                    pack_sessions = :packSessions, uses_hundredths = :usesHundredths, uses_per = :usesPer
                                 WHERE item_id = :id AND effective_from < :effectiveFrom
                                 """)
                         .bind("id", id)
@@ -201,6 +302,10 @@ public final class ItemsRepository {
                         .bind("saveUpBucketId", terms.saveUpBucketId())
                         .bind("fromBucketId", terms.fromBucketId())
                         .bind("billedLater", terms.billedLater())
+                        .bind("paidAhead", terms.paidAhead())
+                        .bind("packSessions", terms.packSessions())
+                        .bind("usesHundredths", usesHundredths(terms))
+                        .bind("usesPer", usesPer(terms))
                         .execute();
             }
             handle.createUpdate("UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived WHERE id = :id")
@@ -367,15 +472,16 @@ public final class ItemsRepository {
                 .createUpdate("""
                         INSERT INTO occurrence_overrides
                             (item_id, original_due_date, amount, due_date, period_override, paid, paid_date,
-                             confirmation_code, note, skipped, projected_amount, check_number)
+                             confirmation_code, note, skipped, projected_amount, check_number, pay_from_account_id)
                         VALUES (:itemId, :originalDueDate, :amount, :dueDate, :periodOverride, :paid, :paidDate,
-                                :confirmationCode, :note, :skipped, :projected, :checkNumber)
+                                :confirmationCode, :note, :skipped, :projected, :checkNumber, :payFrom)
                         ON CONFLICT (item_id, original_due_date) DO UPDATE SET
                             amount = excluded.amount, due_date = excluded.due_date,
                             period_override = excluded.period_override, paid = excluded.paid,
                             paid_date = excluded.paid_date, confirmation_code = excluded.confirmation_code,
                             note = excluded.note, skipped = excluded.skipped,
-                            projected_amount = excluded.projected_amount, check_number = excluded.check_number
+                            projected_amount = excluded.projected_amount, check_number = excluded.check_number,
+                            pay_from_account_id = excluded.pay_from_account_id
                         """)
                 .bind("itemId", edit.itemId())
                 .bind("originalDueDate", edit.originalDueDate().toString())
@@ -389,6 +495,7 @@ public final class ItemsRepository {
                 .bind("skipped", edit.skipped())
                 .bind("projected", edit.projectedCents())
                 .bind("checkNumber", edit.checkNumber())
+                .bind("payFrom", edit.payFromAccountId())
                 .execute());
     }
 
@@ -420,7 +527,7 @@ public final class ItemsRepository {
     }
 
     /** A version row before its schedule is loaded. */
-    private record VersionRow(long id, LocalDate effectiveFrom, long scheduleRuleId, Terms withoutSchedule) {}
+    private record VersionRow(long id, LocalDate effectiveFrom, long scheduleRuleId, Long packScheduleRuleId, Terms withoutSchedule) {}
 
     private static List<Version> versions(Handle handle, long itemId) {
         List<VersionRow> rows = handle
@@ -430,6 +537,7 @@ public final class ItemsRepository {
                         rs.getLong("id"),
                         LocalDate.parse(rs.getString("effective_from")),
                         rs.getLong("schedule_rule_id"),
+                        nullableLong(rs, "pack_schedule_rule_id"),
                         new Terms(
                                 rs.getLong("amount"),
                                 AmountMode.valueOf(rs.getString("amount_mode").toUpperCase(Locale.ROOT)),
@@ -444,11 +552,16 @@ public final class ItemsRepository {
                                 nullableLong(rs, "bucket_id"),
                                 nullableLong(rs, "save_up_bucket_id"),
                                 nullableLong(rs, "from_bucket_id"),
-                                rs.getBoolean("billed_later"))))
+                                rs.getBoolean("billed_later"),
+                                rs.getBoolean("paid_ahead"),
+                                nullableInt(rs, "pack_sessions"))
+                                .withUsage(usage(rs))))
                 .list();
         List<Version> versions = new ArrayList<>();
         for (VersionRow row : rows) {
-            Terms terms = row.withoutSchedule().withSchedule(ScheduleRules.load(handle, row.scheduleRuleId()));
+            Terms terms = row.withoutSchedule().withSchedules(
+                    ScheduleRules.load(handle, row.scheduleRuleId()),
+                    row.packScheduleRuleId() == null ? null : ScheduleRules.load(handle, row.packScheduleRuleId()));
             versions.add(new Version(row.id(), row.effectiveFrom(), terms));
         }
         return versions;
@@ -456,15 +569,18 @@ public final class ItemsRepository {
 
     private static void insertVersion(Handle handle, long itemId, LocalDate effectiveFrom, Terms terms) {
         long ruleId = ScheduleRules.insert(handle, terms.schedule());
+        Long packRuleId = terms.packSchedule() == null ? null : ScheduleRules.insert(handle, terms.packSchedule());
         handle.createUpdate("""
                         INSERT INTO item_versions
                             (item_id, effective_from, amount, amount_mode, is_estimate, category_id, pay_from_account_id,
                              pay_to_account_id, autopay, placement, schedule_rule_id, days_after_payday,
-                             bucket_id, save_up_bucket_id, from_bucket_id, billed_later)
+                             bucket_id, save_up_bucket_id, from_bucket_id, billed_later, paid_ahead, pack_sessions,
+                             pack_schedule_rule_id, uses_hundredths, uses_per)
                         VALUES (:itemId, :effectiveFrom, :amount, :amountMode, :estimate, :categoryId, :payFrom,
                                 :payTo, :autopay, :placement, :ruleId, :daysAfterPayday, :bucketId, :saveUpBucketId,
-                                :fromBucketId, :billedLater)
+                                :fromBucketId, :billedLater, :paidAhead, :packSessions, :packRuleId, :usesHundredths, :usesPer)
                         """)
+                .bind("packRuleId", packRuleId)
                 .bind("itemId", itemId)
                 .bind("effectiveFrom", effectiveFrom.toString())
                 .bind("amount", terms.amountCents())
@@ -481,17 +597,105 @@ public final class ItemsRepository {
                 .bind("saveUpBucketId", terms.saveUpBucketId())
                 .bind("fromBucketId", terms.fromBucketId())
                 .bind("billedLater", terms.billedLater())
+                .bind("paidAhead", terms.paidAhead())
+                .bind("packSessions", terms.packSessions())
+                .bind("usesHundredths", usesHundredths(terms))
+                .bind("usesPer", usesPer(terms))
                 .execute();
     }
 
-    /** Deletes a version and then its schedule: the version points at the schedule, so it has to go first. */
+    private static Long usesHundredths(Terms terms) {
+        return terms.billedByUse() ? terms.usage().hundredths() : null;
+    }
+
+    private static String usesPer(Terms terms) {
+        return terms.billedByUse() ? Inputs.code(terms.usage().per()) : null;
+    }
+
+    /** A version row's uses, when it is billed by use; {@code null} otherwise. */
+    private static UsageBill.Usage usage(ResultSet rs) throws SQLException {
+        long hundredths = rs.getLong("uses_hundredths");
+        if (rs.wasNull()) {
+            return null;
+        }
+        return new UsageBill.Usage(hundredths, UsageBill.Per.valueOf(rs.getString("uses_per").toUpperCase(Locale.ROOT)));
+    }
+
+    /** The planned packs of {@code itemId} moved to another day: the day Budget planned each on → the day it was moved to. */
+    public Map<LocalDate, LocalDate> packMoves(long itemId) {
+        Map<LocalDate, LocalDate> moves = new HashMap<>();
+        jdbi.useHandle(handle -> handle
+                .createQuery("SELECT planned_date, moved_to FROM item_pack_moves WHERE item_id = :id")
+                .bind("id", itemId)
+                .map((rs, ctx) -> Map.entry(LocalDate.parse(rs.getString("planned_date")), LocalDate.parse(rs.getString("moved_to"))))
+                .forEach(move -> moves.put(move.getKey(), move.getValue())));
+        return moves;
+    }
+
+    /** Moves the pack planned on {@code planned} to {@code movedTo}; moving it again replaces the move. */
+    public void movePack(long itemId, LocalDate planned, LocalDate movedTo) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        INSERT INTO item_pack_moves (item_id, planned_date, moved_to) VALUES (:id, :planned, :movedTo)
+                        ON CONFLICT (item_id, planned_date) DO UPDATE SET moved_to = excluded.moved_to
+                        """)
+                .bind("id", itemId)
+                .bind("planned", planned.toString())
+                .bind("movedTo", movedTo.toString())
+                .execute());
+    }
+
+    /** Puts the pack planned on {@code planned} back on that day. @return false when it wasn't moved */
+    public boolean unmovePack(long itemId, LocalDate planned) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("DELETE FROM item_pack_moves WHERE item_id = :id AND planned_date = :planned")
+                .bind("id", itemId)
+                .bind("planned", planned.toString())
+                .execute()) > 0;
+    }
+
+    /** What removing one version of an item came to. */
+    public enum Removed {
+        DONE,
+        /** No such version of that item. */
+        NOT_FOUND,
+        /** It is the item's only version: an item always keeps one. */
+        LAST
+    }
+
+    /**
+     * Removes one version of an item, from its Amount history (Rachel, 2026-10-20: "amount history record in
+     * recurring items should be able to be deleted"). The version before it then carries on through its dates; the
+     * first one removed, the next covers everything before it, as the earliest version always does.
+     */
+    public Removed removeVersion(long itemId, long versionId) {
+        return jdbi.inTransaction(handle -> {
+            List<Long> ids = handle.createQuery("SELECT id FROM item_versions WHERE item_id = :itemId")
+                    .bind("itemId", itemId)
+                    .mapTo(Long.class)
+                    .list();
+            if (!ids.contains(versionId)) {
+                return Removed.NOT_FOUND;
+            }
+            if (ids.size() < 2) {
+                return Removed.LAST;
+            }
+            deleteVersion(handle, versionId);
+            return Removed.DONE;
+        });
+    }
+
+    /** Deletes a version and then its schedules: the version points at them, so it has to go first. */
     private static void deleteVersion(Handle handle, long versionId) {
-        long ruleId = handle.createQuery("SELECT schedule_rule_id FROM item_versions WHERE id = :id")
+        List<Long> ruleIds = handle.createQuery("""
+                        SELECT schedule_rule_id FROM item_versions WHERE id = :id
+                        UNION ALL
+                        SELECT pack_schedule_rule_id FROM item_versions WHERE id = :id AND pack_schedule_rule_id IS NOT NULL
+                        """)
                 .bind("id", versionId)
                 .mapTo(Long.class)
-                .one();
+                .list();
         handle.createUpdate("DELETE FROM item_versions WHERE id = :id").bind("id", versionId).execute();
-        ScheduleRules.delete(handle, ruleId);
+        ruleIds.forEach(ruleId -> ScheduleRules.delete(handle, ruleId));
     }
 
     private static void replaceTags(Handle handle, long itemId, List<Long> tagIds) {
@@ -517,7 +721,13 @@ public final class ItemsRepository {
                 rs.getString("note"),
                 rs.getBoolean("skipped"),
                 nullableLong(rs, "projected_amount"),
-                rs.getString("check_number"));
+                rs.getString("check_number"),
+                nullableLong(rs, "pay_from_account_id"));
+    }
+
+    private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value;
     }
 
     private static Long nullableLong(ResultSet rs, String column) throws SQLException {

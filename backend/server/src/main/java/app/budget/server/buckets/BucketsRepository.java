@@ -6,7 +6,9 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.Query;
 
 /** Reads and writes {@code buckets} and what the user moved in and out of them by hand ({@code bucket_changes}). */
 public final class BucketsRepository {
@@ -61,7 +63,12 @@ public final class BucketsRepository {
             Boolean stopAtGoal) {}
 
     /** Money put into (+) or taken out of (−) a bucket by hand. */
-    public record Change(long id, long bucketId, LocalDate date, long amountCents, String note) {}
+    /**
+     * @param amountCents what was put in (+) or taken out (−); 0 on an amount set
+     * @param setToCents  an amount set for the day: the bucket holds exactly this at the end of it, however what came
+     *                    before changes; {@code null} for money put in or taken out
+     */
+    public record Change(long id, long bucketId, LocalDate date, long amountCents, String note, Long setToCents) {}
 
     /** Every bucket, in the order the user sees them. */
     public List<Bucket> all() {
@@ -180,7 +187,7 @@ public final class BucketsRepository {
     public List<Change> changes(long bucketId) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
-                        SELECT id, bucket_id, date, amount, note FROM bucket_changes
+                        SELECT id, bucket_id, date, amount, note, set_to FROM bucket_changes
                         WHERE bucket_id = :bucketId ORDER BY date DESC, id DESC
                         """)
                 .bind("bucketId", bucketId)
@@ -191,7 +198,7 @@ public final class BucketsRepository {
     /** Every change made by hand, to any bucket, oldest first. */
     public List<Change> allChanges() {
         return jdbi.withHandle(handle -> handle
-                .createQuery("SELECT id, bucket_id, date, amount, note FROM bucket_changes ORDER BY date, id")
+                .createQuery("SELECT id, bucket_id, date, amount, note, set_to FROM bucket_changes ORDER BY date, id")
                 .map((rs, ctx) -> change(rs))
                 .list());
     }
@@ -207,6 +214,157 @@ public final class BucketsRepository {
                 .bind("amount", amountCents)
                 .bind("note", note)
                 .execute());
+    }
+
+    /**
+     * Sets what a bucket holds at the end of {@code date}. Kept as the amount, so it still holds after anything is
+     * entered or moved before that day (spec §4.2). It replaces an amount set for the same day before, including one
+     * kept the old way, as a difference under {@code adjustedNote}.
+     */
+    public void setHeld(long bucketId, LocalDate date, long amountCents, String note, String adjustedNote) {
+        jdbi.useTransaction(handle -> {
+            handle.createUpdate("""
+                            DELETE FROM bucket_changes
+                            WHERE bucket_id = :bucketId AND date = :date AND to_available = 0
+                              AND (set_to IS NOT NULL OR note = :adjustedNote)
+                            """)
+                    .bind("bucketId", bucketId)
+                    .bind("date", date.toString())
+                    .bind("adjustedNote", adjustedNote)
+                    .execute();
+            handle.createUpdate("""
+                            INSERT INTO bucket_changes (bucket_id, date, amount, source, note, set_to)
+                            VALUES (:bucketId, :date, 0, 'manual', :note, :setTo)
+                            """)
+                    .bind("bucketId", bucketId)
+                    .bind("date", date.toString())
+                    .bind("note", note)
+                    .bind("setTo", amountCents)
+                    .execute();
+        });
+    }
+
+    /**
+     * Money moved out of a bucket to money not in a bucket (migration V33): listed under Income on
+     * the pay period, with a category and tags like a one-off.
+     *
+     * @param amountCents        what was moved out, positive (stored as a negative change)
+     * @param reimbursesEntryId the expense it pays back (migration V38); {@code null} when it pays none back
+     */
+    public record MoveOut(
+            long id,
+            long bucketId,
+            long accountId,
+            LocalDate date,
+            long amountCents,
+            String note,
+            Long categoryId,
+            List<Long> tagIds,
+            Long reimbursesEntryId) {}
+
+    /** Records a move out of a bucket. @return its id */
+    public long addMoveOut(
+            long bucketId, LocalDate date, long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId) {
+        return jdbi.inTransaction(handle -> {
+            long id = handle.createUpdate("""
+                            INSERT INTO bucket_changes (bucket_id, date, amount, source, note, to_available, category_id, reimburses_entry_id)
+                            VALUES (:bucketId, :date, :amount, 'manual', :note, 1, :categoryId, :reimburses)
+                            """)
+                    .bind("bucketId", bucketId)
+                    .bind("date", date.toString())
+                    .bind("amount", -amountCents)
+                    .bind("note", note)
+                    .bind("categoryId", categoryId)
+                    .bind("reimburses", reimbursesEntryId)
+                    .executeAndReturnGeneratedKeys("id")
+                    .mapTo(Long.class)
+                    .one();
+            saveMoveOutTags(handle, id, tagIds);
+            return id;
+        });
+    }
+
+    /** Changes a move out of a bucket. @return false when there is no such move in that bucket */
+    public boolean updateMoveOut(
+            long bucketId,
+            long changeId,
+            LocalDate date,
+            long amountCents,
+            String note,
+            Long categoryId,
+            List<Long> tagIds,
+            Long reimbursesEntryId) {
+        return jdbi.inTransaction(handle -> {
+            boolean found = handle.createUpdate("""
+                            UPDATE bucket_changes SET date = :date, amount = :amount, note = :note, category_id = :categoryId,
+                                reimburses_entry_id = :reimburses
+                            WHERE id = :id AND bucket_id = :bucketId AND to_available = 1
+                            """)
+                    .bind("reimburses", reimbursesEntryId)
+                    .bind("id", changeId)
+                    .bind("bucketId", bucketId)
+                    .bind("date", date.toString())
+                    .bind("amount", -amountCents)
+                    .bind("note", note)
+                    .bind("categoryId", categoryId)
+                    .execute() > 0;
+            if (found) {
+                saveMoveOutTags(handle, changeId, tagIds);
+            }
+            return found;
+        });
+    }
+
+    private static void saveMoveOutTags(Handle handle, long changeId, List<Long> tagIds) {
+        handle.createUpdate("DELETE FROM bucket_change_tags WHERE change_id = :id").bind("id", changeId).execute();
+        for (Long tagId : tagIds) {
+            handle.createUpdate("INSERT INTO bucket_change_tags (change_id, tag_id) VALUES (:changeId, :tagId)")
+                    .bind("changeId", changeId)
+                    .bind("tagId", tagId)
+                    .execute();
+        }
+    }
+
+    private static final String MOVES_OUT = """
+            SELECT c.id, c.bucket_id, b.account_id, c.date, c.amount, c.note, c.category_id, c.reimburses_entry_id
+            FROM bucket_changes c JOIN buckets b ON b.id = c.bucket_id
+            WHERE c.to_available = 1 AND\s""";
+
+    /** Every move out of a bucket dated within {@code from}–{@code to}, oldest first. */
+    public List<MoveOut> movesOut(LocalDate from, LocalDate to) {
+        return jdbi.withHandle(handle -> movesOut(handle, handle
+                .createQuery(MOVES_OUT + "c.date BETWEEN :from AND :to ORDER BY c.date, c.id")
+                .bind("from", from.toString())
+                .bind("to", to.toString())));
+    }
+
+    /** The moves out of a bucket that pay {@code expenseId} back, oldest first. */
+    public List<MoveOut> movesOutPayingBack(long expenseId) {
+        return jdbi.withHandle(handle -> movesOut(handle, handle
+                .createQuery(MOVES_OUT + "c.reimburses_entry_id = :id ORDER BY c.date, c.id")
+                .bind("id", expenseId)));
+    }
+
+    private static List<MoveOut> movesOut(Handle handle, Query query) {
+        return query
+                .map((rs, ctx) -> {
+                    long categoryId = rs.getLong("category_id");
+                    Long category = rs.wasNull() ? null : categoryId;
+                    long reimburses = rs.getLong("reimburses_entry_id");
+                    Long paysBack = rs.wasNull() ? null : reimburses;
+                    return new MoveOut(rs.getLong("id"), rs.getLong("bucket_id"), rs.getLong("account_id"),
+                            LocalDate.parse(rs.getString("date")), -rs.getLong("amount"), rs.getString("note"), category, List.of(),
+                            paysBack);
+                })
+                .list()
+                .stream()
+                .map(move -> new MoveOut(move.id(), move.bucketId(), move.accountId(), move.date(), move.amountCents(), move.note(),
+                        move.categoryId(), handle.createQuery("SELECT tag_id FROM bucket_change_tags WHERE change_id = :id ORDER BY tag_id")
+                                .bind("id", move.id())
+                                .mapTo(Long.class)
+                                .list(),
+                        move.reimbursesEntryId()))
+                .toList();
     }
 
     public boolean deleteChange(long bucketId, long changeId) {
@@ -233,12 +391,19 @@ public final class BucketsRepository {
                 rs.getBoolean("stop_at_goal"));
     }
 
+    /** An amount set for the day, or {@code null} for money put in or taken out. */
+    private static Long setTo(ResultSet rs) throws SQLException {
+        long cents = rs.getLong("set_to");
+        return rs.wasNull() ? null : cents;
+    }
+
     private static Change change(ResultSet rs) throws SQLException {
         return new Change(
                 rs.getLong("id"),
                 rs.getLong("bucket_id"),
                 LocalDate.parse(rs.getString("date")),
                 rs.getLong("amount"),
-                rs.getString("note"));
+                rs.getString("note"),
+                setTo(rs));
     }
 }

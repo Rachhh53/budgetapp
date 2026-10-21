@@ -22,6 +22,8 @@ import app.budget.server.income.IncomeRepository.Match;
 import app.budget.server.income.IncomeRepository.MatchMode;
 import app.budget.server.income.IncomeRepository.Pay;
 import app.budget.server.income.IncomeRepository.Source;
+import app.budget.server.income.OneOffPaychecksRepository;
+import app.budget.server.income.OneOffPaychecksRepository.OneOff;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.income.PayCalendar.Paycheck;
 import app.budget.server.stubs.PayStubsRepository.Applied;
@@ -50,7 +52,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Pay stubs (spec Phase 8): a stub's PDF is added to an income source, read on this PC, looked
  * over, and saved. Saving asks what it should change (decided 2026-10-12): the amounts in
- * force, the pay from its date on, that one paycheck, or nothing.
+ * force, the pay from its date on, that one paycheck, a one-off paycheck of its own (a bonus;
+ * 2026-10-19), or nothing.
  *
  * <p>Nothing a stub says is used until it is saved, and nothing in it is logged: a stub
  * names an employer and what someone earns.
@@ -67,6 +70,8 @@ public final class PayStubsRoutes {
     private static final int MAX_DEDUCTIONS = 30;
     /** A payday moved for a weekend or a holiday is still within this many days of the date on its stub. */
     private static final int DAYS_AROUND_PAYDAY = 4;
+    /** What a one-off paycheck saved from a stub is called until it is given a name. */
+    private static final String DEFAULT_ONE_OFF_NAME = "Bonus";
 
     private static final String NOT_A_PDF =
             "A pay stub needs to be a PDF, the kind your payroll site lets you download. Photos and scans can't be read yet.";
@@ -77,6 +82,7 @@ public final class PayStubsRoutes {
     private final PayStubsRepository stubs;
     private final StoredFiles files;
     private final IncomeRepository income;
+    private final OneOffPaychecksRepository oneOffs;
     private final PayCalendar calendar;
     private final AccountsRepository accounts;
     private final Clock clock;
@@ -85,12 +91,14 @@ public final class PayStubsRoutes {
             PayStubsRepository stubs,
             StoredFiles files,
             IncomeRepository income,
+            OneOffPaychecksRepository oneOffs,
             PayCalendar calendar,
             AccountsRepository accounts,
             Clock clock) {
         this.stubs = stubs;
         this.files = files;
         this.income = income;
+        this.oneOffs = oneOffs;
         this.calendar = calendar;
         this.accounts = accounts;
         this.clock = clock;
@@ -200,8 +208,12 @@ public final class PayStubsRoutes {
     /** Request body for changing a stub in review: its date and every line, as they should now be. */
     public record StubInput(LocalDate payDate, List<LineInput> lines) {}
 
-    /** Request body for saving: {@code apply} is {@code correct}, {@code pay_change}, {@code paycheck} or {@code none}. */
-    public record SaveInput(String apply) {}
+    /**
+     * Request body for saving: {@code apply} is {@code correct}, {@code pay_change}, {@code paycheck},
+     * {@code one_off} or {@code none}. {@code name} is what a one-off paycheck is called ("Q3 bonus");
+     * left out, it keeps the name it already has, or is called "Bonus".
+     */
+    public record SaveInput(String apply, String name) {}
 
     public record Done(boolean done) {}
 
@@ -244,13 +256,15 @@ public final class PayStubsRoutes {
 
     private void save(Context ctx) {
         Stub stub = inReview(ctx);
-        Applied applied = Inputs.choice(Applied.class, Inputs.body(ctx, SaveInput.class).apply(), "what this stub should change");
+        SaveInput input = Inputs.body(ctx, SaveInput.class);
+        Applied applied = Inputs.choice(Applied.class, input.apply(), "what this stub should change");
         if (stub.payDate() == null) {
             throw ApiException.badRequest("Please fill in the day this stub was paid first.");
         }
+        String oneOffName = Inputs.optionalText(input.name(), "a name for the paycheck", LABEL_MAX);
         Source source = income.find(stub.incomeSourceId()).orElseThrow(ApiException::notFound);
         // Applied before the stub is marked saved, so a refusal leaves it in review with nothing changed.
-        apply(stub, source, applied);
+        apply(stub, source, applied, oneOffName);
         stubs.save(stub, applied);
         ApiResponse.ok(ctx, view(stubs.find(stub.id()).orElseThrow()));
     }
@@ -289,8 +303,12 @@ public final class PayStubsRoutes {
     }
 
     /** Puts the stub's figures where saving was asked to put them. */
-    private void apply(Stub stub, Source source, Applied applied) {
+    private void apply(Stub stub, Source source, Applied applied, String oneOffName) {
         if (applied == Applied.NONE) {
+            return;
+        }
+        if (applied == Applied.ONE_OFF) {
+            saveOneOff(stub, source, oneOffName);
             return;
         }
         Optional<Paycheck> paycheck = paycheckFor(source, stub.payDate());
@@ -316,7 +334,27 @@ public final class PayStubsRoutes {
                 long net = netOf(stub.lines()).orElseThrow(PayStubsRoutes::noNetPay);
                 income.saveOverride(source.id(), one.scheduledDate(), net, source.termsOn(one.scheduledDate()).pay().netCents());
             }
-            case NONE -> { }
+            case ONE_OFF, NONE -> { }
+        }
+    }
+
+    /**
+     * A stub for extra pay of its own (a bonus) becomes a one-off paycheck on its pay date: its gross,
+     * take-home and what it takes out are the stub's. Saving the same stub again changes that paycheck
+     * rather than adding another. The match follows the source's own rule, as a typed one-off's does.
+     */
+    private void saveOneOff(Stub stub, Source source, String name) {
+        // Nothing of the regular pay stands in for what a bonus stub leaves out: its gross is its own or none.
+        Pay pay = payFrom(stub.lines(), new Pay(null, 0, false, List.of(), null));
+        Optional<OneOff> existing = oneOffs.forStub(stub.id());
+        String called = name != null ? name : existing.map(OneOff::name).orElse(DEFAULT_ONE_OFF_NAME);
+        boolean matched = existing.map(OneOff::matched).orElse(true);
+        OneOffPaychecksRepository.Fields fields = new OneOffPaychecksRepository.Fields(
+                stub.payDate(), called, pay.grossCents(), pay.netCents(), pay.deductions(), matched);
+        if (existing.isPresent()) {
+            oneOffs.update(existing.get().id(), fields);
+        } else {
+            oneOffs.create(source.id(), fields, stub.id());
         }
     }
 
@@ -417,7 +455,8 @@ public final class PayStubsRoutes {
             return Optional.empty();
         }
         return calendar.paychecks(payDate.minusDays(DAYS_AROUND_PAYDAY), payDate.plusDays(DAYS_AROUND_PAYDAY)).stream()
-                .filter(paycheck -> paycheck.incomeSourceId() == source.id())
+                // A one-off paycheck has no schedule to be typed over; "just that paycheck" means a regular one.
+                .filter(paycheck -> paycheck.incomeSourceId() == source.id() && paycheck.scheduled())
                 .min(Comparator.comparingLong(paycheck -> Math.abs(ChronoUnit.DAYS.between(payDate, paycheck.payDate()))));
     }
 

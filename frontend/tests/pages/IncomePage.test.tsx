@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account } from "../../src/api/accounts";
-import type { IncomeSource, Paycheck } from "../../src/api/income";
+import type { IncomeSource, OneOffPaycheck, Paycheck } from "../../src/api/income";
 import { todayIso } from "../../src/lib/dates";
 import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
 
@@ -75,6 +75,10 @@ const PAYCHECKS: Paycheck[] = [
     estimate: false,
     projectedCents: null,
     contributions: [],
+    grossCents: null,
+    deductions: [],
+    oneOffId: null,
+    name: null,
   },
   {
     incomeSourceId: 2,
@@ -86,6 +90,10 @@ const PAYCHECKS: Paycheck[] = [
     estimate: true,
     projectedCents: null,
     contributions: [],
+    grossCents: null,
+    deductions: [],
+    oneOffId: null,
+    name: null,
   },
   {
     incomeSourceId: 1,
@@ -97,6 +105,10 @@ const PAYCHECKS: Paycheck[] = [
     estimate: false,
     projectedCents: null,
     contributions: [],
+    grossCents: null,
+    deductions: [],
+    oneOffId: null,
+    name: null,
   },
 ];
 
@@ -180,6 +192,25 @@ describe("income screen", () => {
     const upcoming = screen.getByRole("region", { name: "Upcoming paychecks" });
     await within(upcoming).findAllByRole("listitem");
     expect(upcoming).not.toHaveTextContent("Riverside Bakery");
+  });
+
+  it("edits each card from its own pencil, opening the form on that card's screen", async () => {
+    withIncome();
+    renderApp("/income/1");
+    await screen.findByRole("heading", { level: 1, name: "Northwind Health" });
+
+    for (const [card, pencil, screenName] of [
+      ["Schedule", "Edit schedule", "Paydays"],
+      ["Coming out of every paycheck", "Edit what comes out of every paycheck", "Deductions"],
+      ["Employer match", "Edit employer match", "Employer match"],
+    ] as const) {
+      await userEvent.click(within(screen.getByRole("region", { name: card })).getByRole("button", { name: pencil }));
+      const dialog = await screen.findByRole("dialog");
+      const chosen = within(dialog).getByRole("combobox", { name: "What to change" }) as HTMLSelectElement;
+      expect(chosen.selectedOptions[0]).toHaveTextContent(screenName);
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    }
   });
 
   it("opens a source's page on its figures: a paycheck, and what the year adds up to", async () => {
@@ -436,5 +467,179 @@ describe("income screen", () => {
 
     expect(await within(screen.getByRole("alertdialog")).findByRole("alert"))
       .toHaveTextContent("This source defines your pay periods.");
+  });
+});
+
+const Q3_BONUS: OneOffPaycheck = {
+  id: 4,
+  incomeSourceId: 1,
+  payDate: "2026-09-30",
+  name: "Q3 bonus",
+  grossCents: 200000,
+  netCents: 131200,
+  deductions: [{ name: "401(k)", amountCents: 12000, toAccountId: 2, percentBp: null }],
+  matched: true,
+  matchCents: 6000,
+  payStubId: null,
+};
+const MATCHED: IncomeSource = {
+  ...SALARY,
+  match: { toAccountId: 2, mode: "formula", fixedCents: null, matchBp: 5000, capBpOfGross: 600, contributionWithinCap: false },
+  matchFigures: { perPaycheckCents: 7500, mostPossibleCents: 10800, contributeMoreCents: 3300 },
+};
+
+describe("one-off paychecks", () => {
+  it("says what one is for while there are none", async () => {
+    withIncome();
+    renderApp("/income/1");
+
+    const card = await screen.findByRole("region", { name: "One-off paychecks" });
+    expect(await within(card).findByText(/^None yet\. A bonus/)).toBeInTheDocument();
+  });
+
+  it("lists each with its day, take-home and match, and a pencil of its own", async () => {
+    withIncome({ "GET /api/income-sources/1/one-off-paychecks": () => ({ status: 200, data: [Q3_BONUS] }) });
+    renderApp("/income/1");
+
+    const card = await screen.findByRole("region", { name: "One-off paychecks" });
+    const row = await within(card).findByRole("listitem");
+    expect(row).toHaveTextContent("Q3 bonus");
+    expect(row).toHaveTextContent("Sep 30, 2026 · $1,312.00 take-home · $60.00 match");
+    expect(within(row).getByRole("button", { name: "Edit Q3 bonus" })).toBeInTheDocument();
+  });
+
+  it("adds a bonus, starting from the regular paycheck's deductions", async () => {
+    const fetchMock = withIncome({
+      "GET /api/income-sources": () => ({ status: 200, data: [MATCHED, BAKERY] }),
+      "POST /api/income-sources/1/one-off-paychecks": () => ({ status: 201, data: Q3_BONUS }),
+    });
+    renderApp("/income/1");
+
+    const card = await screen.findByRole("region", { name: "One-off paychecks" });
+    await userEvent.click(within(card).getByRole("button", { name: "+ Add" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a one-off paycheck" });
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 4");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Q3 bonus");
+    const paidOn = within(dialog).getByLabelText("Paid on");
+    await userEvent.clear(paidOn);
+    await userEvent.type(paidOn, "2026-09-30");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.type(within(dialog).getByLabelText("Take-home"), "1312");
+    await userEvent.type(within(dialog).getByLabelText("Gross (optional)"), "2000");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    // A copy of the regular paycheck's, to be looked at rather than saved unseen.
+    expect(within(dialog).getByText(/^Copied from your regular paycheck\./)).toBeInTheDocument();
+    const amount = within(dialog).getByLabelText("Amount");
+    expect(amount).toHaveValue("150.00");
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "120");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    // The source's own rule, on by default.
+    expect(within(dialog).getByLabelText("Add the employer's match")).toBeChecked();
+    expect(dialog).toHaveTextContent("By Northwind Health's rule: 50.00% of what you put in, up to 6.00% of this paycheck's gross.");
+    // The gross was given, so there is no warning about a missing one.
+    expect(dialog).not.toHaveTextContent("Without a gross amount");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add paycheck" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "POST /api/income-sources/1/one-off-paychecks")).toEqual([
+      {
+        payDate: "2026-09-30",
+        name: "Q3 bonus",
+        grossCents: 200000,
+        netCents: 131200,
+        deductions: [{ name: "401(k)", amountCents: 12000, toAccountId: 2 }],
+        matched: true,
+      },
+    ]);
+  });
+
+  it("asks for a name before going on", async () => {
+    const fetchMock = withIncome();
+    renderApp("/income/1");
+
+    const card = await screen.findByRole("region", { name: "One-off paychecks" });
+    await userEvent.click(within(card).getByRole("button", { name: "+ Add" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a one-off paycheck" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Step 1 of 4");
+    expect(calls(fetchMock).some((call) => call.startsWith("POST "))).toBe(false);
+  });
+
+  it("says there is no match to add when the source has none", async () => {
+    withIncome({
+      "GET /api/income-sources/1/one-off-paychecks": () => ({ status: 200, data: [{ ...Q3_BONUS, matched: false, matchCents: null }] }),
+    });
+    renderApp("/income/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Q3 bonus" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Q3 bonus" });
+    await show(dialog, "Employer match");
+    expect(dialog).toHaveTextContent("Northwind Health has no employer match set up, so nothing is added to this paycheck.");
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("switches the match off for one bonus", async () => {
+    const fetchMock = withIncome({
+      "GET /api/income-sources": () => ({ status: 200, data: [MATCHED, BAKERY] }),
+      "GET /api/income-sources/1/one-off-paychecks": () => ({ status: 200, data: [Q3_BONUS] }),
+      "PUT /api/income-sources/1/one-off-paychecks/4": () => ({ status: 200, data: { ...Q3_BONUS, matched: false, matchCents: null } }),
+    });
+    renderApp("/income/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Q3 bonus" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Q3 bonus" });
+    const change = within(dialog).getByRole("combobox", { name: "What to change" });
+    expect(within(change).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Name and date",
+      "Pay",
+      "Deductions",
+      "Employer match",
+      "Delete",
+    ]);
+    await show(dialog, "Employer match");
+    expect(dialog).toHaveTextContent("As saved, that comes to $60.00.");
+    await userEvent.click(within(dialog).getByLabelText("Add the employer's match"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/income-sources/1/one-off-paychecks/4")).toEqual([
+      {
+        payDate: "2026-09-30",
+        name: "Q3 bonus",
+        grossCents: 200000,
+        netCents: 131200,
+        deductions: [{ name: "401(k)", amountCents: 12000, toAccountId: 2 }],
+        matched: false,
+      },
+    ]);
+  });
+
+  it("deletes one, asking first", async () => {
+    const fetchMock = withIncome({
+      "GET /api/income-sources/1/one-off-paychecks": () => ({ status: 200, data: [Q3_BONUS] }),
+      "DELETE /api/income-sources/1/one-off-paychecks/4": () => ({ status: 200, data: null }),
+    });
+    renderApp("/income/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Q3 bonus" }));
+    await show(screen.getByRole("dialog", { name: "Edit Q3 bonus" }), "Delete");
+    await userEvent.click(screen.getByRole("button", { name: "Delete this paycheck…" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Delete Q3 bonus from Sep 30, 2026?");
+    await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));
+
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/income-sources/1/one-off-paychecks/4"));
+  });
+
+  it("shows a one-off among the upcoming paychecks by its name, without typing over its amount", async () => {
+    const bonus: Paycheck = { ...PAYCHECKS[0]!, scheduledDate: "2026-10-30", oneOffId: 4, name: "Q3 bonus", netCents: 131200 };
+    withIncome({ "GET /api/paychecks": () => ({ status: 200, data: [bonus, PAYCHECKS[0]!] }) });
+    renderApp("/income/1");
+
+    const upcoming = await screen.findByRole("region", { name: "Upcoming paychecks" });
+    const [first, second] = await within(upcoming).findAllByRole("listitem");
+    expect(first).toHaveTextContent("Q3 bonus · Northwind Health");
+    expect(within(first!).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(second!).getByRole("button", { name: /^Change the amount for Northwind Health,/ })).toBeInTheDocument();
   });
 });

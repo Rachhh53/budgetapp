@@ -10,7 +10,7 @@ export type StubSection = (typeof STUB_SECTIONS)[number];
 export type StubTracking = "gross" | "contribution" | "benefit" | "tax" | "net" | "match" | "ignore";
 
 /** What saving a stub is asked to change (decided 2026-10-12: asked each time). */
-export const STUB_APPLIES = ["correct", "pay_change", "paycheck", "none"] as const;
+export const STUB_APPLIES = ["correct", "pay_change", "paycheck", "one_off", "none"] as const;
 export type StubApply = (typeof STUB_APPLIES)[number];
 
 /** One line read from a stub. Amounts are whole cents; what is taken out is a positive amount. */
@@ -156,7 +156,9 @@ export function useChangeStub(stubId: number) {
 export function useSaveStub(stubId: number) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (apply: StubApply) => api.post<PayStub>(`/api/pay-stubs/${stubId}/save`, { apply }),
+    // `name` is for a one-off paycheck only; left out, it keeps the name it had, or is called Bonus.
+    mutationFn: ({ apply, name }: { apply: StubApply; name?: string }) =>
+      api.post<PayStub>(`/api/pay-stubs/${stubId}/save`, { apply, name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
   });
 }

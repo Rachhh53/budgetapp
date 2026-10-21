@@ -2,6 +2,7 @@ package app.budget.server.items;
 
 import app.budget.engine.cards.CardPayment;
 import app.budget.engine.items.Placement;
+import app.budget.engine.items.UsageBill;
 import app.budget.engine.schedule.Frequency;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.accounts.Account;
@@ -41,6 +42,12 @@ public final class ItemsRoutes {
 
     private static final int NAME_MAX = 80;
     static final int NOTE_MAX = 500;
+    /** The most sessions a pack paid ahead can have; the database holds it to the same. */
+    private static final int MAX_PACK_SESSIONS = 1000;
+    /** How many of an item's next dates its page lists, each to change just that once. */
+    private static final int UPCOMING_COUNT = 6;
+    /** Billed by use: at most 1,000 uses a week or a month, in hundredths. */
+    private static final long MAX_USES_HUNDREDTHS = 100_000;
     static final int CODE_MAX = 60;
     static final int CHECK_NUMBER_MAX = 20;
     private static final int MAX_TAGS = 20;
@@ -88,6 +95,9 @@ public final class ItemsRoutes {
         routes.put("/api/items/{id}/pause", this::pause);
         routes.delete("/api/items/{id}/pause", this::resume);
         routes.put("/api/items/{id}/occurrences/{scheduledDate}", this::editOccurrence);
+        routes.delete("/api/items/{id}/versions/{versionId}", this::removeVersion);
+        routes.get("/api/items/{id}/upcoming", ctx -> ApiResponse.ok(ctx, calendar.upcoming(
+                items.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound), UPCOMING_COUNT)));
     }
 
     /**
@@ -104,6 +114,16 @@ public final class ItemsRoutes {
      *                       so the amount sent means nothing. Left out, it stays as it was (fixed, when new).
      * @param billedLater    a bill: its schedule names visits that build up and are paid when an invoice for them
      *                       arrives (spec §4.6). Only for an amount per time, not a yearly total.
+     * @param paidAhead     a bill: its schedule names sessions that use up what was paid ahead for them (spec §4.6).
+     *                       Only for an amount per time, and never with {@code billedLater}.
+     * @param packSessions  paid ahead as a pack: how many sessions the amount (then the pack's price) buys. The next
+     *                       pack is planned as a bill. Left out for an amount per session.
+     * @param packSchedule  a pack paid on a schedule of its own (every 10 weeks, say). Left out, the next pack is due
+     *                       when the sessions use up the last (Rachel, 2026-10-20: "I want both options")
+     * @param usesHundredths billed by use (spec §4.6): about how many uses, in hundredths (2.5 is 250), the amount
+     *                       being the cost of each and the schedule monthly on the bill day, in the months it can
+     *                       happen in. Left out for any other bill.
+     * @param usesPer        billed by use: {@code week} or {@code month}, what the uses are counted per
      */
     public record ItemInput(
             String name,
@@ -126,7 +146,12 @@ public final class ItemsRoutes {
             Long saveUpBucketId,
             Long fromBucketId,
             String cardPaymentMode,
-            Boolean billedLater) {}
+            Boolean billedLater,
+            Boolean paidAhead,
+            Integer packSessions,
+            ItemScheduleDto packSchedule,
+            Long usesHundredths,
+            String usesPer) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -143,7 +168,8 @@ public final class ItemsRoutes {
             String confirmationCode,
             String note,
             Boolean skipped,
-            String checkNumber) {}
+            String checkNumber,
+            Long payFromAccountId) {}
 
     /**
      * An item as the API returns it: the version in force today, plus what it works out to.
@@ -161,6 +187,12 @@ public final class ItemsRoutes {
      * @param cardPaymentMode how much a card's own payment pays ({@code fixed}, {@code statement_balance},
      *                    {@code full_balance} or {@code minimum}); {@code null} for any other item
      * @param billedLater true when, today, its schedule names visits paid when an invoice arrives (spec §4.6)
+     * @param paidAhead   true when, today, its schedule names sessions paid for ahead (spec §4.6)
+     * @param packSessions paid ahead as a pack, today: how many sessions it buys; {@code null} otherwise
+     * @param packSchedule a pack paid on a schedule of its own, today: when each is paid; {@code null} otherwise
+     * @param usesHundredths billed by use, today: about how many uses, in hundredths; {@code null} otherwise. Its
+     *                    {@code perOccurrenceCents} is then a whole month of uses
+     * @param usesPer     billed by use, today: {@code week} or {@code month}; {@code null} otherwise
      */
     public record ItemView(
             long id,
@@ -193,7 +225,12 @@ public final class ItemsRoutes {
             Long paymentOfCardId,
             boolean followsCard,
             String cardPaymentMode,
-            boolean billedLater) {}
+            boolean billedLater,
+            boolean paidAhead,
+            Integer packSessions,
+            ItemScheduleDto packSchedule,
+            Long usesHundredths,
+            String usesPer) {}
 
     /** @param until the first day it runs again; left out to pause until it is turned back on */
     public record PauseInput(LocalDate until) {}
@@ -201,7 +238,8 @@ public final class ItemsRoutes {
     /** @param early true when it is paid from a period before the one it falls due in */
     public record Next(LocalDate scheduledDate, LocalDate dueDate, LocalDate periodStart, boolean early) {}
 
-    public record PricePoint(LocalDate effectiveFrom, long perOccurrenceCents, long perYearCents) {}
+    /** @param versionId the version it is, to remove it from the history */
+    public record PricePoint(long versionId, LocalDate effectiveFrom, long perOccurrenceCents, long perYearCents) {}
 
     public record Deleted(boolean deleted) {}
 
@@ -346,7 +384,8 @@ public final class ItemsRoutes {
         return new Terms(
                 0, AmountMode.PER_OCCURRENCE, true, terms.categoryId(), terms.payFromAccountId(), terms.payToAccountId(),
                 terms.autopay(), terms.placement(), terms.schedule(), terms.daysAfterPayday(), terms.bucketId(),
-                terms.saveUpBucketId(), terms.fromBucketId(), terms.billedLater());
+                terms.saveUpBucketId(), terms.fromBucketId(), terms.billedLater(), terms.paidAhead(), terms.packSessions(),
+                terms.packSchedule());
     }
 
     /**
@@ -431,8 +470,13 @@ public final class ItemsRoutes {
             throw ApiException.badRequest("Please choose the pay period from the list.");
         }
 
+        // Paid from another account just this once; the item's own account puts it back.
+        Long payFrom = input.payFromAccountId() == null ? null : payFromOnce(item, current, scheduledDate, input.payFromAccountId());
+        long paidFrom = payFrom != null ? payFrom
+                : input.payFromAccountId() != null ? item.versionOn(scheduledDate).terms().payFromAccountId() : current.payFromAccountId();
+
         // A check can only have been written on a checking account.
-        if (input.checkNumber() != null && !input.checkNumber().isBlank() && accounts.find(current.payFromAccountId())
+        if (input.checkNumber() != null && !input.checkNumber().isBlank() && accounts.find(paidFrom)
                 .filter(account -> account.type().equals(Inputs.code(AccountType.CHECKING)))
                 .isEmpty()) {
             throw ApiException.badRequest("A check number can be kept for something paid from a checking account.");
@@ -464,8 +508,38 @@ public final class ItemsRoutes {
                         : ledger.amountOf(id, scheduledDate).orElse(current.amountCents()),
                 input.checkNumber() == null
                         ? stored.checkNumber()
-                        : Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)));
+                        : Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX),
+                input.payFromAccountId() == null ? stored.payFromAccountId() : payFrom));
         ApiResponse.ok(ctx, calendar.find(item, scheduledDate).orElseThrow(ApiException::notFound));
+    }
+
+    /**
+     * The account one occurrence is paid from instead of its item's own (Rachel, 2026-10-20: "sometimes I need to just
+     * change the account its pay from as a one off"); {@code null} when it is the item's own, which puts it back.
+     */
+    private Long payFromOnce(Item item, Occurrence current, LocalDate scheduledDate, long accountId) {
+        if (item.kind() == ItemKind.BUCKET_MOVE) {
+            throw ApiException.badRequest("A bucket move stays in its bucket's account, so it can't be paid from another.");
+        }
+        Account from = accounts.find(accountId).filter(account -> !account.archived()).orElse(null);
+        if (from == null) {
+            throw ApiException.badRequest("Please choose the account this one is paid from.");
+        }
+        if (current.payToAccountId() != null && current.payToAccountId() == accountId) {
+            throw ApiException.badRequest("Please choose an account other than the one this goes to.");
+        }
+        return accountId == item.versionOn(scheduledDate).terms().payFromAccountId() ? null : accountId;
+    }
+
+    /** Removes one amount from an item's history; the one before it carries on. */
+    private void removeVersion(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        switch (items.removeVersion(id, Inputs.id(ctx, "versionId"))) {
+            case NOT_FOUND -> throw ApiException.notFound();
+            case LAST -> throw ApiException.conflict(
+                    "This is the only amount it has, so it stays. To change it, choose Change the amount.");
+            case DONE -> ApiResponse.ok(ctx, view(id));
+        }
     }
 
     private ItemView view(long id) {
@@ -533,7 +607,12 @@ public final class ItemsRoutes {
                 card == null ? null : (Long) card.accountId(),
                 card != null && card.paymentMode() != CardPayment.Mode.FIXED,
                 card == null ? null : Inputs.code(card.paymentMode()),
-                terms.billedLater());
+                terms.billedLater(),
+                terms.paidAhead(),
+                terms.paidAhead() ? terms.packSessions() : null,
+                terms.pack().isPresent() && terms.packSchedule() != null ? ItemScheduleDto.of(terms.packSchedule()) : null,
+                terms.billedByUse() ? terms.usage().hundredths() : null,
+                terms.billedByUse() ? Inputs.code(terms.usage().per()) : null);
     }
 
     /**
@@ -559,7 +638,7 @@ public final class ItemsRoutes {
 
     private PricePoint pricePoint(Version version) {
         Amounts amounts = calendar.amounts(version.terms());
-        return new PricePoint(version.effectiveFrom(), amounts.perOccurrenceCents(), amounts.perYearCents());
+        return new PricePoint(version.id(), version.effectiveFrom(), amounts.perOccurrenceCents(), amounts.perYearCents());
     }
 
     private static ItemKind kind(ItemInput input) {
@@ -661,10 +740,31 @@ public final class ItemsRoutes {
             throw ApiException.badRequest(
                     "Something billed later is added up visit by visit. Please enter what each visit costs, not a yearly total.");
         }
+        boolean paidAhead = kind == ItemKind.BILL && Boolean.TRUE.equals(input.paidAhead());
+        if (paidAhead && billedLater) {
+            throw ApiException.badRequest("Something can be paid ahead or billed later, not both. Please choose one.");
+        }
+        if (paidAhead && mode == AmountMode.ANNUAL) {
+            throw ApiException.badRequest(
+                    "Something paid ahead is used up session by session. Please enter what each session costs, not a yearly total.");
+        }
+        Integer packSessions = paidAhead ? input.packSessions() : null;
+        if (packSessions != null && (packSessions < 1 || packSessions > MAX_PACK_SESSIONS)) {
+            throw ApiException.badRequest("Please enter how many sessions the pack has, from 1 to " + MAX_PACK_SESSIONS + ".");
+        }
+        if (packSessions != null && amount == 0) {
+            throw ApiException.badRequest("Please enter what the pack costs, more than $0.00.");
+        }
+        UsageBill.Usage usage = kind == ItemKind.BILL ? usage(input, mode, amount, schedule, billedLater || paidAhead) : null;
+        // Only a pack has packs to schedule; anything else drops a schedule sent for them.
+        ScheduleRule packSchedule = packSessions == null || input.packSchedule() == null
+                ? null
+                : packSchedule(input.packSchedule());
         return new Terms(
                 amount,
                 mode,
-                Boolean.TRUE.equals(input.estimate()),
+                // Billed by use is always an estimate until the real bill is typed over it.
+                usage != null || Boolean.TRUE.equals(input.estimate()),
                 input.categoryId(),
                 from.id(),
                 payTo,
@@ -677,7 +777,45 @@ public final class ItemsRoutes {
                 bucketId,
                 saveUpBucketId,
                 fromBucketId,
-                billedLater);
+                billedLater,
+                paidAhead,
+                packSessions,
+                packSchedule,
+                usage);
+    }
+
+    /**
+     * Billed by use, checked (spec §4.6): about how many uses a week or a month, at what each costs, billed
+     * monthly. {@code null} when it isn't sent, as for any other bill.
+     */
+    private static UsageBill.Usage usage(ItemInput input, AmountMode mode, long amount, ScheduleRule schedule, boolean otherWay) {
+        if (input.usesHundredths() == null) {
+            return null;
+        }
+        if (otherWay) {
+            throw ApiException.badRequest(
+                    "Something billed by use can't also be billed later or paid ahead. Please choose one way it's charged.");
+        }
+        if (mode == AmountMode.ANNUAL || amount == 0) {
+            throw ApiException.badRequest("Please enter what each time costs, more than $0.00.");
+        }
+        if (input.usesHundredths() <= 0 || input.usesHundredths() > MAX_USES_HUNDREDTHS) {
+            throw ApiException.badRequest("Please enter about how many times, more than 0 and up to 1,000.");
+        }
+        UsageBill.Per per = Inputs.choice(UsageBill.Per.class, input.usesPer(), "whether that's a week or a month");
+        if (schedule.frequency() != Frequency.MONTHLY || schedule.interval() != 1) {
+            throw ApiException.badRequest("Something billed by use is billed once a month. Please choose Monthly and the day it's due.");
+        }
+        return new UsageBill.Usage(input.usesHundredths(), per);
+    }
+
+    /** A pack's own schedule, checked: it has to repeat, and on dates of its own rather than paydays. */
+    private static ScheduleRule packSchedule(ItemScheduleDto sent) {
+        ScheduleRule rule = sent.toRule();
+        if (rule.frequency() == Frequency.EVERY_PAY_PERIOD || rule.frequency() == Frequency.ONE_TIME) {
+            throw ApiException.badRequest("Please choose how often a pack is paid, such as every 10 weeks or every 3 months.");
+        }
+        return rule;
     }
 
     /** One of the user's open buckets, or {@code message} when it is missing, unknown or archived. */

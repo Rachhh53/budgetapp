@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { type Paycheck, useEditPaycheck, usePaychecks } from "../../api/income";
+import { type Paycheck, paycheckKey, useEditPaycheck, usePaychecks } from "../../api/income";
 import { formatDay, formatWeekdayDay } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { Amount, EstimateKey } from "../Amount";
@@ -36,7 +36,7 @@ export function UpcomingPaychecks({ sourceId }: { /** Only this source's paychec
         <>
           <ul className="divide-y divide-line">
             {upcoming.map((paycheck) => (
-              <PaycheckRow key={`${paycheck.incomeSourceId}-${paycheck.scheduledDate}`} paycheck={paycheck} />
+              <PaycheckRow key={paycheckKey(paycheck)} paycheck={paycheck} />
             ))}
           </ul>
           <div className="mt-3 space-y-1">
@@ -56,7 +56,9 @@ function PaycheckRow({ paycheck }: { paycheck: Paycheck }) {
   const [problem, setProblem] = useState<string>();
 
   const reason = movedReason(paycheck);
-  const description = `${paycheck.sourceName}, ${formatDay(paycheck.payDate)}`;
+  // A one-off goes by its own name, with its source.
+  const shownName = paycheck.name === null ? paycheck.sourceName : `${paycheck.name} · ${paycheck.sourceName}`;
+  const description = `${shownName}, ${formatDay(paycheck.payDate)}`;
 
   const start = () => {
     setText(centsToInput(paycheck.netCents));
@@ -83,8 +85,10 @@ function PaycheckRow({ paycheck }: { paycheck: Paycheck }) {
           {reason && <p className="text-sm text-muted">{reason}</p>}
         </div>
         {/* Wraps rather than truncates, so the whole name stays readable on a phone. */}
-        <p className="min-w-0 flex-1 wrap-anywhere">{paycheck.sourceName}</p>
-        {!editing && (
+        <p className="min-w-0 flex-1 wrap-anywhere">{shownName}</p>
+        {/* A one-off is changed on its own form, from the income source; only a scheduled paycheck is typed over here. */}
+        {paycheck.oneOffId !== null && <Amount cents={paycheck.netCents} className="shrink-0 font-semibold" />}
+        {paycheck.oneOffId === null && !editing && (
           <button
             type="button"
             onClick={start}

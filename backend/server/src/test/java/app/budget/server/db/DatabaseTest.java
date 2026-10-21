@@ -4,17 +4,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.sql.Connection;
+import java.sql.Statement;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.sqlite.SQLiteConfig;
+import org.sqlite.SQLiteDataSource;
 
 class DatabaseTest {
 
@@ -191,6 +197,79 @@ class DatabaseTest {
                 "1 2026-10-09 45000 from 1 to 2",
                 // A bill names nowhere by its nature and is left alone.
                 "2 2026-01-01 90000 from 1 to nowhere");
+    }
+
+    @Test
+    void rebuildingPayStubsForOneOffPaychecksKeepsEveryStubAndItsLines() throws Exception {
+        // A database as it stood before V26, with foreign keys on as the app runs them: one saved
+        // stub with two lines. Dropping pay_stubs carelessly would take the lines with it (ON DELETE CASCADE).
+        SQLiteConfig config = new SQLiteConfig();
+        config.enforceForeignKeys(true);
+        SQLiteDataSource before = new SQLiteDataSource(config);
+        before.setUrl("jdbc:sqlite:" + dataDir.resolve(Database.DB_FILE).toAbsolutePath());
+        Flyway.configure().dataSource(before).locations(MIGRATIONS).target("25").load().migrate();
+        try (Connection connection = before.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("INSERT INTO accounts (id, name, type, color, created_at) VALUES (1, 'Checking', 'checking', '#0f766e', 'now')");
+            statement.execute("INSERT INTO schedule_rules (id, frequency, interval, day_1, start_date, weekend_rule)"
+                    + " VALUES (1, 'monthly', 1, 1, '2026-01-01', 'none')");
+            statement.execute("INSERT INTO income_sources (id, name, deposit_account_id, net_amount, net_is_estimate, schedule_rule_id,"
+                    + " is_primary, created_at) VALUES (1, 'Northwind Health', 1, 248620, 0, 1, 1, 'now')");
+            statement.execute("INSERT INTO files (id, hash, mime, size, created_at) VALUES (1, '" + "a".repeat(64) + "', 'application/pdf', 10, 'now')");
+            statement.execute("INSERT INTO pay_stubs (id, income_source_id, file_id, name, pay_date, status, applied, created_at)"
+                    + " VALUES (7, 1, 1, 'stub.pdf', '2026-10-01', 'saved', 'correct', 'now')");
+            statement.execute("INSERT INTO pay_stub_lines (pay_stub_id, position, section, label, amount, maps_to, sure)"
+                    + " VALUES (7, 0, 'earnings', 'Regular', 360000, 'gross', 1), (7, 1, 'net', 'Net pay', 248620, 'net', 0)");
+        }
+
+        Database database = track(Database.open(dataDir, CLOCK, MIGRATIONS));
+
+        database.jdbi().useHandle(handle -> {
+            assertThat(handle.createQuery("SELECT name || ' ' || applied FROM pay_stubs").mapTo(String.class).list())
+                    .containsExactly("stub.pdf correct");
+            assertThat(handle.createQuery("SELECT label || ' ' || amount || ' ' || sure FROM pay_stub_lines ORDER BY position")
+                            .mapTo(String.class)
+                            .list())
+                    .containsExactly("Regular 360000 1", "Net pay 248620 0");
+            // Every reference still holds, and the lines follow the rebuilt table, not one that is gone.
+            assertThat(handle.createQuery("PRAGMA foreign_key_check").mapToMap().list()).isEmpty();
+            assertThat(handle.createQuery("SELECT sql FROM sqlite_master WHERE name = 'pay_stub_lines'").mapTo(String.class).one())
+                    .contains("REFERENCES \"pay_stubs\"")
+                    .doesNotContain("rebuilt");
+            // The new choice is allowed, and removing a stub still takes its lines.
+            handle.execute("UPDATE pay_stubs SET applied = 'one_off' WHERE id = 7");
+            handle.execute("DELETE FROM pay_stubs WHERE id = 7");
+            assertThat(handle.createQuery("SELECT count(*) FROM pay_stub_lines").mapTo(Integer.class).one()).isZero();
+        });
+    }
+
+    @Test
+    void aDatabaseLeftAtPaidAheadUpgradesToPacks() throws Exception {
+        // What the 2026-10-19 19:30 installer left on Rachel's PC: everything up to V28, which then had no
+        // pack column. Adding it to V28 afterwards stopped the app starting (checksum mismatch); it is V30.
+        SQLiteDataSource before = new SQLiteDataSource();
+        before.setUrl("jdbc:sqlite:" + dataDir.resolve(Database.DB_FILE).toAbsolutePath());
+        Flyway.configure().dataSource(before).locations(MIGRATIONS).target("28").load().migrate();
+
+        Database database = track(Database.open(dataDir, CLOCK, MIGRATIONS));
+
+        database.jdbi().useHandle(handle -> {
+            assertThat(handle.createQuery("SELECT max(CAST(version AS INTEGER)) FROM flyway_schema_history WHERE success = 1")
+                    .mapTo(Integer.class).one()).isGreaterThanOrEqualTo(30);
+            assertThat(handle.createQuery("SELECT name FROM pragma_table_info('item_versions')").mapTo(String.class).list())
+                    .contains("paid_ahead", "pack_sessions");
+        });
+    }
+
+    @Test
+    void paidAheadKeepsTheChecksumInstalledDatabasesHave() {
+        // Applied on a real database (Budget's log, 2026-10-19); any change to V28 would stop that app starting.
+        SQLiteDataSource fresh = new SQLiteDataSource();
+        fresh.setUrl("jdbc:sqlite:" + dataDir.resolve(Database.DB_FILE).toAbsolutePath());
+        Integer checksum = Arrays.stream(Flyway.configure().dataSource(fresh).locations(MIGRATIONS).load().info().all())
+                .filter(migration -> migration.getVersion() != null && "28".equals(migration.getVersion().getVersion()))
+                .findFirst().orElseThrow().getChecksum();
+
+        assertThat(checksum).isEqualTo(-954876762);
     }
 
     private static String pragma(Database database, String name) {

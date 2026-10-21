@@ -7,13 +7,51 @@ import app.budget.engine.items.AnnualAmount.PerYear;
 import app.budget.engine.schedule.Frequency;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.engine.schedule.WeekendRule;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.Month;
+import java.util.EnumSet;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class AnnualAmountTest {
 
     private static final LocalDate START = LocalDate.of(2026, 1, 1);
+
+    @Test
+    void aYearlyTotalIsSpreadOverTheSeasonsDatesAlone() {
+        // $900 of plowing a winter, weekly November through March: 52 × 5 / 12 ≈ 21.67 times.
+        ScheduleRule plowing = ScheduleRule.weekly(START, WeekendRule.NONE)
+                .inMonths(EnumSet.of(Month.NOVEMBER, Month.DECEMBER, Month.JANUARY, Month.FEBRUARY, Month.MARCH));
+
+        PerYear perYear = AnnualAmount.perYear(plowing, null, 2026);
+
+        assertThat(AnnualAmount.perOccurrence(Money.ofCents(90000), perYear)).isEqualTo(Money.ofCents(4154));
+        assertThat(AnnualAmount.yearly(Money.ofCents(4154), perYear)).isEqualTo(Money.ofCents(90003));
+    }
+
+    @Test
+    void everyTenWeeksIsAFifthOfTheWeeklyCount() {
+        ScheduleRule everyTenWeeks = new ScheduleRule(Frequency.WEEKLY, 10, null, null, null, START, null, WeekendRule.NONE, List.of());
+
+        assertThat(AnnualAmount.perYear(everyTenWeeks, null, 2026)).isEqualTo(new PerYear(52, 10));
+        // 52 ÷ 10 = 5.2 packs of $1,275.00 a year.
+        assertThat(AnnualAmount.yearly(Money.ofCents(127500), AnnualAmount.perYear(everyTenWeeks, null, 2026))).isEqualTo(Money.ofCents(663000));
+    }
+
+    @Test
+    void twiceAWeekIs104TimesAYear() {
+        ScheduleRule twice = ScheduleRule.weekly(START, WeekendRule.NONE).onWeekdays(EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.THURSDAY));
+
+        assertThat(AnnualAmount.yearly(Money.ofCents(6375), AnnualAmount.perYear(twice, null, 2026))).isEqualTo(Money.ofCents(663000));
+    }
+
+    @Test
+    void aSeasonalMonthlyBudgetCountsOnlyItsMonths() {
+        ScheduleRule summer = ScheduleRule.monthly(1, START, WeekendRule.NONE).inMonths(EnumSet.of(Month.JUNE, Month.JULY, Month.AUGUST));
+
+        assertThat(AnnualAmount.perOccurrence(Money.ofCents(60000), AnnualAmount.perYear(summer, null, 2026))).isEqualTo(Money.ofCents(20000));
+    }
 
     @Test
     void aYearlyBillIsItsWholeAnnualAmount() {

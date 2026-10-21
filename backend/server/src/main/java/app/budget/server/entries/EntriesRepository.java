@@ -296,6 +296,9 @@ public final class EntriesRepository {
         handle.createUpdate("UPDATE entries SET reimburses_entry_id = NULL WHERE reimburses_entry_id = :id")
                 .bind("id", expenseId)
                 .execute();
+        handle.createUpdate("UPDATE bucket_changes SET reimburses_entry_id = NULL WHERE reimburses_entry_id = :id")
+                .bind("id", expenseId)
+                .execute();
     }
 
     /** An expense's amount and status, for {@link #settle}. */
@@ -305,6 +308,11 @@ public final class EntriesRepository {
      * Moves an expense's status forward to match the money that has come back for it: reimbursed once
      * all of it is covered, at least submitted once any of it is. Never moves it back.
      */
+    /** {@link #settle} for money that came back from elsewhere: a move out of a bucket that pays it back. */
+    public void settle(Long expenseId) {
+        jdbi.useTransaction(handle -> settle(handle, expenseId));
+    }
+
     private static void settle(Handle handle, Long expenseId) {
         if (expenseId == null) {
             return;
@@ -325,8 +333,15 @@ public final class EntriesRepository {
                 });
     }
 
+    /**
+     * What came back for an expense: money coming in that pays it back, and money moved out of a bucket to pay
+     * yourself back for it (stored as a negative change, so taken away to count it up).
+     */
     private static long paidBack(Handle handle, long expenseId) {
-        return handle.createQuery("SELECT coalesce(sum(amount), 0) FROM entries WHERE reimburses_entry_id = :id")
+        return handle.createQuery("""
+                        SELECT coalesce((SELECT sum(amount) FROM entries WHERE reimburses_entry_id = :id), 0)
+                             - coalesce((SELECT sum(amount) FROM bucket_changes WHERE reimburses_entry_id = :id), 0)
+                        """)
                 .bind("id", expenseId)
                 .mapTo(Long.class)
                 .one();

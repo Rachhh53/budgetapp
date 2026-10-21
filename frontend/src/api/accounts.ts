@@ -120,6 +120,21 @@ export interface AccountPerformance {
   thisYear: YearSoFar | null;
   /** Every balance entered, newest first. */
   balances: BalanceChange[];
+  /** `null` for anything but an investment, or one with fewer than two balances entered. */
+  actualGrowth: ActualGrowth | null;
+}
+
+/**
+ * What an investment really grew by from the first balance entered to the latest, beside what its
+ * assumed growth added over the same days (spec §5.5). Only ever from balances that were entered.
+ */
+export interface ActualGrowth {
+  from: string;
+  to: string;
+  growthCents: number;
+  assumedCents: number;
+  /** The growth as a rate a year; `null` when the balances are under three months apart. */
+  yearlyRateBp: number | null;
 }
 
 export const ACCOUNTS_KEY = ["accounts"] as const;

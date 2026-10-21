@@ -348,9 +348,13 @@ class ApiTest {
     class Headers {
         @Test
         void everyResponseCarriesAStrictContentSecurityPolicy() throws Exception {
-            var response = java.net.http.HttpClient.newHttpClient().send(
-                    java.net.http.HttpRequest.newBuilder(server.uri("/api/health")).build(),
-                    java.net.http.HttpResponse.BodyHandlers.discarding());
+            java.net.http.HttpResponse<Void> response;
+            // Closed straight away: an open client holds a thread the rest of the suite needs (see TestServer.close).
+            try (var client = java.net.http.HttpClient.newHttpClient()) {
+                response = client.send(
+                        java.net.http.HttpRequest.newBuilder(server.uri("/api/health")).build(),
+                        java.net.http.HttpResponse.BodyHandlers.discarding());
+            }
 
             assertThat(response.headers().firstValue("Content-Security-Policy"))
                     .hasValueSatisfying(csp -> assertThat(csp).contains("default-src 'self'").doesNotContain("http"));

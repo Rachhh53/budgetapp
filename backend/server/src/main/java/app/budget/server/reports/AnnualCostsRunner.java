@@ -95,8 +95,12 @@ public final class AnnualCostsRunner {
         // The newest occurrence seen of each item says what it is called and filed under now.
         Map<Long, Occurrence> latest = new HashMap<>();
         // Visits not billed yet count as still to come, at what each costs (spec §4.6); an invoice counts once it is entered.
-        ItemCalendar.Expansion expansion = calendar.expand(windows.getFirst().from(), windows.getLast().to());
-        for (Occurrence occurrence : withNotYetBilled(expansion)) {
+        // Paid ahead counts what was paid, on the day it was, and the sessions nothing paid covers yet.
+        LocalDate from = windows.getFirst().from();
+        LocalDate to = windows.getLast().to();
+        List<Occurrence> all = withNotYetBilled(calendar.expand(from, to));
+        all.addAll(calendar.paidAheadCosts(from, to));
+        for (Occurrence occurrence : all) {
             if (!counts(occurrence)) {
                 continue;
             }
@@ -163,7 +167,9 @@ public final class AnnualCostsRunner {
         LocalDate from = LocalDate.of(today.getYear() - 1, 1, 1);
         LocalDate to = LocalDate.of(today.getYear(), 12, 31);
         List<Line> lines = new ArrayList<>();
-        for (Occurrence occurrence : withNotYetBilled(calendar.expand(List.of(item), from, to))) {
+        List<Occurrence> all = withNotYetBilled(calendar.expand(List.of(item), from, to));
+        all.addAll(calendar.paidAheadCosts(List.of(item), from, to));
+        for (Occurrence occurrence : all) {
             if (counts(occurrence) && !date(occurrence).isBefore(from) && !date(occurrence).isAfter(to)) {
                 lines.add(new Line(item.id(), date(occurrence), Money.ofCents(occurrence.amountCents())));
             }

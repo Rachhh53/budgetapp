@@ -165,6 +165,191 @@ public final class CardsRepository {
                 .execute()) > 0;
     }
 
+    /**
+     * Each card's cash-back rate in basis points (spec §5.6, migration V33), for every card that has one.
+     * Kept beside the settings like the minimum rule: saving the card's dates leaves it as it is.
+     */
+    public Map<Long, Integer> rewardsRates() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT account_id, rewards_bp FROM card_settings WHERE rewards_bp IS NOT NULL")
+                .map((rs, ctx) -> Map.entry(rs.getLong("account_id"), rs.getInt("rewards_bp")))
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+    }
+
+    /**
+     * Sets a card's cash-back rate, or with {@code null} takes its rewards away.
+     *
+     * @return false when the card has no settings yet, so there was nothing to change
+     */
+    public boolean saveRewardsRate(long accountId, Integer rateBp) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("UPDATE card_settings SET rewards_bp = :rateBp WHERE account_id = :accountId")
+                .bind("accountId", accountId)
+                .bind("rateBp", rateBp)
+                .execute()) > 0;
+    }
+
+    /**
+     * How a card's rewards are used once they build up (migration V35). Only cards whose rewards build up have one.
+     *
+     * @param yearlyMonth    all built up goes on at the statement closing in this month every year; {@code null} for no such rule
+     * @param thresholdCents all built up goes on once at least this has built up; {@code null} for no such rule
+     * @param startCents     what had built up on {@code startDate}; {@code null} with it, to start from nothing
+     */
+    public record BuildUp(Integer yearlyMonth, Long thresholdCents, Long startCents, LocalDate startDate) {}
+
+    /** Every card whose rewards build up instead of coming off each statement, by card. */
+    public Map<Long, BuildUp> rewardsBuildUps() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        SELECT account_id, rewards_yearly_month, rewards_threshold_cents, rewards_start_cents, rewards_start_date
+                        FROM card_settings WHERE rewards_build_up = 1
+                        """)
+                .map((rs, ctx) -> {
+                    int month = rs.getInt("rewards_yearly_month");
+                    Integer yearlyMonth = rs.wasNull() ? null : month;
+                    long threshold = rs.getLong("rewards_threshold_cents");
+                    Long thresholdCents = rs.wasNull() ? null : threshold;
+                    long start = rs.getLong("rewards_start_cents");
+                    Long startCents = rs.wasNull() ? null : start;
+                    String startDate = rs.getString("rewards_start_date");
+                    return Map.entry(rs.getLong("account_id"),
+                            new BuildUp(yearlyMonth, thresholdCents, startCents, startDate == null ? null : LocalDate.parse(startDate)));
+                })
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+    }
+
+    /**
+     * Sets how a card's rewards are used: with {@code buildUp}, they build up; with {@code null}, they come off each statement.
+     *
+     * @return false when the card has no settings yet
+     */
+    public boolean saveRewardsBuildUp(long accountId, BuildUp buildUp) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("""
+                        UPDATE card_settings SET rewards_build_up = :on, rewards_yearly_month = :month,
+                            rewards_threshold_cents = :threshold, rewards_start_cents = :startCents, rewards_start_date = :startDate
+                        WHERE account_id = :accountId
+                        """)
+                .bind("accountId", accountId)
+                .bind("on", buildUp == null ? 0 : 1)
+                .bind("month", buildUp == null ? null : buildUp.yearlyMonth())
+                .bind("threshold", buildUp == null ? null : buildUp.thresholdCents())
+                .bind("startCents", buildUp == null ? null : buildUp.startCents())
+                .bind("startDate", buildUp == null || buildUp.startDate() == null ? null : buildUp.startDate().toString())
+                .execute()) > 0;
+    }
+
+    /**
+     * A statement credit asked for from built-up rewards.
+     *
+     * @param amountCents {@code null} for everything built up by then
+     */
+    public record Redemption(long id, long accountId, LocalDate date, Long amountCents, String note) {}
+
+    /** Every card's redemptions, by card, earliest first. */
+    public Map<Long, List<Redemption>> allRedemptions() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT id, account_id, date, amount_cents, note FROM card_reward_redemptions ORDER BY date, id")
+                .map((rs, ctx) -> {
+                    long amount = rs.getLong("amount_cents");
+                    Long amountCents = rs.wasNull() ? null : amount;
+                    return new Redemption(rs.getLong("id"), rs.getLong("account_id"), LocalDate.parse(rs.getString("date")), amountCents,
+                            rs.getString("note"));
+                })
+                .stream()
+                .collect(Collectors.groupingBy(Redemption::accountId)));
+    }
+
+    public Optional<Redemption> findRedemption(long accountId, long id) {
+        return Optional.ofNullable(allRedemptions().getOrDefault(accountId, List.of()).stream()
+                .filter(redemption -> redemption.id() == id)
+                .findFirst()
+                .orElse(null));
+    }
+
+    public long addRedemption(long accountId, LocalDate date, Long amountCents, String note) {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        INSERT INTO card_reward_redemptions (account_id, date, amount_cents, note) VALUES (:accountId, :date, :amount, :note)
+                        RETURNING id
+                        """)
+                .bind("accountId", accountId)
+                .bind("date", date.toString())
+                .bind("amount", amountCents)
+                .bind("note", note)
+                .mapTo(Long.class)
+                .one());
+    }
+
+    public void updateRedemption(long accountId, long id, LocalDate date, Long amountCents, String note) {
+        jdbi.useHandle(handle -> handle
+                .createUpdate("""
+                        UPDATE card_reward_redemptions SET date = :date, amount_cents = :amount, note = :note
+                        WHERE id = :id AND account_id = :accountId
+                        """)
+                .bind("accountId", accountId)
+                .bind("id", id)
+                .bind("date", date.toString())
+                .bind("amount", amountCents)
+                .bind("note", note)
+                .execute());
+    }
+
+    /** False when there was no such redemption on the card. */
+    public boolean deleteRedemption(long accountId, long id) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("DELETE FROM card_reward_redemptions WHERE id = :id AND account_id = :accountId")
+                .bind("accountId", accountId)
+                .bind("id", id)
+                .execute()) > 0;
+    }
+
+    /**
+     * A statement's rewards typed over the estimate.
+     *
+     * @param closeDate      the projected close they are added on
+     * @param estimatedCents what was estimated when it was first typed over
+     */
+    public record TypedRewards(LocalDate closeDate, long amountCents, long estimatedCents) {}
+
+    /** Every month of rewards typed over, by card and then by close date. */
+    public Map<Long, Map<LocalDate, TypedRewards>> allTypedRewards() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT account_id, close_date, amount, estimated_amount FROM card_reward_overrides")
+                .map((rs, ctx) -> Map.entry(rs.getLong("account_id"), new TypedRewards(
+                        LocalDate.parse(rs.getString("close_date")), rs.getLong("amount"), rs.getLong("estimated_amount"))))
+                .stream()
+                .collect(Collectors.groupingBy(
+                        Map.Entry::getKey, Collectors.toMap(entry -> entry.getValue().closeDate(), Map.Entry::getValue))));
+    }
+
+    /** Types over one statement's rewards. What was estimated is only stored the first time. */
+    public void saveTypedRewards(long accountId, LocalDate closeDate, long amountCents, long estimatedCents) {
+        jdbi.useHandle(handle -> handle
+                .createUpdate("""
+                        INSERT INTO card_reward_overrides (account_id, close_date, amount, estimated_amount)
+                        VALUES (:accountId, :closeDate, :amount, :estimated)
+                        ON CONFLICT (account_id, close_date) DO UPDATE SET amount = excluded.amount
+                        """)
+                .bind("accountId", accountId)
+                .bind("closeDate", closeDate.toString())
+                .bind("amount", amountCents)
+                .bind("estimated", estimatedCents)
+                .execute());
+    }
+
+    /** Puts the estimate back. False when nothing was typed over on that close. */
+    public boolean deleteTypedRewards(long accountId, LocalDate closeDate) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("DELETE FROM card_reward_overrides WHERE account_id = :accountId AND close_date = :closeDate")
+                .bind("accountId", accountId)
+                .bind("closeDate", closeDate.toString())
+                .execute()) > 0;
+    }
+
     public void saveSettings(Settings settings) {
         jdbi.useHandle(handle -> handle
                 .createUpdate("""

@@ -8,6 +8,7 @@ import app.budget.engine.schedule.PayPeriod;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -130,14 +131,16 @@ public final class BalanceProjector {
                 continue;
             }
             Money balance = rolledForward(anchor, day, applied);
-            Money amount = SavingsInterest.forMonth(balance, apy.get());
-            if (amount.isZero()) {
+            // An amount typed over the estimate simply becomes the amount, zero included, so it stays listed to change back.
+            Optional<Money> typed = terms.typedOn(day);
+            Money amount = typed.orElseGet(() -> SavingsInterest.forMonth(balance, apy.get()));
+            if (amount.isZero() && typed.isEmpty()) {
                 continue;
             }
             if (!inEnteredBalance) {
                 applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
             }
-            credits.add(new InterestCredit(day, amount, balance, apy.get(), inEnteredBalance));
+            credits.add(new InterestCredit(day, amount, balance, apy.get(), inEnteredBalance, typed.isPresent()));
         }
         return credits;
     }
@@ -154,6 +157,11 @@ public final class BalanceProjector {
      *
      * <p>A balance the user entered already holds whatever the account really did up to that
      * day, so nothing is added on that day, and what was being carried is dropped.
+     *
+     * <p>A month whose growth was typed over grows by exactly that: nothing a day, and the whole
+     * amount on its last day (Rachel, 2026-10-19: a month is one line in the account's
+     * transactions, so a month is what is typed over). A balance entered on that last day
+     * already holds it.
      */
     private static List<InterestCredit> growDaily(
             InterestTerms terms, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied, LocalDate through) {
@@ -163,7 +171,21 @@ public final class BalanceProjector {
         BigDecimal carriedCents = BigDecimal.ZERO;
         for (LocalDate day = entered.firstKey(); !day.isAfter(through); day = day.plusDays(1)) {
             Money anchored = entered.get(day);
-            if (anchored != null) {
+            Optional<Money> typedMonth = terms.typedFor(YearMonth.from(day));
+            if (typedMonth.isPresent()) {
+                if (anchored != null) {
+                    running = anchored;
+                }
+                carriedCents = BigDecimal.ZERO;
+                if (day.equals(YearMonth.from(day).atEndOfMonth())) {
+                    Money amount = typedMonth.get();
+                    if (anchored == null) {
+                        applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
+                    }
+                    credits.add(new InterestCredit(
+                            day, amount, running, terms.rateOn(day).orElse(BasisPoints.of(0)), anchored != null, true));
+                }
+            } else if (anchored != null) {
                 running = anchored;
                 carriedCents = BigDecimal.ZERO;
             } else {

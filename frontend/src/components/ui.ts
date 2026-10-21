@@ -43,3 +43,14 @@ export const DETAIL_HEADER =
  */
 export const ROW_LINK =
   "-mx-2 flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg px-2 py-3 hover:bg-bg/60";
+
+/**
+ * Every chart's hover box: the card's surface with the page's own text color for the heading and
+ * every line. Left to itself, recharts writes each line in the series' color or near-black, which
+ * was unreadable on the dark theme's surface (Rachel, 2026-10-20).
+ */
+export const CHART_TOOLTIP = {
+  contentStyle: { backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" },
+  labelStyle: { color: "var(--text)", fontWeight: 600 },
+  itemStyle: { color: "var(--text)" },
+} as const;
