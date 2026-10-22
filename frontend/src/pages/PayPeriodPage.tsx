@@ -26,6 +26,7 @@ import {
 import { AddItemButton, useAddItem } from "../components/add/AddItem";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
+import { FilterPills } from "../components/FilterPills";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { HideAmountsButton } from "../components/HideAmounts";
 import { FIND_PARAM, PeriodSearch } from "../components/period/PeriodSearch";
@@ -102,6 +103,9 @@ export function PayPeriodPage() {
   }, [detail, setPeriod]);
 
   const [editingOccurrence, setEditingOccurrence] = useState<Occurrence>();
+  // Narrows what goes out to what one account pays (Rachel, 2026-10-22: "make filters on the pay period page so I can
+  // sort or filter by account it was paid out of - they're all mixed in now").
+  const [paidFrom, setPaidFrom] = useState<number | null>(null);
 
   const failure =
     upcoming.error ?? period.error ?? accounts.error ?? categories.error ?? tags.error ?? items.error ?? buckets.error;
@@ -127,7 +131,25 @@ export function PayPeriodPage() {
     );
   }
 
-  const lists = sortIntoLists(detail);
+  const all = sortIntoLists(detail);
+  // Every account something goes out of this period, in the order of the Accounts screen.
+  const paidFromIds = new Set([
+    ...[...all.manual, ...all.auto, ...all.budgets, ...detail.carriedOver].map((occurrence) => occurrence.payFromAccountId),
+    ...all.oneOffs.map((entry) => entry.accountId),
+  ]);
+  const paidFromChoices = accounts.data
+    .filter((account) => paidFromIds.has(account.id))
+    .map((account) => ({ value: account.id, label: account.name }));
+  // An account chosen in another period may not pay anything in this one: then it narrows nothing.
+  const from = paidFromChoices.some((choice) => choice.value === paidFrom) ? paidFrom : null;
+  const fromIt = (occurrence: Occurrence) => from === null || occurrence.payFromAccountId === from;
+  const lists: Lists = {
+    ...all,
+    manual: all.manual.filter(fromIt),
+    auto: all.auto.filter(fromIt),
+    budgets: all.budgets.filter(fromIt),
+    oneOffs: all.oneOffs.filter((entry) => from === null || entry.accountId === from),
+  };
   const primary = detail.accounts.find((account) => account.accountId === detail.primaryAccountId);
   const primaryAccount = accounts.data.find((account) => account.id === detail.primaryAccountId);
   const anyEstimate =
@@ -207,7 +229,8 @@ export function PayPeriodPage() {
 
       <PeriodStrip periods={stripAround(nearby, at)} selected={detail.start} />
 
-      <PastDue bills={pastDue([...detail.carriedOver, ...lists.manual])} />
+      {/* Past due stays whole whatever is chosen below: nothing overdue is hidden by a filter. */}
+      <PastDue bills={pastDue([...detail.carriedOver, ...all.manual])} />
 
       {primary && primaryAccount ? (
         <Figures balance={primary} account={primaryAccount} detail={detail} />
@@ -233,6 +256,10 @@ export function PayPeriodPage() {
       {/* Income with what is paid by hand under it, auto-pay in the middle, and the accounts with the budgets
           beside them (Rachel, 2026-10-20: "swap pay manually with auto-pay card and move budgets card to under
           accounts and buckets"), so the first column no longer has to scroll. */}
+      {paidFromChoices.length > 1 && (
+        <FilterPills label="Show what is paid from" name="Paid from" choices={paidFromChoices} value={from} onChange={setPaidFrom} />
+      )}
+
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         <div className="flex flex-col gap-3">
           {/* An investment's assumed growth is not income: it shows on that account's own tab instead. */}
@@ -247,10 +274,10 @@ export function PayPeriodPage() {
           <div className="order-first flex flex-col lg:order-none lg:flex-1">
             <ManualPanel
               occurrences={lists.manual}
-              carriedOver={detail.carriedOver}
+              carriedOver={detail.carriedOver.filter(fromIt)}
               oneOffs={lists.oneOffs}
-              unbilled={detail.unbilled ?? []}
-              runningOut={detail.paidAheadRunningOut ?? []}
+              unbilled={(detail.unbilled ?? []).filter((unbilled) => from === null || unbilled.payFromAccountId === from)}
+              runningOut={(detail.paidAheadRunningOut ?? []).filter((running) => from === null || running.payFromAccountId === from)}
               context={context}
             />
           </div>

@@ -1892,3 +1892,33 @@ describe("pay period screen: paid ahead", () => {
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/12/paid-ahead/packs/2026-10-12")).toEqual([{ date: "2026-10-16" }]));
   });
 });
+
+describe("pay period screen: paid from", () => {
+  // Rachel, 2026-10-22: "make filters on the pay period page so I can sort or filter by account it was paid out of".
+  const TWO_ACCOUNTS: PeriodDetail = { ...OCTOBER, occurrences: [{ ...ELECTRIC, payFromAccountId: 2 }, VISA_PAYMENT, CAR_LOAN, GROCERIES] };
+
+  it("narrows what goes out to the account it is paid from, and All brings everything back", async () => {
+    withPeriod(TWO_ACCOUNTS);
+    renderApp();
+
+    const pills = within(await screen.findByRole("group", { name: "Show what is paid from" }));
+    expect(pills.getAllByRole("button").map((button) => button.textContent)).toEqual(["All", "Everyday Checking", "Rainy Day Savings"]);
+    await userEvent.click(pills.getByRole("button", { name: "Rainy Day Savings" }));
+
+    expect(pills.getByRole("button", { name: "Rainy Day Savings" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Electric")).toBeInTheDocument();
+    expect(screen.queryByText("Car loan")).not.toBeInTheDocument();
+    expect(screen.queryByText("Vet emergency")).not.toBeInTheDocument();
+
+    await userEvent.click(pills.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Car loan")).toBeInTheDocument();
+  });
+
+  it("offers no filter when everything comes out of one account", async () => {
+    withPeriod();
+    renderApp();
+
+    await panel("Pay manually & one-offs");
+    expect(screen.queryByRole("group", { name: "Show what is paid from" })).not.toBeInTheDocument();
+  });
+});

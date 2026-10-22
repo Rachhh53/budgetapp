@@ -7,6 +7,7 @@ import { type Entry, REIMBURSEMENT_LABELS, REIMBURSEMENT_STATUSES, type Reimburs
 import { useAddItem } from "../components/add/AddItem";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
+import { FilterPills } from "../components/FilterPills";
 import { ReimbursementBadge } from "../components/expenses/ReimbursementBadge";
 import { TagChips } from "../components/expenses/TagChips";
 import { BUTTON_PRIMARY, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
@@ -261,28 +262,15 @@ function categoryChoices(used: readonly Category[]): { id: number; label: string
 
 /** The row of tag pills along the top of the list: All, then every tag this year's expenses use. */
 function TagFilter({ tags, value, onChange }: { tags: readonly Tag[]; value: number | null; onChange: (tagId: number | null) => void }) {
-  const pill = "min-h-11 cursor-pointer rounded-full border px-4 font-medium md:min-h-9";
-  const on = "border-ink bg-ink text-surface";
-  const off = "border-line bg-surface";
   return (
-    <div role="group" aria-label="Show expenses with tag" className="mt-2 flex flex-wrap items-center gap-2">
-      <span aria-hidden className="text-sm text-muted">
-        Tag
-      </span>
-      <button type="button" aria-pressed={value === null} onClick={() => onChange(null)} className={`${pill} ${value === null ? on : off}`}>
-        All
-      </button>
-      {tags.map((tag) => (
-        <button
-          key={tag.id}
-          type="button"
-          aria-pressed={value === tag.id}
-          onClick={() => onChange(tag.id)}
-          className={`${pill} ${value === tag.id ? on : off}`}
-        >
-          {tag.name}
-        </button>
-      ))}
+    <div className="mt-2">
+      <FilterPills
+        label="Show expenses with tag"
+        name="Tag"
+        choices={tags.map((tag) => ({ value: tag.id, label: tag.name }))}
+        value={value}
+        onChange={onChange}
+      />
     </div>
   );
 }
