@@ -27,6 +27,8 @@ export interface Account {
   subtypeLabel: string | null;
   color: string;
   archived: boolean;
+  /** The day it was archived as of: it counts before it and is put away from it on; `null` when it is not archived. */
+  archivedOn: string | null;
   /** Warn when the balance is projected to dip below this; `null` for no warning. */
   lowBalanceThresholdCents: number | null;
   /** The most recent balance entered, or `null` if none yet. */
@@ -68,6 +70,8 @@ export interface AccountInput {
   subtypeLabel: string | null;
   color: string;
   archived: boolean;
+  /** With `archived`: the day it is archived as of, today or earlier. Left out, the day it had, or today. */
+  archivedOn?: string | null;
   lowBalanceThresholdCents: number | null;
 }
 

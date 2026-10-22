@@ -1,5 +1,6 @@
 package app.budget.server.assets;
 
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -15,7 +16,7 @@ import org.jdbi.v3.core.Jdbi;
 public final class AssetsRepository {
 
     private static final String SELECT =
-            "SELECT id, name, kind, color, appreciation_bp, depreciation_bp, linked_loan_account_id, archived FROM assets ";
+            "SELECT id, name, kind, color, appreciation_bp, depreciation_bp, linked_loan_account_id, archived, archived_on FROM assets ";
 
     private final Jdbi jdbi;
     private final Clock clock;
@@ -34,12 +35,25 @@ public final class AssetsRepository {
      *                            loses value; {@code null} to hold its value. Kept in two columns, a gain in
      *                            {@code appreciation_bp} and a loss in {@code depreciation_bp} (see migration V20)
      * @param linkedLoanAccountId the loan against it, for equity; {@code null} when it is owned outright
+     * @param archivedOn          the day it was archived as of: it counts towards net worth before it, not from it on;
+     *                            {@code null} when it is not archived
      */
     public record Asset(
-            long id, String name, Kind kind, String color, Integer appreciationBp, Long linkedLoanAccountId, boolean archived) {}
+            long id, String name, Kind kind, String color, Integer appreciationBp, Long linkedLoanAccountId, boolean archived,
+            LocalDate archivedOn) {
 
-    /** What the user can set on an asset. */
-    public record Fields(String name, Kind kind, String color, Integer appreciationBp, Long linkedLoanAccountId, boolean archived) {}
+        /** True when the asset is put away on {@code day}: archived as of that day or earlier. */
+        public boolean awayOn(LocalDate day) {
+            return Archiving.awayOn(archivedOn, day);
+        }
+    }
+
+    /**
+     * What the user can set on an asset.
+     *
+     * @param archivedOn the day it is archived as of; {@code null} when it is not archived
+     */
+    public record Fields(String name, Kind kind, String color, Integer appreciationBp, Long linkedLoanAccountId, LocalDate archivedOn) {}
 
     /** A value the user entered for one day. Amounts are whole cents. */
     public record Value(long id, LocalDate date, long valueCents) {}
@@ -65,8 +79,8 @@ public final class AssetsRepository {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
                         INSERT INTO assets (name, kind, color, appreciation_bp, depreciation_bp, linked_loan_account_id,
-                                            archived, sort_order, created_at)
-                        VALUES (:name, :kind, :color, :appreciationBp, :depreciationBp, :loanId, :archived,
+                                            archived, archived_on, sort_order, created_at)
+                        VALUES (:name, :kind, :color, :appreciationBp, :depreciationBp, :loanId, :archived, :archivedOn,
                                 (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM assets), :now)
                         RETURNING id
                         """)
@@ -76,7 +90,8 @@ public final class AssetsRepository {
                 .bind("appreciationBp", gain(fields.appreciationBp()))
                 .bind("depreciationBp", loss(fields.appreciationBp()))
                 .bind("loanId", fields.linkedLoanAccountId())
-                .bind("archived", fields.archived())
+                .bind("archived", fields.archivedOn() != null)
+                .bind("archivedOn", fields.archivedOn() == null ? null : fields.archivedOn().toString())
                 .bind("now", clock.instant().toString())
                 .mapTo(Long.class)
                 .one());
@@ -88,7 +103,8 @@ public final class AssetsRepository {
                 .createUpdate("""
                         UPDATE assets
                         SET name = :name, kind = :kind, color = :color, appreciation_bp = :appreciationBp,
-                            depreciation_bp = :depreciationBp, linked_loan_account_id = :loanId, archived = :archived
+                            depreciation_bp = :depreciationBp, linked_loan_account_id = :loanId, archived = :archived,
+                            archived_on = :archivedOn
                         WHERE id = :id
                         """)
                 .bind("id", id)
@@ -98,7 +114,8 @@ public final class AssetsRepository {
                 .bind("appreciationBp", gain(fields.appreciationBp()))
                 .bind("depreciationBp", loss(fields.appreciationBp()))
                 .bind("loanId", fields.linkedLoanAccountId())
-                .bind("archived", fields.archived())
+                .bind("archived", fields.archivedOn() != null)
+                .bind("archivedOn", fields.archivedOn() == null ? null : fields.archivedOn().toString())
                 .execute()) > 0;
     }
 
@@ -178,6 +195,7 @@ public final class AssetsRepository {
                 rs.getString("color"),
                 appreciationBp,
                 loanId,
-                rs.getBoolean("archived"));
+                rs.getBoolean("archived"),
+                rs.getString("archived_on") == null ? null : LocalDate.parse(rs.getString("archived_on")));
     }
 }

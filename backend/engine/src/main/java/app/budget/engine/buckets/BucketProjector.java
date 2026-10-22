@@ -28,8 +28,20 @@ public final class BucketProjector {
      * A bucket to follow.
      *
      * @param openedOn the day it was added; interest only reaches it from this day on
+     * @param closedOn the day it was archived as of, or {@code null}: it lets go of whatever it holds that day, takes
+     *                 nothing from then on, and is not listed in a period that starts on or after it
      */
-    public record Bucket(long id, LocalDate openedOn) {}
+    public record Bucket(long id, LocalDate openedOn, LocalDate closedOn) {
+
+        public Bucket(long id, LocalDate openedOn) {
+            this(id, openedOn, null);
+        }
+
+        /** True when the bucket is closed on {@code day}. */
+        boolean closedBy(LocalDate day) {
+            return closedOn != null && !day.isBefore(closedOn);
+        }
+    }
 
     /** @param amount signed: positive goes into the bucket, negative comes out of it */
     public record Move(long bucketId, LocalDate date, Money amount) {}
@@ -53,7 +65,10 @@ public final class BucketProjector {
         public static final InterestRule UNASSIGNED = new InterestRule(InterestDestination.UNASSIGNED, null);
     }
 
-    /** One bucket across one pay period; {@code ending − starting} is what the period moved. */
+    /**
+     * One bucket across one pay period; {@code ending − starting} is what the period moved, and in the period it closes
+     * in, what it let go of too.
+     */
     public record BucketBalance(long bucketId, Money starting, Money ending) {}
 
     public record PeriodBuckets(PayPeriod period, List<BucketBalance> buckets) {
@@ -69,7 +84,8 @@ public final class BucketProjector {
     }
 
     /**
-     * @param periods        one entry per period, each listing every bucket in the order given
+     * @param periods        one entry per period, each listing every bucket in the order given that is not closed by
+     *                       the time the period starts
      * @param interestShares the interest that went into buckets, earliest first: moves this
      *                       class added to the ones it was given
      */
@@ -91,10 +107,13 @@ public final class BucketProjector {
         for (PayPeriod period : periods) {
             List<BucketBalance> balances = new ArrayList<>();
             for (Bucket bucket : buckets) {
+                if (bucket.closedBy(period.start())) {
+                    continue;
+                }
                 Money starting = Money.ZERO;
                 Money ending = Money.ZERO;
                 for (Move move : all) {
-                    if (move.bucketId() != bucket.id() || move.date().isAfter(period.end())) {
+                    if (move.bucketId() != bucket.id() || move.date().isAfter(period.end()) || bucket.closedBy(move.date())) {
                         continue;
                     }
                     ending = ending.plus(move.amount());
@@ -102,7 +121,8 @@ public final class BucketProjector {
                         starting = starting.plus(move.amount());
                     }
                 }
-                balances.add(new BucketBalance(bucket.id(), starting, ending));
+                // Closed during the period: whatever it still held goes back to what is available that day.
+                balances.add(new BucketBalance(bucket.id(), starting, bucket.closedBy(period.end()) ? Money.ZERO : ending));
             }
             result.add(new PeriodBuckets(period, balances));
         }
@@ -129,7 +149,7 @@ public final class BucketProjector {
             }
             List<Move> ofThisCredit = new ArrayList<>();
             for (Bucket bucket : buckets) {
-                if (bucket.openedOn().isAfter(credit.date())) {
+                if (bucket.openedOn().isAfter(credit.date()) || bucket.closedBy(credit.date())) {
                     continue;
                 }
                 Money share = share(credit, bucket, held, rule);

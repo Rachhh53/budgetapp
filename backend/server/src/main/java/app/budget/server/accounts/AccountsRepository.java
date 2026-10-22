@@ -17,7 +17,7 @@ public final class AccountsRepository {
 
     /** Every account column plus its newest balance entry (NULLs when none has been entered). */
     private static final String SELECT_WITH_LATEST_BALANCE = """
-            SELECT a.id, a.name, a.institution, a.type, a.subtype_label, a.color, a.archived, a.low_balance_threshold,
+            SELECT a.id, a.name, a.institution, a.type, a.subtype_label, a.color, a.archived, a.archived_on, a.low_balance_threshold,
                    b.id AS balance_id, b.date AS balance_date, b.amount AS balance_amount, b.note AS balance_note
             FROM accounts a
             LEFT JOIN balance_entries b ON b.id = (
@@ -35,6 +35,7 @@ public final class AccountsRepository {
     /**
      * What the user can set on an account.
      *
+     * @param archivedOn               the day it is archived as of; {@code null} when it is not archived
      * @param lowBalanceThresholdCents {@code null} for no low-balance warning
      */
     public record Fields(
@@ -43,7 +44,7 @@ public final class AccountsRepository {
             AccountType type,
             String subtypeLabel,
             String color,
-            boolean archived,
+            LocalDate archivedOn,
             Long lowBalanceThresholdCents) {}
 
     public List<Account> all() {
@@ -73,9 +74,9 @@ public final class AccountsRepository {
     public long create(Fields fields) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
-                        INSERT INTO accounts (name, institution, type, subtype_label, color, archived,
+                        INSERT INTO accounts (name, institution, type, subtype_label, color, archived, archived_on,
                                               low_balance_threshold, sort_order, created_at)
-                        VALUES (:name, :institution, :type, :subtypeLabel, :color, :archived, :lowBalanceThreshold,
+                        VALUES (:name, :institution, :type, :subtypeLabel, :color, :archived, :archivedOn, :lowBalanceThreshold,
                                 (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM accounts), :now)
                         RETURNING id
                         """)
@@ -84,7 +85,8 @@ public final class AccountsRepository {
                 .bind("type", Inputs.code(fields.type()))
                 .bind("subtypeLabel", fields.subtypeLabel())
                 .bind("color", fields.color())
-                .bind("archived", fields.archived())
+                .bind("archived", fields.archivedOn() != null)
+                .bind("archivedOn", fields.archivedOn() == null ? null : fields.archivedOn().toString())
                 .bind("lowBalanceThreshold", fields.lowBalanceThresholdCents())
                 .bind("now", clock.instant().toString())
                 .mapTo(Long.class)
@@ -97,7 +99,7 @@ public final class AccountsRepository {
                 .createUpdate("""
                         UPDATE accounts
                         SET name = :name, institution = :institution, type = :type,
-                            subtype_label = :subtypeLabel, color = :color, archived = :archived,
+                            subtype_label = :subtypeLabel, color = :color, archived = :archived, archived_on = :archivedOn,
                             low_balance_threshold = :lowBalanceThreshold
                         WHERE id = :id
                         """)
@@ -107,7 +109,8 @@ public final class AccountsRepository {
                 .bind("type", Inputs.code(fields.type()))
                 .bind("subtypeLabel", fields.subtypeLabel())
                 .bind("color", fields.color())
-                .bind("archived", fields.archived())
+                .bind("archived", fields.archivedOn() != null)
+                .bind("archivedOn", fields.archivedOn() == null ? null : fields.archivedOn().toString())
                 .bind("lowBalanceThreshold", fields.lowBalanceThresholdCents())
                 .execute()) > 0;
     }
@@ -239,6 +242,7 @@ public final class AccountsRepository {
                 rs.getString("subtype_label"),
                 rs.getString("color"),
                 rs.getBoolean("archived"),
+                rs.getString("archived_on") == null ? null : LocalDate.parse(rs.getString("archived_on")),
                 noThreshold ? null : threshold,
                 latest);
     }

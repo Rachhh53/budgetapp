@@ -4,6 +4,7 @@ import app.budget.engine.Money;
 import app.budget.engine.buckets.SaveUp;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.ScheduleRule;
+import app.budget.server.api.Archiving;
 import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.buckets.BucketsRepository.Change;
 import app.budget.server.entries.EntriesRepository.Entry;
@@ -101,7 +102,8 @@ public final class BucketMoves {
     }
 
     /**
-     * @param buckets     the buckets to follow (archived ones left out): a move into any other is dropped
+     * @param buckets     the buckets to follow, archived ones included: a move into any other is dropped, as is one
+     *                    into an archived bucket on or after the day it was archived as of
      * @param occurrences every occurrence since the earliest bucket was opened, and far enough
      *                    ahead to include the next due date of every bill saved up for; one
      *                    dated before its bucket was opened no longer names that bucket
@@ -172,6 +174,8 @@ public final class BucketMoves {
         savedUpFor.forEach((itemId, due) -> saveUps(itemsById.get(itemId), due, open, periods, moves));
         billedLaterSaveUps(occurrences, visits, open, moves);
 
+        // An archived bucket keeps everything before the day it was archived as of, and takes nothing from then on.
+        moves.removeIf(move -> Archiving.awayOn(open.get(move.bucketId()).archivedOn(), move.date()));
         moves.sort(IN_ORDER);
         return moves;
     }

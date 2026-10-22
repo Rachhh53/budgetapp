@@ -197,16 +197,36 @@ const PROMO_SCOPE_OPTIONS: readonly { value: PromoScope; label: string }[] = [
  */
 function lastClose(day: number, today: string): string {
   const [year = 0, month = 1] = today.split("-").map(Number);
-  const onDay = (y: number, m: number) => {
-    // Day 0 of the next month is the last day of this one.
-    const length = new Date(y, m, 0).getDate();
-    return `${y}-${String(m).padStart(2, "0")}-${String(Math.min(day, length)).padStart(2, "0")}`;
-  };
-  const thisMonth = onDay(year, month);
+  const thisMonth = closeIn(day, today);
   if (thisMonth <= today) {
     return thisMonth;
   }
-  return month === 1 ? onDay(year - 1, 12) : onDay(year, month - 1);
+  return month === 1 ? onDay(day, year - 1, 12) : onDay(day, year, month - 1);
+}
+
+/** The card's closing day in the month of `date`. */
+function closeIn(day: number, date: string): string {
+  const [year = 0, month = 1] = date.split("-").map(Number);
+  return onDay(day, year, month);
+}
+
+function onDay(day: number, year: number, month: number): string {
+  // Day 0 of the next month is the last day of this one.
+  const length = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(Math.min(day, length)).padStart(2, "0")}`;
+}
+
+/**
+ * The closing date a new statement opens on. With a default day chosen in Settings, the statement closing in that
+ * day's month, the one being worked through (Rachel, 2026-10-22: "add a statement in account is defaulting to 2025
+ * when my default date everywhere else is 01012026"); never after today. Otherwise the last one that closed.
+ */
+function openingClose(day: number, start: { date: string; fromSetting: boolean }, today: string): string {
+  if (!start.fromSetting) {
+    return lastClose(day, start.date);
+  }
+  const close = closeIn(day, start.date);
+  return close <= today ? close : lastClose(day, today);
 }
 
 /**
@@ -228,7 +248,7 @@ export function StatementForm({
   const save = useSaveStatement(account.id, statement?.id ?? undefined);
   const today = todayIso();
   const startOn = useDefaultDate();
-  const [opensOn] = useState(statement?.closeDate ?? (settings ? lastClose(settings.statementCloseDay, startOn.date) : startOn.date));
+  const [opensOn] = useState(statement?.closeDate ?? (settings ? openingClose(settings.statementCloseDay, startOn, today) : startOn.date));
   const [closeDate, setCloseDate] = useState(opensOn);
   const [balance, setBalance] = useState(statement ? centsToInput(statement.balanceCents) : "");
   const [minimum, setMinimum] = useState(statement?.minimumDueCents != null ? centsToInput(statement.minimumDueCents) : "");

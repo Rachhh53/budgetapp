@@ -12,6 +12,7 @@ import {
 import { useDefaultDate } from "../../api/settings";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { parseRate } from "../../lib/rates";
+import { ArchivedField } from "../ArchivedField";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
@@ -57,6 +58,7 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
   const [institution, setInstitution] = useState(account?.institution ?? "");
   const [color, setColor] = useState(account?.color ?? firstUnusedColor(usedColors));
   const [archived, setArchived] = useState(account?.archived ?? false);
+  const [archivedOn, setArchivedOn] = useState(account?.archivedOn ?? null);
   const [lowBalance, setLowBalance] = useState(
     account?.lowBalanceThresholdCents != null ? centsToInput(account.lowBalanceThresholdCents) : "",
   );
@@ -102,6 +104,7 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
         institution: institution || null,
         color,
         archived,
+        archivedOn,
         lowBalanceThresholdCents: threshold,
       },
       {
@@ -222,18 +225,15 @@ export function AccountForm({ account, accounts, onClose, onDeleted }: AccountFo
 
         {account && parts.shows("about") && (
           <FormSection title="About this account">
-            <div>
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={archived}
-                  onChange={(event) => setArchived(event.target.checked)}
-                  className="size-5 accent-(--accent)"
-                />
-                <span className="font-medium">Archived</span>
-              </label>
-              <p className={HINT}>An archived account keeps its history but is tucked away at the bottom of the list.</p>
-            </div>
+            <ArchivedField
+              archived={archived}
+              archivedOn={archivedOn}
+              onChange={(on, day) => {
+                setArchived(on);
+                setArchivedOn(day);
+              }}
+              hint="It keeps everything before that day, in every pay period, and is tucked away at the bottom of the list."
+            />
           </FormSection>
         )}
 

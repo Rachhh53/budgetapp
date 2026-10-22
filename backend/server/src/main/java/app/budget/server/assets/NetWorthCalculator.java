@@ -54,6 +54,7 @@ public final class NetWorthCalculator {
             Integer appreciationBp,
             Long linkedLoanAccountId,
             boolean archived,
+            LocalDate archivedOn,
             Value latestValue,
             Long valueCents,
             boolean estimate,
@@ -96,7 +97,10 @@ public final class NetWorthCalculator {
         });
     }
 
-    /** Net worth at the end of {@code today}. Archived accounts and assets are left out, as on the Accounts screen. */
+    /**
+     * Net worth at the end of {@code today}. Archived accounts and assets are left out, as on the Accounts screen: each
+     * is archived as of today or earlier. On days gone by, each counts until the day it was archived as of.
+     */
     public Summary summary(LocalDate today) {
         return summary(today, ledger.balancesOn(today), accountsById(), assets.all(), assets.allValues());
     }
@@ -122,7 +126,8 @@ public final class NetWorthCalculator {
             }
             Summary summary = summary(day.date(), day.balances(), byId, allAssets, values);
             boolean anythingKnown = summary.propertyCents() != 0
-                    || day.balances().stream().anyMatch(balance -> byId.containsKey(balance.accountId()) && !byId.get(balance.accountId()).archived());
+                    || day.balances().stream()
+                            .anyMatch(balance -> byId.containsKey(balance.accountId()) && !byId.get(balance.accountId()).awayOn(day.date()));
             if (anythingKnown) {
                 series.add(summary);
             }
@@ -130,19 +135,19 @@ public final class NetWorthCalculator {
         return series;
     }
 
-    /** The earliest day the user entered a balance for an account, or a value for an asset, that is not archived. */
+    /** The earliest day the user entered a balance for an account, or a value for an asset, before it was archived. */
     private Optional<LocalDate> firstEntered(Map<Long, Account> byId, List<Asset> allAssets, Map<Long, List<Value>> values) {
         List<LocalDate> entered = new ArrayList<>();
         accounts.allBalances().forEach((accountId, balances) -> {
             Account account = byId.get(accountId);
-            if (account != null && !account.archived()) {
-                balances.forEach(balance -> entered.add(balance.date()));
+            if (account != null) {
+                balances.stream().filter(balance -> !account.awayOn(balance.date())).forEach(balance -> entered.add(balance.date()));
             }
         });
         for (Asset asset : allAssets) {
-            if (!asset.archived()) {
-                values.getOrDefault(asset.id(), List.of()).forEach(value -> entered.add(value.date()));
-            }
+            values.getOrDefault(asset.id(), List.of()).stream()
+                    .filter(value -> !asset.awayOn(value.date()))
+                    .forEach(value -> entered.add(value.date()));
         }
         return entered.stream().min(LocalDate::compareTo);
     }
@@ -163,7 +168,7 @@ public final class NetWorthCalculator {
         Money loans = Money.ZERO;
         for (AccountBalance balance : balances) {
             Account account = byId.get(balance.accountId());
-            if (account == null || account.archived()) {
+            if (account == null || account.awayOn(day)) {
                 continue;
             }
             Money held = Money.ofCents(balance.balanceCents());
@@ -176,7 +181,7 @@ public final class NetWorthCalculator {
         }
         Money property = Money.ZERO;
         for (Asset asset : allAssets) {
-            if (!asset.archived()) {
+            if (!asset.awayOn(day)) {
                 property = property.plus(worth(asset, values.getOrDefault(asset.id(), List.of()), day).orElse(Money.ZERO));
             }
         }
@@ -196,7 +201,7 @@ public final class NetWorthCalculator {
                 : (Long) AssetValue.equity(Money.ofCents(valueCents), Money.ofCents(owedCents == null ? 0 : owedCents)).cents();
         return new AssetView(
                 asset.id(), asset.name(), asset.kind(), asset.color(), asset.appreciationBp(), asset.linkedLoanAccountId(),
-                asset.archived(), latest, valueCents,
+                asset.archived(), asset.archivedOn(), latest, valueCents,
                 latest != null && valueCents != null && valueCents != latest.valueCents(),
                 owedCents, equityCents);
     }

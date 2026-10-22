@@ -10,6 +10,7 @@ import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
@@ -124,6 +125,8 @@ public final class ItemsRoutes {
      *                       being the cost of each and the schedule monthly on the bill day, in the months it can
      *                       happen in. Left out for any other bill.
      * @param usesPer        billed by use: {@code week} or {@code month}, what the uses are counted per
+     * @param archivedOn     with {@code archived}: the day it is archived as of, today or earlier; left out, the day it
+     *                       already had, or today
      */
     public record ItemInput(
             String name,
@@ -151,7 +154,8 @@ public final class ItemsRoutes {
             Integer packSessions,
             ItemScheduleDto packSchedule,
             Long usesHundredths,
-            String usesPer) {}
+            String usesPer,
+            LocalDate archivedOn) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -200,6 +204,7 @@ public final class ItemsRoutes {
             ItemKind kind,
             String note,
             boolean archived,
+            LocalDate archivedOn,
             LocalDate createdOn,
             List<Long> tagIds,
             long amountCents,
@@ -249,7 +254,7 @@ public final class ItemsRoutes {
         OfCard card = ofCard(input, kind(input), sent, null);
         Terms terms = sized(sent, card);
         // The first version covers the item's whole life, so it is dated from when the schedule starts.
-        long id = items.create(identity(input), terms, terms.schedule().startDate());
+        long id = items.create(identity(input, null), terms, terms.schedule().startDate());
         letItsBucketCountFromItsStart(terms);
         keepItsCardInStep(id, card, terms);
         ApiResponse.send(ctx, 201, view(id));
@@ -280,7 +285,8 @@ public final class ItemsRoutes {
     private void update(Context ctx) {
         long id = Inputs.id(ctx, "id");
         ItemInput input = Inputs.body(ctx, ItemInput.class);
-        Identity identity = identity(input);
+        Item existing = items.find(id).orElseThrow(ApiException::notFound);
+        Identity identity = identity(input, existing.archivedOn());
         Terms sent = terms(input, identity.kind());
         OfCard card = ofCard(input, identity.kind(), sent, id);
         Terms terms = sized(sent, card);
@@ -288,7 +294,6 @@ public final class ItemsRoutes {
         if (!Inputs.inSupportedYears(effectiveFrom)) {
             throw ApiException.badRequest("Please choose the date this change starts from.");
         }
-        Item existing = items.find(id).orElseThrow(ApiException::notFound);
         // Moving the start is a change to the past by its nature. Earlier: it has to reach back
         // to the new start, or everything before today would keep the old, later one. Later:
         // it has to reach back to the old start, or what was scheduled between the two would stay.
@@ -312,8 +317,9 @@ public final class ItemsRoutes {
     private void replace(Context ctx) {
         long id = Inputs.id(ctx, "id");
         ItemInput input = Inputs.body(ctx, ItemInput.class);
-        // Everything is checked before anything is written, so a mistake leaves the old item as it was.
-        Identity identity = identity(input);
+        // Everything is checked before anything is written, so a mistake leaves the old item as it was. The new one
+        // takes the old one's place, so it is never archived itself.
+        Identity identity = identity(input, null);
         // It stands in for the item it replaces, so it may be the same card's own payment.
         OfCard card = ofCard(input, identity.kind(), terms(input, identity.kind()), id);
         Terms sent = sized(terms(input, identity.kind()), card);
@@ -580,6 +586,7 @@ public final class ItemsRoutes {
                 item.kind(),
                 item.note(),
                 item.archived(),
+                item.archivedOn(),
                 item.createdOn(),
                 item.tagIds(),
                 terms.amountCents(),
@@ -645,7 +652,8 @@ public final class ItemsRoutes {
         return Inputs.choice(ItemKind.class, input.kind(), "the type of item");
     }
 
-    private Identity identity(ItemInput input) {
+    /** @param archivedBefore the day the item was archived as of until now; {@code null} when it wasn't */
+    private Identity identity(ItemInput input, LocalDate archivedBefore) {
         List<Long> tagIds = Inputs.ids(input.tagIds(), MAX_TAGS, CHOOSE_TAGS);
         if (!tags.allExist(tagIds)) {
             throw ApiException.badRequest(CHOOSE_TAGS);
@@ -654,7 +662,7 @@ public final class ItemsRoutes {
                 Inputs.text(input.name(), "a name for this item", NAME_MAX),
                 kind(input),
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
-                Boolean.TRUE.equals(input.archived()),
+                Archiving.archivedOn(input.archived(), input.archivedOn(), archivedBefore, pay.today(), null),
                 tagIds);
     }
 

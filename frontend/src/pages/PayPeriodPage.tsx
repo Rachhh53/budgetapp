@@ -41,7 +41,7 @@ import { BalanceAdjustments } from "../components/period/BalanceAdjustments";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { BUTTON_PRIMARY, INPUT } from "../components/ui";
-import { addDays, formatDate, formatDay, todayIso } from "../lib/dates";
+import { addDays, formatDate, formatDay, paidDateWithin, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { formatRate } from "../lib/rates";
 import { HelpLink } from "../components/help/HelpLink";
@@ -147,6 +147,7 @@ export function PayPeriodPage() {
     tags: tags.data,
     items: items.data,
     editOccurrence: setEditingOccurrence,
+    paidDateFor: (occurrence) => paidDateWithin(detail.start, detail.end, occurrence.payBy, todayIso()),
     statementFor: (occurrence) => {
       const paid = (detail.statementsPaid ?? []).find(
         (candidate) => candidate.itemId === occurrence.itemId && candidate.scheduledDate === occurrence.scheduledDate,
@@ -283,6 +284,7 @@ export function PayPeriodPage() {
           // The same test that puts a row in the "to pay by hand" list.
           byHand={editingOccurrence.kind !== "budget" && !editingOccurrence.autopay}
           fromChecking={context.isChecking(editingOccurrence.payFromAccountId)}
+          paidDate={context.paidDateFor(editingOccurrence)}
           onClose={() => setEditingOccurrence(undefined)}
         />
       )}
@@ -306,6 +308,8 @@ interface RowContext {
   editOccurrence: (occurrence: Occurrence) => void;
   /** For a card payment that follows its card: what the amount is, and which statement it is for. */
   statementFor: (occurrence: Occurrence) => string | undefined;
+  /** The day a bill ticked paid from this period is dated, unless another is chosen: one inside the period. */
+  paidDateFor: (occurrence: Occurrence) => string;
 }
 
 /** The account chosen in Accounts & buckets, kept in the address so it goes along from one pay period to the next. */
@@ -1515,7 +1519,7 @@ function ManualRow({ occurrence, carriedOver, context }: { occurrence: Occurrenc
             checked={occurrence.paid}
             disabled={edit.isPending}
             onChange={(event) =>
-              edit.mutate({ occurrence, edit: event.target.checked ? { paid: true, paidDate: todayIso() } : { paid: false } })
+              edit.mutate({ occurrence, edit: event.target.checked ? { paid: true, paidDate: context.paidDateFor(occurrence) } : { paid: false } })
             }
             aria-label={`${occurrence.name} paid`}
             className="size-5 accent-(--accent)"

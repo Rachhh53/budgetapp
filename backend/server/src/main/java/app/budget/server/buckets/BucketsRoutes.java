@@ -7,6 +7,7 @@ import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.buckets.BucketsRepository.Change;
@@ -98,7 +99,8 @@ public final class BucketsRoutes {
             Long startingCents,
             LocalDate openedOn,
             LocalDate goalDate,
-            Boolean stopAtGoal) {}
+            Boolean stopAtGoal,
+            LocalDate archivedOn) {}
 
     /** Request body for putting money into (+) or taking it out of (−) a bucket by hand. */
     public record ChangeInput(LocalDate date, Long amountCents, String note) {}
@@ -126,6 +128,7 @@ public final class BucketsRoutes {
     /**
      * A bucket as the API returns it.
      *
+     * @param archivedOn   the day it was archived as of; {@code null} when it is not archived
      * @param balanceCents what it holds today; zero once archived, when it no longer holds anything back
      * @param goalProgress how it stands against its goal; {@code null} unless it has both a goal and a date for it
      */
@@ -137,6 +140,7 @@ public final class BucketsRoutes {
             Long goalCents,
             String note,
             boolean archived,
+            LocalDate archivedOn,
             LocalDate openedOn,
             long balanceCents,
             LocalDate goalDate,
@@ -208,7 +212,7 @@ public final class BucketsRoutes {
 
     private void create(Context ctx) {
         BucketInput input = Inputs.body(ctx, BucketInput.class);
-        Fields fields = fields(input);
+        Fields fields = fields(input, null);
         Account account = input.accountId() == null ? null : accounts.find(input.accountId()).orElse(null);
         if (account == null || !AccountType.holdsCash(account)) {
             throw ApiException.badRequest("Please choose a checking or savings account for this bucket.");
@@ -225,10 +229,10 @@ public final class BucketsRoutes {
 
     private void update(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        Fields fields = fields(Inputs.body(ctx, BucketInput.class));
         Bucket existing = buckets.find(id).orElseThrow(ApiException::notFound);
+        Fields fields = fields(Inputs.body(ctx, BucketInput.class), existing);
         requireFreeName(existing.accountId(), fields.name(), id);
-        if (fields.archived() && !existing.archived() && buckets.isUsedByItems(id)) {
+        if (fields.archivedOn() != null && !existing.archived() && buckets.isUsedByItems(id)) {
             throw ApiException.conflict(IN_USE);
         }
         buckets.update(id, fields);
@@ -434,7 +438,7 @@ public final class BucketsRoutes {
         return chosen.stream()
                 .map(bucket -> new BucketView(
                         bucket.id(), bucket.accountId(), bucket.name(), bucket.color(), bucket.goalCents(), bucket.note(),
-                        bucket.archived(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L), bucket.goalDate(), bucket.stopAtGoal(),
+                        bucket.archived(), bucket.archivedOn(), bucket.openedOn(), held.getOrDefault(bucket.id(), 0L), bucket.goalDate(), bucket.stopAtGoal(),
                         goalProgress(bucket, today, held, heldOn)))
                 .toList();
     }
@@ -490,7 +494,8 @@ public final class BucketsRoutes {
         }
     }
 
-    private Fields fields(BucketInput input) {
+    /** @param existing the bucket being changed; {@code null} when adding one */
+    private Fields fields(BucketInput input, Bucket existing) {
         // A bucket cannot start counting on a day that has not come: nothing could be shown in it until then.
         if (input.openedOn() != null
                 && (!Inputs.inSupportedYears(input.openedOn()) || input.openedOn().isAfter(LocalDate.now(clock)))) {
@@ -506,7 +511,12 @@ public final class BucketsRoutes {
                 // A goal of nothing is no goal.
                 goal == null || goal == 0 ? null : goal,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
-                Boolean.TRUE.equals(input.archived()),
+                Archiving.archivedOn(
+                        input.archived(),
+                        input.archivedOn(),
+                        existing == null ? null : existing.archivedOn(),
+                        LocalDate.now(clock),
+                        input.openedOn() != null ? input.openedOn() : existing == null ? null : existing.openedOn()),
                 input.openedOn(),
                 // A date for a goal that is not there says nothing.
                 goal == null || goal == 0 ? null : input.goalDate(),

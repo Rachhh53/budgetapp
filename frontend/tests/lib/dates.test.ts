@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatDay, formatWeekdayDay, isWeekend, ordinal, todayIso, weekdayName, yearTicks } from "../../src/lib/dates";
+import { formatDate, formatDay, formatWeekdayDay, isWeekend, ordinal, paidDateWithin, todayIso, weekdayName, yearTicks } from "../../src/lib/dates";
 
 describe("date formatting", () => {
   it("formats a calendar day without shifting it across time zones", () => {
@@ -47,5 +47,21 @@ describe("yearTicks", () => {
   it("labels every second or fifth year over a long span", () => {
     expect(yearTicks(jan1(2026), jan1(2036))).toEqual([2026, 2028, 2030, 2032, 2034, 2036].map(jan1));
     expect(yearTicks(jan1(2026), jan1(2056))).toEqual([2026, 2031, 2036, 2041, 2046, 2051, 2056].map(jan1));
+  });
+});
+
+describe("the day a bill ticked paid is dated", () => {
+  // Rachel, 2026-10-22: "it should default to within the pay period".
+  it("is today while the pay period runs", () => {
+    expect(paidDateWithin("2026-03-13", "2026-03-30", "2026-03-20", "2026-03-18")).toBe("2026-03-18");
+  });
+
+  it("is the day the bill counts on when the period is over or still to come", () => {
+    expect(paidDateWithin("2026-03-13", "2026-03-30", "2026-03-20", "2026-10-22")).toBe("2026-03-20");
+    expect(paidDateWithin("2026-11-13", "2026-11-30", "2026-11-20", "2026-10-22")).toBe("2026-11-20");
+  });
+
+  it("stays inside the period for a bill carried into it from before", () => {
+    expect(paidDateWithin("2026-03-13", "2026-03-30", "2026-02-20", "2026-10-22")).toBe("2026-03-13");
   });
 });

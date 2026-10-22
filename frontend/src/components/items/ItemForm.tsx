@@ -24,6 +24,7 @@ import {
 import { formatDate, todayIso } from "../../lib/dates";
 import { useDefaultDate } from "../../api/settings";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
+import { ArchivedField } from "../ArchivedField";
 import { CategoryField, TagsField } from "../categories/LabelFields";
 import { firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
@@ -218,6 +219,9 @@ function wholeNumberWithin(text: string, least: number, most: number): number | 
  */
 export type ItemPart = "item" | "amount" | "accounts" | "schedule" | "details";
 
+/** The screens of Edit item. */
+type EditItemScreen = "what" | "charged" | "away";
+
 const PART_TITLES: Record<ItemPart, string | null> = {
   item: null,
   amount: "Amount",
@@ -358,6 +362,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const [tagIds, setTagIds] = useState<number[]>(item?.tagIds ?? []);
   const [note, setNote] = useState(item?.note ?? "");
   const [archived, setArchived] = useState(item?.archived ?? false);
+  const [archivedOn, setArchivedOn] = useState(item?.archivedOn ?? null);
+  const [screen, setScreen] = useState<EditItemScreen>("what");
   const [bucketId, setBucketId] = useState<string | null>(item?.bucketId != null ? String(item.bucketId) : null);
   const [saveUpBucketId, setSaveUpBucketId] = useState<string | null>(
     item?.saveUpBucketId != null ? String(item.saveUpBucketId) : null,
@@ -603,6 +609,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
       kind,
       note: note.trim() === "" ? null : note,
       archived,
+      archivedOn,
       tagIds,
       amountCents,
       // Something billed later or paid ahead is added up session by session, so it is always an amount each time.
@@ -692,6 +699,19 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
     item === undefined
       ? (STEPS[step]?.includes(asked) ?? false)
       : part === undefined || part === asked || (asked === "accounts" && part === "item" && kindChanged);
+  // Edit item holds more than fits one screen, so what it is, how it's charged, and archiving or deleting each have
+  // their own, chosen at the top as on the account form (Rachel's rule: pop-up forms fit one screen).
+  const screens: { value: EditItemScreen; label: string }[] =
+    item !== undefined && part === "item"
+      ? [
+          { value: "what", label: "What it is" },
+          ...(kind === "bill" && !followsCard ? [{ value: "charged" as const, label: "How it's charged" }] : []),
+          { value: "away", label: "Archive or delete" },
+        ]
+      : [];
+  // A screen that went away (How it's charged, once the type is no longer a bill) falls back to the first.
+  const onScreen = screens.find((choice) => choice.value === screen)?.value ?? "what";
+  const showsScreen = (wanted: EditItemScreen) => screens.length === 0 || onScreen === wanted;
 
   return (
     <>
@@ -709,10 +729,11 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
             Step {step + 1} of {STEPS.length}
           </p>
         )}
-        {shows("item") && (
+        {screens.length > 0 && <Segmented legend="What to change" dense options={screens} value={onScreen} onChange={setScreen} />}
+        {shows("item") && showsScreen("what") && (
           <Segmented legend="Type" options={item?.kind === "bucket_move" ? KIND_OPTIONS : KINDS_TO_ADD} value={kind} onChange={changeKind} />
         )}
-        {shows("item") && <p className="text-sm text-muted">{KIND_HELP[kind]}</p>}
+        {shows("item") && showsScreen("what") && <p className="text-sm text-muted">{KIND_HELP[kind]}</p>}
 
         {kindChanged && (
           // An item is one kind for its whole life, so this cannot apply "from today on" like other changes.
@@ -832,9 +853,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
           </FormSection>
         )}
 
-        {(shows("item") || shows("details")) && (
+        {((shows("item") && showsScreen("what")) || shows("details")) && (
           <FormSection title={shows("item") ? "What it is" : "Category"}>
-            {shows("item") && (
+            {shows("item") && showsScreen("what") && (
               <div>
                 <label htmlFor={`${id}-name`} className={LABEL}>
                   Name
@@ -855,9 +876,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
           </FormSection>
         )}
 
-        {item !== undefined && part === "item" && kind === "bill" && !followsCard && <FormSection title="How it's charged">{chargedFields}</FormSection>}
+        {showsScreen("charged") && screens.length > 0 && <FormSection title="How it's charged">{chargedFields}</FormSection>}
 
-        {shows("accounts") && (
+        {shows("accounts") && showsScreen("what") && (
           <FormSection title={isBucketMove ? "Where it goes" : movesMoney ? "From and to" : "Where it's paid from"}>
             {/* Two side by side only when there are two: a lone picker gets the full width. */}
             <div className={`grid grid-cols-1 gap-4 ${movesMoney ? "sm:grid-cols-2" : ""}`}>
@@ -1262,18 +1283,17 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
 
         {item && (
           <div>
-            {shows("item") && (
+            {shows("item") && showsScreen("away") && (
               <>
-                <label className="flex min-h-11 items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={archived}
-                    onChange={(event) => setArchived(event.target.checked)}
-                    className="size-5 accent-(--accent)"
-                  />
-                  <span className="font-medium">Archived</span>
-                </label>
-                <p className={HINT}>An archived item keeps its history but stops coming up in your pay periods.</p>
+                <ArchivedField
+                  archived={archived}
+                  archivedOn={archivedOn}
+                  onChange={(on, day) => {
+                    setArchived(on);
+                    setArchivedOn(day);
+                  }}
+                  hint="It stays in your pay periods before that day, and nothing of it comes up from then on."
+                />
               </>
             )}
             {/* With the amount or where it's paid from on screen, "Changes from" already says when; saying "today"
@@ -1326,7 +1346,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
         </div>
       </form>
 
-      {item && shows("item") && (
+      {item && shows("item") && showsScreen("away") && (
         <div className="mt-6 border-t border-line pt-4">
           <DeleteItem item={item} onDeleted={onDeleted ?? onClose} />
         </div>

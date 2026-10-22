@@ -5,6 +5,7 @@ import { todayIso } from "../../lib/dates";
 import { useDefaultDate } from "../../api/settings";
 import { parseDollars } from "../../lib/money";
 import { parseRate, rateToInput } from "../../lib/rates";
+import { ArchivedField } from "../ArchivedField";
 import { ColorPicker, firstUnusedColor } from "../ColorPicker";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
@@ -89,6 +90,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
   const [rate, setRate] = useState(asset?.appreciationBp ? rateToInput(Math.abs(asset.appreciationBp)) : "");
   const [loanId, setLoanId] = useState<string | null>(asset?.linkedLoanAccountId != null ? String(asset.linkedLoanAccountId) : null);
   const [archived, setArchived] = useState(asset?.archived ?? false);
+  const [archivedOn, setArchivedOn] = useState(asset?.archivedOn ?? null);
 
   // Archived loans are left out, unless this asset already points at one.
   const loanOptions = accounts
@@ -124,6 +126,7 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
         appreciationBp,
         linkedLoanAccountId: loanId === null ? null : Number(loanId),
         archived,
+        archivedOn,
         ...(asset ? {} : { valueCents, valueDate: valueCents === null ? null : valueDate }),
       },
       { onSuccess: onClose },
@@ -254,18 +257,15 @@ export function AssetForm({ asset, assets, accounts, onClose, onDeleted }: Asset
 
         {asset && parts.shows("about") && (
           <FormSection title="About this">
-            <div>
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={archived}
-                  onChange={(event) => setArchived(event.target.checked)}
-                  className="size-5 accent-(--accent)"
-                />
-                <span className="font-medium">Archived</span>
-              </label>
-              <p className={HINT}>For something sold or gone: it keeps its history but no longer counts toward net worth.</p>
-            </div>
+            <ArchivedField
+              archived={archived}
+              archivedOn={archivedOn}
+              onChange={(on, day) => {
+                setArchived(on);
+                setArchivedOn(day);
+              }}
+              hint="For something sold or gone: it counts toward net worth until that day, and not from then on."
+            />
           </FormSection>
         )}
 

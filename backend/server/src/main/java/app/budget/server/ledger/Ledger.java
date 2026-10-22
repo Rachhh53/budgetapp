@@ -32,6 +32,7 @@ import app.budget.server.accounts.InterestRepository.Destination;
 import app.budget.server.accounts.InterestRepository.Rate;
 import app.budget.server.accounts.InterestRepository.RateKind;
 import app.budget.server.accounts.InterestRepository.Settings;
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
@@ -249,7 +250,7 @@ public final class Ledger {
      * @param entries     one-off entries dated in this period
      * @param interest    estimated interest counted in this period's figures
      * @param accounts    every account a balance is known for
-     * @param buckets     every open bucket
+     * @param buckets     every bucket open at some point in this period
      * @param bucketMoves what moved those buckets during the period, earliest first
      * @param promosEnding promotional rates that end in this period with a balance left on them
      * @param statementsPaid which statement each card payment listed here was sized from, for those
@@ -359,6 +360,10 @@ public final class Ledger {
         List<AccountPeriod> accountPeriods = new ArrayList<>();
         List<InterestLine> interestLines = new ArrayList<>();
         for (Account account : accounts.all()) {
+            // An archived account is listed in the periods before the day it was archived as of, not from then on.
+            if (account.awayOn(period.start())) {
+                continue;
+            }
             for (AccountPeriod figures : accountPeriods(workings, account)) {
                 accountPeriods.add(figures);
                 // Interest dated before a balance entered this period, or on the day of one, is already in that balance.
@@ -488,7 +493,7 @@ public final class Ledger {
         List<PromoEnd> ending = new ArrayList<>();
         for (Account account : allAccounts) {
             List<CardsRepository.Promo> ofCard = workings.promos().getOrDefault(account.id(), List.of());
-            if (account.archived() || ofCard.isEmpty()) {
+            if (account.awayOn(start) || ofCard.isEmpty()) {
                 continue;
             }
             Optional<PeriodBalance> balance = workings.projection(account.id()).balances().stream()
@@ -906,7 +911,7 @@ public final class Ledger {
         return flows;
     }
 
-    /** What every open bucket holds at the end of {@code day}, by bucket id. */
+    /** What every bucket holds at the end of {@code day}, by bucket id; one archived as of that day or earlier is not listed. */
     public Map<Long, Long> bucketBalances(LocalDate day) {
         Map<Long, Long> held = new HashMap<>();
         for (List<PeriodBuckets> byPeriod : workings(List.of(new PayPeriod(day, day, day))).buckets().values()) {
@@ -1179,9 +1184,10 @@ public final class Ledger {
         // first money that moved in or out of it, the way an account builds from the day it is
         // opened. That needs everything there is, not just what follows the oldest balance.
         List<Account> allAccounts = accounts.all();
-        List<Item> active = items.all().stream().filter(item -> !item.archived()).toList();
+        // Archived items too: each counts until the day it was archived as of, and the calendar leaves out the rest.
+        List<Item> active = items.all();
         Set<Long> builtFromZero = allAccounts.stream()
-                .filter(account -> !account.archived() && !entered.containsKey(account.id()))
+                .filter(account -> !entered.containsKey(account.id()))
                 .map(Account::id)
                 .collect(Collectors.toSet());
         if (!builtFromZero.isEmpty()) {
@@ -1226,20 +1232,22 @@ public final class Ledger {
 
         // A bucket holds everything moved into it since it was opened, and a bill saved up for
         // looks ahead to when it is next due, so buckets widen the stretch occurrences are needed for.
-        List<Bucket> open = buckets.all().stream().filter(bucket -> !bucket.archived()).toList();
-        LocalDate expandFrom = open.stream().map(Bucket::openedOn).filter(from::isAfter).min(Comparator.naturalOrder()).orElse(from);
-        LocalDate expandTo = open.isEmpty() ? last : last.plusMonths(BucketMoves.lookAheadMonths(active, last));
+        // Archived buckets too: each holds what it did until the day it was archived as of (Rachel, 2026-10-22: "the
+        // previous activity needs to remain").
+        List<Bucket> allBuckets = buckets.all();
+        LocalDate expandFrom = allBuckets.stream().map(Bucket::openedOn).filter(from::isAfter).min(Comparator.naturalOrder()).orElse(from);
+        LocalDate expandTo = allBuckets.isEmpty() ? last : last.plusMonths(BucketMoves.lookAheadMonths(active, last));
         ItemCalendar.Expansion expansion = itemCalendar.expand(active, expandFrom, expandTo);
 
         // A schedule only reaches a bucket from the day it was opened, so adding a bucket never
         // back-fills it. Before that day a transfer still happens, into no bucket; a bucket
         // move has nothing to do at all, so it is not listed.
-        Map<Long, LocalDate> openedOn = open.stream().collect(Collectors.toMap(Bucket::id, Bucket::openedOn));
+        Map<Long, Bucket> byId = allBuckets.stream().collect(Collectors.toMap(Bucket::id, bucket -> bucket));
         // A transfer into a bucket fills it from the day the bucket counts from, whenever the
         // account's balance was entered: that balance already holds the money that arrived
         // earlier, and what was set aside out of it is still set aside.
         List<Occurrence> occurrences = expansion.occurrences().stream()
-                .map(occurrence -> reachesItsBucket(occurrence, openedOn)
+                .map(occurrence -> reachesItsBucket(occurrence, byId)
                         ? occurrence
                         : occurrence.withoutBucket())
                 .filter(occurrence -> occurrence.kind() != ItemKind.BUCKET_MOVE || occurrence.bucketId() != null)
@@ -1471,14 +1479,14 @@ public final class Ledger {
 
         // A bucket that stops at its goal takes only what it still has room for; a move that puts
         // nothing in is not listed in its pay period, and one cut down shows what it really moves.
-        Map<Long, Long> stopAt = open.stream()
+        Map<Long, Long> stopAt = allBuckets.stream()
                 .filter(bucket -> bucket.stopAtGoal() && bucket.goalCents() != null)
                 .collect(Collectors.toMap(Bucket::id, Bucket::goalCents));
         BucketMoves.Capped capped = BucketMoves.stopAtGoals(
-                open.isEmpty()
+                allBuckets.isEmpty()
                         ? List.<Move>of()
                         : BucketMoves.derive(
-                                open, buckets.allChanges(), entries.withBucketSplits(), active, settled, expansion.visits(), expansion.periods()),
+                                allBuckets, buckets.allChanges(), entries.withBucketSplits(), active, settled, expansion.visits(), expansion.periods()),
                 stopAt);
         // Amounts the user set for a day are worked out last, from everything before them as it stands now.
         List<Move> bucketMoves = new ArrayList<>(BucketMoves.settle(BucketMoves.neverOverdrawn(capped.moves())));
@@ -1490,12 +1498,17 @@ public final class Ledger {
                     return room == null ? occurrence : room == 0 ? null : occurrence.withAmount(room);
                 })
                 .filter(Objects::nonNull)
+                // A card's own payment that follows the card and comes to nothing, because nothing is owed or nothing
+                // is known about the card yet, is not listed (Rachel, 2026-10-22: "it shows the statement balance for
+                // a specific month on every month before that - it should be 0").
+                .filter(occurrence -> !(occurrence.amountCents() == 0 && !occurrence.paid() && occurrence.projectedCents() == null
+                        && followsCard.containsKey(occurrence.itemId())))
                 .toList();
         Map<Long, List<PeriodBuckets>> bucketsByAccount = new HashMap<>();
-        open.stream().collect(Collectors.groupingBy(Bucket::accountId)).forEach((accountId, ofAccount) -> {
+        allBuckets.stream().collect(Collectors.groupingBy(Bucket::accountId)).forEach((accountId, ofAccount) -> {
             Set<Long> ids = ofAccount.stream().map(Bucket::id).collect(Collectors.toSet());
             List<BucketProjector.Bucket> followed =
-                    ofAccount.stream().map(bucket -> new BucketProjector.Bucket(bucket.id(), bucket.openedOn())).toList();
+                    ofAccount.stream().map(bucket -> new BucketProjector.Bucket(bucket.id(), bucket.openedOn(), bucket.archivedOn())).toList();
             List<Move> ofTheseBuckets = bucketMoves.stream().filter(move -> ids.contains(move.bucketId())).toList();
             List<InterestCredit> interest = projections.getOrDefault(accountId, Projection.NONE).interest();
             BucketProjector.InterestRule rule = interestRule(interestSettings.get(accountId), ids);
@@ -1576,13 +1589,13 @@ public final class Ledger {
         }
     }
 
-    /** True unless the occurrence names a bucket that is archived, or was not open yet on the day it counts. */
-    private static boolean reachesItsBucket(Occurrence occurrence, Map<Long, LocalDate> openedOn) {
+    /** True unless the occurrence names a bucket that was not open yet, or was archived, on the day it counts. */
+    private static boolean reachesItsBucket(Occurrence occurrence, Map<Long, Bucket> buckets) {
         if (occurrence.bucketId() == null) {
             return true;
         }
-        LocalDate opened = openedOn.get(occurrence.bucketId());
-        return opened != null && !occurrence.payBy().isBefore(opened);
+        Bucket bucket = buckets.get(occurrence.bucketId());
+        return bucket != null && !occurrence.payBy().isBefore(bucket.openedOn()) && !Archiving.awayOn(bucket.archivedOn(), occurrence.payBy());
     }
 
     /**

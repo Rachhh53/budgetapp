@@ -23,6 +23,8 @@ export interface Asset {
   /** The loan against it, for equity; `null` when it is owned outright. */
   linkedLoanAccountId: number | null;
   archived: boolean;
+  /** The day it was archived as of: it counts before it and is put away from it on; `null` when it is not archived. */
+  archivedOn: string | null;
   /** The newest value entered; `null` until there is one. */
   latestValue: AssetValue | null;
   /** What it is taken to be worth today; `null` until a value is entered. */
@@ -48,6 +50,8 @@ export interface AssetInput {
   appreciationBp: number | null;
   linkedLoanAccountId: number | null;
   archived: boolean;
+  /** With `archived`: the day it is archived as of, today or earlier. Left out, the day it had, or today. */
+  archivedOn?: string | null;
   /** Only read when adding: the asset's first value, and the day it is from. */
   valueCents?: number | null;
   valueDate?: string | null;

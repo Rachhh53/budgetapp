@@ -8,7 +8,7 @@ import type { Entry } from "../../src/api/entries";
 import type { IncomeSource, OneOffPaycheck, PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
-import { addDays, todayIso } from "../../src/lib/dates";
+import { addDays, paidDateWithin, todayIso } from "../../src/lib/dates";
 import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
@@ -18,7 +18,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null },
 };
@@ -136,7 +136,7 @@ const GIFTS: Bucket = {
   color: "#b45309",
   goalCents: 60000,
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   openedOn: "2026-09-01",
   goalDate: null,
   stopAtGoal: false,
@@ -181,7 +181,7 @@ const ELECTRIC_ITEM: Item = {
   name: "Electric",
   kind: "bill",
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 14000,
@@ -1794,7 +1794,9 @@ describe("pay period screen: billed later", () => {
     expect(manual).toHaveTextContent("Invoice for visits through Sep 30 · due Oct 10");
     await userEvent.click(within(manual).getByRole("checkbox", { name: "Therapy paid" }));
 
-    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/7/invoices/3")).toEqual([{ paid: true, paidDate: todayIso() }]));
+    // Dated inside the period it is ticked from: today while it runs, else the day it counts on.
+    const paidDate = paidDateWithin(WAITING.start, WAITING.end, "2026-10-10", todayIso());
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/7/invoices/3")).toEqual([{ paid: true, paidDate }]));
     expect(calls(fetchMock).some((call) => call.includes("/occurrences/"))).toBe(false);
   });
 });

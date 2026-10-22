@@ -6,6 +6,7 @@ import app.budget.server.accounts.InterestRepository.RateKind;
 import app.budget.server.accounts.InterestRepository.Settings;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
@@ -72,7 +73,8 @@ public final class AccountsRoutes {
             String subtypeLabel,
             String color,
             Boolean archived,
-            Long lowBalanceThresholdCents) {}
+            Long lowBalanceThresholdCents,
+            LocalDate archivedOn) {}
 
     /** Request body for entering a balance. */
     public record BalanceInput(LocalDate date, Long amountCents, String note) {}
@@ -93,16 +95,14 @@ public final class AccountsRoutes {
     public record Deleted(boolean deleted) {}
 
     private void create(Context ctx) {
-        long id = accounts.create(fields(Inputs.body(ctx, AccountInput.class)));
+        long id = accounts.create(fields(Inputs.body(ctx, AccountInput.class), null));
         ApiResponse.send(ctx, 201, detail(id));
     }
 
     private void update(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        AccountsRepository.Fields fields = fields(Inputs.body(ctx, AccountInput.class));
-        if (!accounts.exists(id)) {
-            throw ApiException.notFound();
-        }
+        Account existing = accounts.find(id).orElseThrow(ApiException::notFound);
+        AccountsRepository.Fields fields = fields(Inputs.body(ctx, AccountInput.class), existing.archivedOn());
         if (!fields.type().holdsCash() && buckets.all().stream().anyMatch(bucket -> bucket.accountId() == id)) {
             throw ApiException.conflict(
                     "This account has buckets, which only checking and savings accounts can hold. Remove the buckets first.");
@@ -261,7 +261,8 @@ public final class AccountsRoutes {
         };
     }
 
-    private static AccountsRepository.Fields fields(AccountInput input) {
+    /** @param archivedBefore the day the account was archived as of until now; {@code null} when it wasn't */
+    private AccountsRepository.Fields fields(AccountInput input, LocalDate archivedBefore) {
         AccountType type = Inputs.choice(AccountType.class, input.type(), "the kind of account");
         Long threshold = input.lowBalanceThresholdCents() == null
                 ? null
@@ -275,7 +276,7 @@ public final class AccountsRoutes {
                 type,
                 Inputs.optionalText(input.subtypeLabel(), "the account label", NAME_MAX),
                 Inputs.color(input.color()),
-                Boolean.TRUE.equals(input.archived()),
+                Archiving.archivedOn(input.archived(), input.archivedOn(), archivedBefore, LocalDate.now(clock), null),
                 threshold);
     }
 }

@@ -84,6 +84,18 @@ export function addDays(iso: string, days: number): string {
 }
 
 /** Today's date on this device, as `YYYY-MM-DD`. */
+/**
+ * The day a bill ticked paid from a pay period is dated, unless another is chosen: today while the period runs,
+ * otherwise the day it counts on, kept inside the period (Rachel, 2026-10-22: "it should default to within the pay
+ * period"). Ticking off old bills used to date them the day they were ticked, which moved them out of their period.
+ */
+export function paidDateWithin(start: string, end: string, countsOn: string, today: string): string {
+  if (today >= start && today <= end) {
+    return today;
+  }
+  return countsOn < start ? start : countsOn > end ? end : countsOn;
+}
+
 export function todayIso(): string {
   return toIso(new Date());
 }

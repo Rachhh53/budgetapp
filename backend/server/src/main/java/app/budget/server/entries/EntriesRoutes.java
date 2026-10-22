@@ -5,6 +5,7 @@ import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
@@ -243,7 +244,7 @@ public final class EntriesRoutes {
                 toAccountId,
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
                 tagIds,
-                splits(input.bucketSplits(), kind, amount, input.accountId(), toAccountId == null ? input.accountId() : toAccountId),
+                splits(input.bucketSplits(), kind, amount, input.date(), input.accountId(), toAccountId == null ? input.accountId() : toAccountId),
                 // Only money leaving a checking account can have been paid by check; the form sends whatever was last typed.
                 kind != EntryKind.MONEY_IN && isChecking(input.accountId())
                         ? Inputs.optionalText(input.checkNumber(), "the check number", CHECK_NUMBER_MAX)
@@ -283,7 +284,7 @@ public final class EntriesRoutes {
             return;
         }
         Set<Long> ids = buckets.all().stream()
-                .filter(bucket -> !bucket.archived() && bucket.accountId() == fields.accountId())
+                .filter(bucket -> !Archiving.awayOn(bucket.archivedOn(), fields.date()) && bucket.accountId() == fields.accountId())
                 .map(Bucket::id)
                 .collect(Collectors.toSet());
         if (fields.bucketSplits().stream().noneMatch(split -> ids.contains(split.bucketId()))) {
@@ -310,9 +311,10 @@ public final class EntriesRoutes {
 
     /**
      * The buckets an entry touches. A bucket in the account the money leaves is where it comes
-     * out of; a bucket in the account it arrives in is where part of it is set aside.
+     * out of; a bucket in the account it arrives in is where part of it is set aside. A bucket archived as of a later
+     * day can still be named, for something from before it was archived.
      */
-    private List<Split> splits(List<SplitInput> inputs, EntryKind kind, long amount, long leaves, long arrivesIn) {
+    private List<Split> splits(List<SplitInput> inputs, EntryKind kind, long amount, LocalDate date, long leaves, long arrivesIn) {
         if (inputs == null || inputs.isEmpty()) {
             return List.of();
         }
@@ -327,7 +329,7 @@ public final class EntriesRoutes {
             Bucket bucket = buckets.find(input.bucketId()).orElse(null);
             boolean comesOut = bucket != null && kind != EntryKind.MONEY_IN && bucket.accountId() == leaves;
             boolean goesIn = bucket != null && kind != EntryKind.MONEY_OUT && bucket.accountId() == arrivesIn;
-            if (bucket == null || bucket.archived() || !(comesOut || goesIn)) {
+            if (bucket == null || (date != null && Archiving.awayOn(bucket.archivedOn(), date)) || !(comesOut || goesIn)) {
                 throw ApiException.badRequest(kind == EntryKind.MONEY_OUT
                         ? "Please choose a bucket in the account this comes out of."
                         : "Please choose buckets in the account this money goes into.");

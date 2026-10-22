@@ -6,7 +6,7 @@ import type { Card, CardDetail, CardRewards, CardSettings, Promo } from "../../s
 import type { PayPeriod, PayPeriods } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
-import { bodiesSentTo, calls, fakeBackend, renderApp } from "../helpers";
+import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
   id: 1,
@@ -15,7 +15,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 1, date: "2026-10-01", amountCents: 500000, note: null },
 };
@@ -483,6 +483,17 @@ describe("a card's page", () => {
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/cards/3/statements/4"));
   });
 
+  it("opens a new statement on the one closing in the month of the day chosen in Settings", async () => {
+    // Rachel, 2026-10-22: "add a statement in account is defaulting to 2025 when my default date everywhere else is
+    // 01012026". Closing on the 20th, Jan 1 opened it on Dec 20.
+    withCard(CARD, { "GET /api/settings": () => ({ status: 200, data: { ...DEFAULT_SETTINGS, default_date: "2026-01-01" } }) });
+    renderApp("/accounts/3");
+
+    await userEvent.click(await screen.findByRole("button", { name: "+ Add a statement" }));
+    const dialog = screen.getByRole("dialog", { name: "Add a statement — Harbor Visa" });
+    expect(within(dialog).getByLabelText("Closed on")).toHaveValue("2026-01-20");
+  });
+
   it("changes a statement that was entered, and offers nothing to change on the projected one", async () => {
     const fetchMock = withCard(CARD, { "PUT /api/cards/3/statements/4": () => ({ status: 200, data: detailOf(CARD), changed: true }) });
     renderApp("/accounts/3");
@@ -583,7 +594,7 @@ const PAYMENT: Item = (() => {
     name: "Harbor Visa payment",
     kind: "card_payment",
     note: null,
-    archived: false,
+    archived: false, archivedOn: null,
     createdOn: "2026-10-01",
     tagIds: [],
     amountCents: 0,

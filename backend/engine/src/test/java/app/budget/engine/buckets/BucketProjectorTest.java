@@ -49,6 +49,22 @@ class BucketProjectorTest {
     }
 
     @Test
+    void aClosedBucketKeepsWhatCameBeforeLetsGoOnItsDayAndIsNotListedAfter() {
+        // Archived as of Oct 20 (Rachel, 2026-10-22: "the previous activity needs to remain").
+        List<Bucket> buckets = List.of(new Bucket(GIFTS, date("2026-09-01"), date("2026-10-20")));
+        List<Move> moves = List.of(move(GIFTS, "2026-10-01", 5_000), move(GIFTS, "2026-10-25", 3_000));
+
+        Result result = BucketProjector.project(
+                buckets, moves, List.of(credit("2026-10-31", 3354, 1_000_000)), new InterestRule(InterestDestination.BUCKET, GIFTS), PERIODS);
+
+        assertThat(bucket(result, 0, GIFTS)).isEqualTo(new BucketBalance(GIFTS, Money.ZERO, cents(5_000)));
+        // What it still held goes back to what is available on Oct 20; the move and interest after it never reach it.
+        assertThat(bucket(result, 1, GIFTS)).isEqualTo(new BucketBalance(GIFTS, cents(5_000), Money.ZERO));
+        assertThat(result.periods().get(2).buckets()).isEmpty();
+        assertThat(result.interestShares()).isEmpty();
+    }
+
+    @Test
     void everyBucketIsListedEvenWhenNothingMovedIt() {
         Result result = BucketProjector.project(BUCKETS, List.of(), List.of(), InterestRule.UNASSIGNED, PERIODS);
 
