@@ -24,43 +24,38 @@ class PeriodAssignerTest {
     private final PeriodAssigner assigner = new PeriodAssigner(PERIODS);
 
     @Test
-    void rentDueOnPaydayAndPaidByHandComesOutOfThePaycheckBefore() {
-        assertThat(assigner.assign(date("2026-10-01"), Placement.DUE_PERIOD, false)).hasValue(period("2026-09-15", "2026-09-30"));
-    }
-
-    @Test
-    void theSameRentOnAutopayStaysInThePeriodItIsDueIn() {
-        assertThat(assigner.assign(date("2026-10-01"), Placement.DUE_PERIOD, true)).hasValue(period("2026-10-01", "2026-10-14"));
+    void rentDueOnPaydayIsPaidFromThatPaycheckWhetherPaidByHandOrAutopay() {
+        // A period's first day is part of it like any other (Rachel, 2026-10-21).
+        assertThat(assigner.assign(date("2026-10-01"), Placement.DUE_PERIOD)).hasValue(period("2026-10-01", "2026-10-14"));
     }
 
     @Test
     void electricDueOnThe16thPlacedOneEarlyLandsInTheFirstHalf() {
-        assertThat(assigner.assign(date("2026-10-16"), Placement.ONE_EARLY, false)).hasValue(period("2026-10-01", "2026-10-14"));
+        assertThat(assigner.assign(date("2026-10-16"), Placement.ONE_EARLY)).hasValue(period("2026-10-01", "2026-10-14"));
     }
 
     @Test
     void electricDueOnThe16thInItsDuePeriodLandsInTheSecondHalf() {
-        assertThat(assigner.assign(date("2026-10-16"), Placement.DUE_PERIOD, false)).hasValue(period("2026-10-15", "2026-10-31"));
+        assertThat(assigner.assign(date("2026-10-16"), Placement.DUE_PERIOD)).hasValue(period("2026-10-15", "2026-10-31"));
     }
 
     @Test
-    void oneEarlyAndDueOnPaydayMovesBackOnePeriodNotTwo() {
-        assertThat(assigner.assign(date("2026-10-01"), Placement.ONE_EARLY, false)).hasValue(period("2026-09-15", "2026-09-30"));
-        assertThat(assigner.assign(date("2026-10-01"), Placement.ONE_EARLY, true)).hasValue(period("2026-09-15", "2026-09-30"));
+    void oneEarlyAndDueOnPaydayMovesBackOnePeriod() {
+        assertThat(assigner.assign(date("2026-10-01"), Placement.ONE_EARLY)).hasValue(period("2026-09-15", "2026-09-30"));
     }
 
     @Test
     void aDateOutsideTheKnownPeriodsHasNoPeriod() {
-        assertThat(assigner.assign(date("2025-01-10"), Placement.DUE_PERIOD, true)).isEmpty();
-        assertThat(assigner.assign(date("2030-01-10"), Placement.DUE_PERIOD, true)).isEmpty();
+        assertThat(assigner.assign(date("2025-01-10"), Placement.DUE_PERIOD)).isEmpty();
+        assertThat(assigner.assign(date("2030-01-10"), Placement.DUE_PERIOD)).isEmpty();
     }
 
     @Test
     void movingBackFromTheFirstKnownPeriodHasNowhereToGo() {
         LocalDate inFirstPeriod = PERIODS.getFirst().start().plusDays(2);
 
-        assertThat(assigner.assign(inFirstPeriod, Placement.ONE_EARLY, true)).isEmpty();
-        assertThat(assigner.assign(inFirstPeriod, Placement.DUE_PERIOD, true)).hasValue(PERIODS.getFirst());
+        assertThat(assigner.assign(inFirstPeriod, Placement.ONE_EARLY)).isEmpty();
+        assertThat(assigner.assign(inFirstPeriod, Placement.DUE_PERIOD)).hasValue(PERIODS.getFirst());
     }
 
     @Test

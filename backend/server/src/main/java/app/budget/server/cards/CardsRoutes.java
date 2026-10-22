@@ -13,6 +13,7 @@ import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.engine.schedule.WeekendRule;
 import app.budget.server.accounts.Account;
+import app.budget.server.accounts.Account.BalanceEntry;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.accounts.InterestRepository;
@@ -43,6 +44,7 @@ import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -115,6 +117,7 @@ public final class CardsRoutes {
         routes.put("/api/cards/{id}/rewards/redemptions/{redemptionId}", this::updateRedemption);
         routes.delete("/api/cards/{id}/rewards/redemptions/{redemptionId}", this::deleteRedemption);
         routes.post("/api/cards/{id}/statements", this::saveStatement);
+        routes.put("/api/cards/{id}/statements/{statementId}", this::updateStatement);
         routes.delete("/api/cards/{id}/statements/{statementId}", this::deleteStatement);
         routes.post("/api/cards/{id}/promos", this::createPromo);
         routes.put("/api/cards/{id}/promos/{promoId}", this::updatePromo);
@@ -247,6 +250,14 @@ public final class CardsRoutes {
      * @param paidCents what has been paid toward it since it closed
      * @param status    {@code planned}, {@code paid}, {@code part_paid} or {@code due}
      */
+    /**
+     * @param recordsCents  an entered statement: what the card's own records came to at the end of its closing day
+     *                      (Rachel, 2026-10-21: "when I enter a statement balance … and there is discrepancy … just
+     *                      make that visible"); {@code null} for the projected one
+     * @param reconcileFrom when they differ, the first day of what to look through: the day after the last entered
+     *                      statement that matched, or the last balance entered, whichever is later; {@code null} when
+     *                      they match
+     */
     public record StatementView(
             Long id,
             LocalDate closeDate,
@@ -255,7 +266,9 @@ public final class CardsRoutes {
             LocalDate dueDate,
             boolean entered,
             long paidCents,
-            String status) {}
+            String status,
+            Long recordsCents,
+            LocalDate reconcileFrom) {}
 
     /** The next payment into a card that is still to be made. */
     public record NextPayment(
@@ -561,7 +574,29 @@ public final class CardsRoutes {
 
     private void saveStatement(Context ctx) {
         Account account = card(ctx);
-        StatementInput input = Inputs.body(ctx, StatementInput.class);
+        StatementFields fields = statementFields(account, Inputs.body(ctx, StatementInput.class));
+        cards.saveStatement(account.id(), fields.closeDate(), fields.balanceCents(), fields.minimumDueCents(), fields.dueDate());
+        ApiResponse.send(ctx, 201, detail(account));
+    }
+
+    /** Changes a statement in place: its numbers and dates. 404 for one the card doesn't have; 409 for a day taken. */
+    private void updateStatement(Context ctx) {
+        Account account = card(ctx);
+        long statementId = Inputs.id(ctx, "statementId");
+        StatementFields fields = statementFields(account, Inputs.body(ctx, StatementInput.class));
+        switch (cards.updateStatement(
+                account.id(), statementId, fields.closeDate(), fields.balanceCents(), fields.minimumDueCents(), fields.dueDate())) {
+            case NOT_FOUND -> throw ApiException.notFound();
+            case SAME_DAY -> throw ApiException.conflict(
+                    "There's already a statement that closed that day. Please change that one, or choose another date.");
+            case DONE -> ApiResponse.ok(ctx, detail(account));
+        }
+    }
+
+    private record StatementFields(LocalDate closeDate, long balanceCents, Long minimumDueCents, LocalDate dueDate) {}
+
+    /** Checks a statement's numbers and dates, filling in the due date from the card's usual day when left out. */
+    private StatementFields statementFields(Account account, StatementInput input) {
         LocalDate today = pay.today();
         if (input.closeDate() == null) {
             throw ApiException.badRequest("Please choose the date this statement closed.");
@@ -580,8 +615,7 @@ public final class CardsRoutes {
         if (!dueDate.isAfter(input.closeDate()) || !Inputs.inSupportedYears(dueDate)) {
             throw ApiException.badRequest("A statement is due after it closes. Please check the two dates.");
         }
-        cards.saveStatement(account.id(), input.closeDate(), balance, minimum, dueDate);
-        ApiResponse.send(ctx, 201, detail(account));
+        return new StatementFields(input.closeDate(), balance, minimum, dueDate);
     }
 
     private void deleteStatement(Context ctx) {
@@ -722,7 +756,7 @@ public final class CardsRoutes {
                 CardProjector.Statement next = planned.get();
                 views.add(new StatementView(
                         null, next.closeDate(), next.balance().cents(), next.minimumDue() == null ? null : (Long) next.minimumDue().cents(),
-                        next.dueDate(), false, 0, STATUS_PLANNED));
+                        next.dueDate(), false, 0, STATUS_PLANNED, null, null));
             }
         }
         if (entered.isEmpty()) {
@@ -732,6 +766,8 @@ public final class CardsRoutes {
         LocalDate from = entered.getLast().closeDate().plusDays(1);
         LocalDate to = entered.stream().map(Statement::dueDate).max(LocalDate::compareTo).orElse(today);
         List<Transaction> lines = ledger.transactions(account, from, to.isBefore(from) ? from : to);
+        Map<LocalDate, Long> records = records(account, entered);
+        Map<LocalDate, LocalDate> reconcileFrom = reconcileFrom(account, entered, records);
         for (Statement statement : entered) {
             long paid = lines.stream()
                     .filter(line -> line.amountCents() < 0 && !line.unpaid()
@@ -744,9 +780,50 @@ public final class CardsRoutes {
                     : paid > 0 ? STATUS_PART_PAID : STATUS_DUE;
             views.add(new StatementView(
                     statement.id(), statement.closeDate(), statement.balanceCents(), statement.minimumDueCents(),
-                    statement.dueDate(), true, paid, status));
+                    statement.dueDate(), true, paid, status, records.get(statement.closeDate()),
+                    reconcileFrom.get(statement.closeDate())));
         }
         return views;
+    }
+
+    /** What the card's records came to at the end of each entered statement's closing day, worked out in one pass. */
+    private Map<LocalDate, Long> records(Account account, List<Statement> entered) {
+        List<LocalDate> closes = entered.stream().map(Statement::closeDate).distinct().sorted().toList();
+        Map<LocalDate, Long> records = new HashMap<>();
+        for (Ledger.DayBalances day : ledger.balancesOn(closes)) {
+            day.balances().stream()
+                    .filter(balance -> balance.accountId() == account.id())
+                    .findFirst()
+                    .ifPresent(balance -> records.put(day.date(), balance.balanceCents()));
+        }
+        return records;
+    }
+
+    /**
+     * For each entered statement the records don't match: where to start looking. A balance entered for the card
+     * puts the records right from its day, and a statement that matched says everything up to its close was right.
+     */
+    private Map<LocalDate, LocalDate> reconcileFrom(Account account, List<Statement> entered, Map<LocalDate, Long> records) {
+        List<LocalDate> balancesEntered = accounts.balances(account.id()).stream().map(BalanceEntry::date).sorted().toList();
+        List<Statement> oldestFirst = entered.stream().sorted(Comparator.comparing(Statement::closeDate)).toList();
+        Map<LocalDate, LocalDate> from = new HashMap<>();
+        LocalDate matched = null;
+        for (Statement statement : oldestFirst) {
+            Long counted = records.get(statement.closeDate());
+            if (counted == null || counted == statement.balanceCents()) {
+                matched = statement.closeDate().plusDays(1);
+                continue;
+            }
+            LocalDate balance = balancesEntered.stream().filter(date -> !date.isAfter(statement.closeDate()))
+                    .reduce((earlier, later) -> later).orElse(null);
+            // Never matched and no balance: the month the statement covers.
+            LocalDate start = matched != null ? matched : statement.closeDate().minusMonths(1).plusDays(1);
+            if (balance != null && balance.isAfter(start)) {
+                start = balance;
+            }
+            from.put(statement.closeDate(), start);
+        }
+        return from;
     }
 
     private Map<Long, Long> balances(LocalDate today) {

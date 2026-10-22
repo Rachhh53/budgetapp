@@ -23,7 +23,8 @@ export const TERMS = {
   },
   startingBalance: {
     term: "Starting balance",
-    about: "What the account holds as the pay period starts: the latest balance you entered, carried forward with everything scheduled since.",
+    about:
+      "What the account holds as the pay period starts: always what the pay period before ended with. A balance you enter during a pay period shows in it as Balance adjusted, which you can change or delete.",
   },
   comingIn: {
     term: "Coming in",
@@ -53,7 +54,7 @@ export const TERMS = {
   payEarly: {
     term: "Pay a period early",
     about:
-      "Paid from the paycheck before the pay period it's due in, so the money is there in time. Something due on a payday that you pay by hand is always paid this way.",
+      "Paid from the paycheck before the pay period it's due in, so the money is there in time.",
   },
   withdrawalRate: {
     term: "Withdrawal rate",

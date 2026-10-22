@@ -411,6 +411,57 @@ public final class CardsRepository {
                 .execute());
     }
 
+    /** What changing a statement came to. */
+    public enum StatementChange {
+        DONE,
+        /** No such statement on that card. */
+        NOT_FOUND,
+        /** Another statement of the card already closed that day. */
+        SAME_DAY
+    }
+
+    /**
+     * Changes a statement in place, closing date included, so what is attached to it stays with it (Rachel,
+     * 2026-10-21: "I want the ability to edit basically everything I enter. namely statements").
+     */
+    public StatementChange updateStatement(
+            long accountId, long statementId, LocalDate closeDate, long balanceCents, Long minimumDueCents, LocalDate dueDate) {
+        return jdbi.inTransaction(handle -> {
+            boolean found = handle.createQuery("SELECT count(*) FROM card_statements WHERE id = :id AND account_id = :accountId")
+                    .bind("id", statementId)
+                    .bind("accountId", accountId)
+                    .mapTo(Integer.class)
+                    .one() > 0;
+            if (!found) {
+                return StatementChange.NOT_FOUND;
+            }
+            boolean taken = handle.createQuery("""
+                            SELECT count(*) FROM card_statements WHERE account_id = :accountId AND close_date = :closeDate AND id <> :id
+                            """)
+                    .bind("accountId", accountId)
+                    .bind("closeDate", closeDate.toString())
+                    .bind("id", statementId)
+                    .mapTo(Integer.class)
+                    .one() > 0;
+            if (taken) {
+                return StatementChange.SAME_DAY;
+            }
+            handle.createUpdate("""
+                            UPDATE card_statements
+                            SET close_date = :closeDate, statement_balance = :balance, minimum_due = :minimum, due_date = :dueDate
+                            WHERE id = :id AND account_id = :accountId
+                            """)
+                    .bind("closeDate", closeDate.toString())
+                    .bind("balance", balanceCents)
+                    .bind("minimum", minimumDueCents)
+                    .bind("dueDate", dueDate.toString())
+                    .bind("id", statementId)
+                    .bind("accountId", accountId)
+                    .execute();
+            return StatementChange.DONE;
+        });
+    }
+
     public boolean deleteStatement(long accountId, long statementId) {
         return jdbi.withHandle(handle -> handle
                 .createUpdate("DELETE FROM card_statements WHERE id = :id AND account_id = :accountId")

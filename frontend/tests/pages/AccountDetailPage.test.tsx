@@ -390,6 +390,43 @@ describe("account detail screen", () => {
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/accounts/1/balances/10"));
   });
 
+  it("changes a balance entered, and says when the records came to something else", async () => {
+    const fetchMock = fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+      "GET /api/accounts/1/performance": () => ({
+        status: 200,
+        data: {
+          thisYear: null,
+          balances: [
+            { entryId: 11, date: "2026-10-02", amountCents: 170510, changeCents: -9490, depositsCents: null, growthCents: null, recordsCents: 171510 },
+            { entryId: 10, date: "2026-09-01", amountCents: 180000, changeCents: null, depositsCents: null, growthCents: null, recordsCents: null },
+          ],
+          actualGrowth: null,
+        },
+      }),
+      "POST /api/accounts/1/balances": () => ({ status: 201, data: DETAIL, changed: true }),
+    });
+    renderApp("/accounts/1");
+
+    // Rachel, 2026-10-21: "where's my recon and difference in accounts?"
+    expect(await screen.findByText(/Your records came to \$1,715.10, \$10.00 more than what you entered\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "See what went in" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit the balance from Oct 2, 2026" }));
+    const dialog = screen.getByRole("dialog", { name: "Change balance — Everyday Checking" });
+    const balance = within(dialog).getByRole("textbox", { name: "Balance" });
+    expect(balance).toHaveValue("1705.10");
+    await userEvent.clear(balance);
+    await userEvent.type(balance, "1715.10");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save balance" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "POST /api/accounts/1/balances")).toEqual([{ date: "2026-10-02", amountCents: 171510, note: "From statement" }]),
+    );
+    // Same day, so it replaced itself: nothing to remove.
+    expect(calls(fetchMock).filter((call) => call.startsWith("DELETE"))).toEqual([]);
+  });
+
   it("changes the account's details", async () => {
     const fetchMock = fakeBackend({
       "GET /api/accounts": () => ({ status: 200, data: [CHECKING] }),
@@ -885,8 +922,8 @@ describe("account detail screen", () => {
       const detail = {
         bucket: GIFTS,
         changes: [
-          { id: 4, bucketId: 7, date: "2026-10-14", amountCents: 0, note: "Amount set", setToCents: 331010 },
-          { id: 3, bucketId: 7, date: "2026-10-01", amountCents: 15000, note: "Starting amount", setToCents: null },
+          { id: 4, bucketId: 7, date: "2026-10-14", amountCents: 0, note: "Amount set", setToCents: 331010, movedOut: false },
+          { id: 3, bucketId: 7, date: "2026-10-01", amountCents: 15000, note: "Starting amount", setToCents: null, movedOut: false },
         ],
       };
       const fetchMock = fakeBackend({
@@ -907,6 +944,56 @@ describe("account detail screen", () => {
       expect(within(history).getByRole("button", { name: "Remove the amount set to $3,310.10 on Oct 14, 2026" })).toBeInTheDocument();
       await userEvent.click(within(history).getByRole("button", { name: "Remove the $150.00 put in on Oct 1, 2026" }));
       await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/buckets/7/changes/3"));
+    });
+
+    it("changes money put in and an amount set from the bucket's history, but not money moved out to spend", async () => {
+      const detail = {
+        bucket: GIFTS,
+        changes: [
+          { id: 5, bucketId: 7, date: "2026-10-16", amountCents: -2000, note: "Gift wrap", setToCents: null, movedOut: true },
+          { id: 4, bucketId: 7, date: "2026-10-14", amountCents: 0, note: "Amount set", setToCents: 331010, movedOut: false },
+          { id: 3, bucketId: 7, date: "2026-10-01", amountCents: 15000, note: "Starting amount", setToCents: null, movedOut: false },
+        ],
+      };
+      const fetchMock = fakeBackend({
+        "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+        "GET /api/buckets/7": () => ({ status: 200, data: detail }),
+        "PUT /api/buckets/7/changes/3": () => ({ status: 200, data: detail, changed: true }),
+        "PUT /api/buckets/7/changes/4": () => ({ status: 200, data: detail, changed: true }),
+      });
+      renderApp("/accounts/1");
+
+      // Rachel, 2026-10-21: "I want the ability to edit basically everything I enter".
+      await userEvent.click(await screen.findByRole("button", { name: "History of Holiday gifts" }));
+      const history = within(within(screen.getByRole("dialog", { name: "Edit Holiday gifts" })).getByRole("region", { name: "History" }));
+      expect(await history.findByText("Gift wrap")).toBeInTheDocument();
+      // Moved out to spend: changed from the pay period, as a move out.
+      expect(history.getAllByRole("button", { name: /^Edit / })).toHaveLength(2);
+
+      await userEvent.click(history.getByRole("button", { name: "Edit the change on Oct 1, 2026" }));
+      const putIn = history.getByRole("textbox", { name: "Put in" });
+      expect(putIn).toHaveValue("150.00");
+      await userEvent.clear(putIn);
+      await userEvent.type(putIn, "175");
+      await userEvent.click(history.getByRole("button", { name: "Save" }));
+      await waitFor(() =>
+        expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7/changes/3")).toEqual([
+          { date: "2026-10-01", amountCents: 17500, note: "Starting amount" },
+        ]),
+      );
+
+      await userEvent.click(await history.findByRole("button", { name: "Edit the amount set on Oct 14, 2026" }));
+      // An amount set has no note to change.
+      expect(history.queryByLabelText("Note (optional)")).not.toBeInTheDocument();
+      const setTo = history.getByRole("textbox", { name: "Set to" });
+      await userEvent.clear(setTo);
+      // Enter saves the row alone, not the bucket's form around it.
+      await userEvent.type(setTo, "3200{Enter}");
+      await waitFor(() =>
+        expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7/changes/4")).toEqual([{ date: "2026-10-14", amountCents: 320000, note: "Amount set" }]),
+      );
+      expect(calls(fetchMock)).not.toContain("PUT /api/buckets/7");
     });
 
     it("sets what a bucket held on an earlier day, for the server to build on", async () => {

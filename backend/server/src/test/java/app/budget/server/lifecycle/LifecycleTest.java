@@ -3,6 +3,7 @@ package app.budget.server.lifecycle;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.file.Path;
@@ -47,10 +48,29 @@ class LifecycleTest {
 
     @Test
     void movesToTheNextPortWhenThePreferredOneIsBusy() throws Exception {
-        try (ServerSocket busy = new ServerSocket(0, 1, InetAddress.getByName(LOOPBACK))) {
-            int port = PortFinder.firstFree(LOOPBACK, busy.getLocalPort());
+        // Windows reserves blocks of ports (Hyper-V and others), and a port the OS hands out can sit right below one:
+        // then none of the next ones can be bound and the finder rightly gives up (CI, 2026-10-21: "No free port found
+        // starting at 49686"). So the busy port is one whose next port was just seen free.
+        for (int tries = 0; tries < 20; tries++) {
+            try (ServerSocket busy = new ServerSocket(0, 1, InetAddress.getByName(LOOPBACK))) {
+                int next = busy.getLocalPort() + 1;
+                if (!canBind(next)) {
+                    continue;
+                }
+                int port = PortFinder.firstFree(LOOPBACK, busy.getLocalPort());
 
-            assertThat(port).isGreaterThan(busy.getLocalPort());
+                assertThat(port).isGreaterThan(busy.getLocalPort());
+                return;
+            }
+        }
+        throw new AssertionError("No busy port with a free one after it was found to test with");
+    }
+
+    private static boolean canBind(int port) {
+        try (ServerSocket probe = new ServerSocket(port, 1, InetAddress.getByName(LOOPBACK))) {
+            return true;
+        } catch (IOException e) {
+            return false;
         }
     }
 

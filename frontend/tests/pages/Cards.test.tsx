@@ -87,8 +87,8 @@ function detailOf(card: Card, promos: Promo[] = card.promo ? [card.promo] : []):
     card,
     promos,
     statements: [
-      { id: null, closeDate: "2026-10-20", balanceCents: 312500, minimumDueCents: 3125, dueDate: "2026-11-15", entered: false, paidCents: 0, status: "planned" },
-      { id: 4, closeDate: "2026-09-20", balanceCents: 72500, minimumDueCents: 2500, dueDate: "2026-10-15", entered: true, paidCents: 0, status: "due" },
+      { id: null, closeDate: "2026-10-20", balanceCents: 312500, minimumDueCents: 3125, dueDate: "2026-11-15", entered: false, paidCents: 0, status: "planned", recordsCents: null, reconcileFrom: null },
+      { id: 4, closeDate: "2026-09-20", balanceCents: 72500, minimumDueCents: 2500, dueDate: "2026-10-15", entered: true, paidCents: 0, status: "due", recordsCents: null, reconcileFrom: null },
     ],
     rates: [{ id: 2, kind: "apr", rateBp: 2449, effectiveDate: "2026-01-01" }] as CardDetail["rates"],
     nextCloseDate: "2026-10-20",
@@ -169,6 +169,34 @@ describe("a card's page", () => {
     expect(statements[1]).toHaveTextContent("Due Oct 15, 2026 · To pay");
     // Far from its end, a promotion has no warning banner.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says quietly when a statement and the records differ, and opens what went in to fix it", async () => {
+    const detail = detailOf(CARD);
+    detail.statements[1] = { ...detail.statements[1]!, recordsCents: 71700, reconcileFrom: "2026-08-21" };
+    const lunch = {
+      date: "2026-09-02",
+      label: "Lunch",
+      kind: "money_out",
+      amountCents: 4000,
+      unpaid: false,
+      estimatedCents: null,
+      source: { type: "entry", entryId: 12, itemId: null, scheduledDate: null, dueDate: null, periodStart: "2026-09-01" },
+    };
+    withCard(CARD, {
+      "GET /api/cards/3": () => ({ status: 200, data: detail }),
+      "GET /api/accounts/3/transactions": () => ({ status: 200, data: [lunch] }),
+    });
+    renderApp("/accounts/3");
+
+    const statements = within(await screen.findByRole("region", { name: "Statements" }));
+    // In words, not red: by how much, and which way.
+    expect(statements.getByText(/Your records came to \$717.00, \$8.00 less than what you entered\./)).toBeInTheDocument();
+    await userEvent.click(statements.getByRole("button", { name: "See what went in" }));
+
+    expect(await statements.findByRole("button", { name: "Lunch" })).toBeInTheDocument();
+    expect(statements.getByText("Aug 21 – Sep 20, newest first. Open one to change or delete it.")).toBeInTheDocument();
+    expect(statements.getByRole("button", { name: "+ Add a charge" })).toBeInTheDocument();
   });
 
   it("warns in words before a promotion ends, more strongly when interest is deferred", async () => {
@@ -455,6 +483,28 @@ describe("a card's page", () => {
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/cards/3/statements/4"));
   });
 
+  it("changes a statement that was entered, and offers nothing to change on the projected one", async () => {
+    const fetchMock = withCard(CARD, { "PUT /api/cards/3/statements/4": () => ({ status: 200, data: detailOf(CARD), changed: true }) });
+    renderApp("/accounts/3");
+
+    // Rachel, 2026-10-21: "I want the ability to edit basically everything I enter. namely statements".
+    const statements = within(await screen.findByRole("region", { name: "Statements" }));
+    expect(statements.getAllByRole("button", { name: /^Edit the statement/ })).toHaveLength(1);
+    await userEvent.click(statements.getByRole("button", { name: "Edit the statement that closed Sep 20, 2026" }));
+    const dialog = screen.getByRole("dialog", { name: "Change statement — Harbor Visa" });
+    const balance = within(dialog).getByRole("textbox", { name: "Statement balance" });
+    expect(balance).toHaveValue("725.00");
+    await userEvent.clear(balance);
+    await userEvent.type(balance, "730");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save statement" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/cards/3/statements/4")).toEqual([
+        { closeDate: "2026-09-20", balanceCents: 73000, minimumDueCents: 2500, dueDate: "2026-10-15" },
+      ]),
+    );
+  });
+
   it("says so kindly when the card can't be found", async () => {
     withCard(CARD, { "GET /api/cards/3": () => ({ status: 404, error: "We couldn't find that." }) });
     renderApp("/accounts/3");
@@ -498,8 +548,8 @@ describe("a card on the pay period screen", () => {
     buckets: [],
     bucketMoves: [],
     accounts: [
-      { accountId: 1, startingCents: 500000, startingBucketsCents: 0, startingAvailableCents: 500000, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, endingCents: 500000, lowestCents: 500000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 500000, lowBalance: false, builtFromZero: false },
-      { accountId: 3, startingCents: 312500, startingBucketsCents: 0, startingAvailableCents: 312500, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, endingCents: 312500, lowestCents: 312500, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 312500, lowBalance: false, builtFromZero: false },
+      { accountId: 1, startingCents: 500000, startingBucketsCents: 0, startingAvailableCents: 500000, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 500000, lowestCents: 500000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 500000, lowBalance: false, builtFromZero: false },
+      { accountId: 3, startingCents: 312500, startingBucketsCents: 0, startingAvailableCents: 312500, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 312500, lowestCents: 312500, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 312500, lowBalance: false, builtFromZero: false },
     ],
     promosEnding: [ENDING],
   };

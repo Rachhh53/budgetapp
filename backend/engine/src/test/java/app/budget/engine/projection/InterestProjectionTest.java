@@ -119,9 +119,11 @@ class InterestProjectionTest {
 
         // October's estimate is still on record, but November starts from the real number.
         assertThat(projection.interest().getFirst().amount()).isEqualTo(cents(3354));
+        // It starts where October ended, and the real number shows as an adjustment on Nov 2.
         PeriodBalance november = projection.balances().get(2);
-        assertThat(november.entered()).isTrue();
-        assertThat(november.starting()).isEqualTo(cents(1_003_400));
+        assertThat(november.entered()).isFalse();
+        assertThat(november.starting()).isEqualTo(projection.balances().get(1).ending());
+        assertThat(november.adjustments().getFirst().balance()).isEqualTo(cents(1_003_400));
         assertThat(projection.interest().get(1).balance()).isEqualTo(cents(1_003_400));
     }
 

@@ -183,7 +183,7 @@ export const TOPICS: readonly Topic[] = [
       {
         heading: "Which paycheck pays it",
         body: [
-          "A bill due on a payday is paid from the paycheck before, unless it's on autopay. Tick Pay a period early to always pay it from the paycheck before.",
+          "A bill is paid from the pay period it's due in, a payday included. Tick Pay a period early to pay it from the paycheck before.",
         ],
       },
       {
@@ -487,6 +487,7 @@ export const TASKS: readonly Task[] = [
   { question: "How do I save up for a yearly bill?", answer: "Edit the bill and choose Save up for it in a bucket: a share is set aside each paycheck so it's there when due.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "save up yearly annual insurance registration bucket" },
   { question: "How do I get warned when money runs low?", answer: "Edit the account and set Warn me when the balance dips below. Pay periods that go lower are flagged.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "low balance warning alert threshold overdraft" },
   { question: "How do I add a credit card statement?", answer: "Open the card on Accounts and use its Statements card.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "credit card statement minimum due" },
+  { question: "My statement or balance doesn't match. How do I find out why?", answer: "Under a statement on the card's page, or under Balance adjusted in a pay period's Accounts & buckets, Budget says what your records came to. Choose See what went in for everything since they last matched: open one to change or delete it, or add what's missing.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "reconcile match statement balance discrepancy difference missing charge" },
   { question: "How do I track a 0% promo rate?", answer: "Open the card on Accounts, then Add promo rate. Budget warns you before it ends, and the Payoff helper works out what to pay.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "promo promotion 0% balance transfer deferred interest" },
   { question: "How do I record a raise?", answer: "On Income, open the source and press Record a pay change, from the date it starts.", to: "/income", button: "Go to Income", topic: "income", keywords: "raise pay change salary deductions new job" },
   { question: "How do I record a bonus?", answer: "On Income, open the source and press + Add on One-off paychecks: its deductions and match work like a paycheck's. A bonus stub can be saved as one too.", to: "/income", button: "Go to Income", topic: "income", keywords: "bonus one-off extra paycheck commission award stub" },

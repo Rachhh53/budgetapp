@@ -59,18 +59,38 @@ export interface Occurrence {
 }
 
 /**
- * One account across one pay period: `ending = starting + in − out`. For a credit card or
- * loan the balance is what is owed, so `in` is what was charged and `out` what was paid off.
+ * A balance entered during a pay period, shown in it as an adjustment to what Budget expected that morning.
+ * Editing it changes that balance; deleting it removes it.
+ */
+export interface BalanceAdjustment {
+  entryId: number;
+  date: string;
+  /** The balance entered. */
+  balanceCents: number;
+  /** That less what the account was expected to hold as the day began, signed. */
+  differenceCents: number;
+  note: string | null;
+  /** The balance entered before it, when the records last matched; `null` for none. */
+  since: string | null;
+}
+
+/**
+ * One account across one pay period: `ending = starting + in − out + adjusted`, and it starts with what the period
+ * before ended on. For a credit card or loan the balance is what is owed, so `in` is what was charged and `out` what
+ * was paid off.
  */
 export interface AccountPeriod {
   accountId: number;
   startingCents: number;
-  /** The period's first day, or the day of a balance entered during it. */
+  /** The period's first day, or the day of the first balance ever entered when it falls during the period. */
   startingOn: string;
-  /** True when the starting balance is one the user entered during the period. */
+  /** True when the starting balance is the first one ever entered. */
   entered: boolean;
   inCents: number;
   outCents: number;
+  /** What balances entered during the period moved it, signed: the sum of `adjustments`. */
+  adjustedCents: number;
+  adjustments: BalanceAdjustment[];
   endingCents: number;
   /** The lowest end-of-day balance in the period, and the day it happens. */
   lowestCents: number;
@@ -79,7 +99,7 @@ export interface AccountPeriod {
   bucketsCents: number;
   /** The ending balance less what is in buckets. */
   availableCents: number;
-  /** What the buckets hold as the period starts; money put in by hand on the starting day counts. */
+  /** What the buckets hold as the period starts: what they held at the end of the period before. */
   startingBucketsCents: number;
   /** The starting balance less `startingBucketsCents`: what the period starts with to spend. */
   startingAvailableCents: number;
@@ -221,6 +241,21 @@ export interface AccountTransaction {
   unpaid: boolean;
   /** Interest typed over: what Budget had estimated. `null` for an estimate and for everything else. */
   estimatedCents: number | null;
+  /** What it came from, to open it and change it; `null` for what Budget works out and for balances entered. */
+  source: TransactionSource | null;
+}
+
+/** Where a line of an account's transactions came from. */
+export interface TransactionSource {
+  type: "entry" | "occurrence" | "paycheck";
+  entryId: number | null;
+  /** The recurring item's or the income source's id. */
+  itemId: number | null;
+  scheduledDate: string | null;
+  /** An occurrence's due date, which its pay period row is found by. */
+  dueDate: string | null;
+  /** The pay period it is listed in. */
+  periodStart: string | null;
 }
 
 /** The lines that are interest Budget works out, which can be typed over when the real figure is known (spec §5.4). */

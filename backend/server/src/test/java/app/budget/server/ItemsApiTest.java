@@ -90,14 +90,16 @@ class ItemsApiTest extends ApiTestBase {
         }
 
         @Test
-        void rentDueOnPaydayAndPaidByHandComesOutOfThePaycheckBefore() throws Exception {
+        void rentDueOnPaydayAndPaidByHandIsPaidFromThatPaycheck() throws Exception {
+            // A period's first day is part of it like any other (Rachel, 2026-10-21: "if something happens on the first
+            // day of the pay period, no matter what it is, it shows in the pay period").
             String rent = bill("Rent", 155000, "{\"frequency\":\"monthly\",\"day1\":1,\"startDate\":\"2026-01-01\"}", "");
 
             JsonNode next = server.post("/api/items", rent, cookie).data().get("next");
 
             assertThat(next.get("dueDate").asText()).isEqualTo("2026-10-01");
-            assertThat(next.get("periodStart").asText()).isEqualTo("2026-09-15");
-            assertThat(next.get("early").asBoolean()).isTrue();
+            assertThat(next.get("periodStart").asText()).isEqualTo("2026-10-01");
+            assertThat(next.get("early").asBoolean()).isFalse();
         }
 
         @Test

@@ -220,8 +220,8 @@ const OCTOBER: PeriodDetail = {
   buckets: [],
   bucketMoves: [],
   accounts: [
-    { accountId: 1, startingCents: 121438, startingBucketsCents: 0, startingAvailableCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08", bucketsCents: 0, availableCents: 309610, lowBalance: false, builtFromZero: false },
-    { accountId: 3, startingCents: 61248, startingBucketsCents: 0, startingAvailableCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13", bucketsCents: 0, availableCents: 0, lowBalance: false, builtFromZero: false },
+    { accountId: 1, startingCents: 121438, startingBucketsCents: 0, startingAvailableCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, adjustedCents: 0, adjustments: [], endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08", bucketsCents: 0, availableCents: 309610, lowBalance: false, builtFromZero: false },
+    { accountId: 3, startingCents: 61248, startingBucketsCents: 0, startingAvailableCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, adjustedCents: 0, adjustments: [], endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13", bucketsCents: 0, availableCents: 0, lowBalance: false, builtFromZero: false },
   ],
 };
 
@@ -274,7 +274,7 @@ describe("pay period screen: investments", () => {
     interest: [{ accountId: 4, date: "2026-10-14", amountCents: 22871, rateBp: 700, estimate: true }],
     accounts: [
       ...OCTOBER.accounts,
-      { accountId: 4, startingCents: 4000000, startingBucketsCents: 0, startingAvailableCents: 4000000, startingOn: "2026-10-01", entered: true, inCents: 45371, outCents: 0, endingCents: 4045371, lowestCents: 4000000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 4045371, lowBalance: false, builtFromZero: false },
+      { accountId: 4, startingCents: 4000000, startingBucketsCents: 0, startingAvailableCents: 4000000, startingOn: "2026-10-01", entered: true, inCents: 45371, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 4045371, lowestCents: 4000000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 4045371, lowBalance: false, builtFromZero: false },
     ],
   };
 
@@ -400,6 +400,40 @@ describe("pay period screen", () => {
     const manual = await panel("Pay manually & one-offs");
     expect(within(manual).getByText("Still unpaid from an earlier period")).toBeInTheDocument();
     expect(within(manual).getByText("1 of 3 paid")).toBeInTheDocument();
+  });
+
+  it("shows a balance entered during the period as an adjustment, to change or delete", async () => {
+    const adjusted: PeriodDetail = {
+      ...OCTOBER,
+      accounts: [
+        {
+          ...OCTOBER.accounts[0]!,
+          entered: false,
+          adjustedCents: -12500,
+          adjustments: [{ entryId: 44, date: "2026-10-06", balanceCents: 250000, differenceCents: -12500, note: null, since: null }],
+          endingCents: 297110,
+        },
+        OCTOBER.accounts[1]!,
+      ],
+    };
+    const fetchMock = withPeriod(adjusted, {
+      "DELETE /api/accounts/1/balances/44": () => ({ status: 200, data: {}, changed: true }),
+    });
+    renderApp();
+
+    // Part of the sum, so the period still starts where the last one ended.
+    expect(await screen.findByText("1,214.38 + 3,986.20 − 2,104.48 − 125.00 balance adjusted")).toBeInTheDocument();
+    const accounts = await panel("Accounts & buckets");
+    expect(within(accounts).getByText("Balance adjusted").parentElement).toHaveTextContent("−$125.00");
+    expect(within(accounts).getByText("Oct 6 · you entered $2,500.00")).toBeInTheDocument();
+
+    await userEvent.click(within(accounts).getByRole("button", { name: "Edit the balance entered Oct 6" }));
+    const dialog = await screen.findByRole("dialog", { name: /Change balance/ });
+    expect(within(dialog).getByRole("textbox", { name: "Balance" })).toHaveValue("2500.00");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await userEvent.click(within(accounts).getByRole("button", { name: "Delete the balance entered Oct 6" }));
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/accounts/1/balances/44"));
   });
 
   it("keeps the account chosen in Accounts & buckets when moving to another pay period", async () => {
@@ -601,7 +635,7 @@ describe("pay period screen", () => {
       ...OCTOBER,
       accounts: [
         OCTOBER.accounts[0]!,
-        { ...OCTOBER.accounts[1]!, startingCents: 61248, startingOn: "2026-10-20", entered: false, inCents: 0, outCents: 0, endingCents: 61248 },
+        { ...OCTOBER.accounts[1]!, startingCents: 61248, startingOn: "2026-10-20", entered: false, inCents: 0, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 61248 },
       ],
     });
     renderApp();

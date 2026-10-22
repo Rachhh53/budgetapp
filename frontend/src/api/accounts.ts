@@ -102,6 +102,8 @@ export interface BalanceChange {
   depositsCents: number | null;
   /** The change that deposits do not explain: a gain when positive, a loss when negative. */
   growthCents: number | null;
+  /** What the records came to as its day began, to reconcile against; `null` for the first balance. */
+  recordsCents: number | null;
 }
 
 /** How an account has done this year, from New Year or from its first entered balance if that is later. */

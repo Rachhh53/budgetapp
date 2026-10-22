@@ -104,6 +104,10 @@ export interface CardStatement {
   /** What has been paid toward it since it closed. */
   paidCents: number;
   status: StatementStatus;
+  /** An entered statement: what the card's own records came to at its close; `null` for the projected one. */
+  recordsCents: number | null;
+  /** When the two differ, the first day to look through: since the records last matched. `null` when they match. */
+  reconcileFrom: string | null;
 }
 
 export interface StatementInput {
@@ -259,11 +263,17 @@ export function useSaveMinimumRule(cardId: number) {
   });
 }
 
-/** Records a statement as it arrived. The same closing date again replaces it. */
-export function useSaveStatement(cardId: number) {
+/**
+ * Records a statement as it arrived (the same closing date again replaces it), or with `statementId` changes that
+ * statement in place, closing date included, keeping what is attached to it.
+ */
+export function useSaveStatement(cardId: number, statementId?: number) {
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: (input: StatementInput) => api.post<CardDetail>(`/api/cards/${cardId}/statements`, input),
+    mutationFn: (input: StatementInput) =>
+      statementId === undefined
+        ? api.post<CardDetail>(`/api/cards/${cardId}/statements`, input)
+        : api.put<CardDetail>(`/api/cards/${cardId}/statements/${statementId}`, input),
     onSuccess: refresh,
   });
 }

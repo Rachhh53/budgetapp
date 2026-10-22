@@ -70,6 +70,7 @@ public final class BucketsRoutes {
         routes.put("/api/buckets/{id}", this::update);
         routes.delete("/api/buckets/{id}", this::delete);
         routes.post("/api/buckets/{id}/changes", this::addChange);
+        routes.put("/api/buckets/{id}/changes/{changeId}", this::updateChange);
         routes.delete("/api/buckets/{id}/changes/{changeId}", this::deleteChange);
         routes.post("/api/buckets/{id}/moves-out", this::addMoveOut);
         routes.put("/api/buckets/{id}/moves-out/{changeId}", this::updateMoveOut);
@@ -244,6 +245,46 @@ public final class BucketsRoutes {
         }
         buckets.delete(id);
         ApiResponse.ok(ctx, new Deleted(true));
+    }
+
+    /**
+     * Changes money put in or taken out by hand, or an amount set for a day: its date and amount, and for money put in
+     * or taken out its note. More set aside than before is checked against the account, as adding it is. 404 for a
+     * change that isn't there or was moved out to spend (changed as a move out); 409 for a day another amount is set for.
+     */
+    private void updateChange(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        long changeId = Inputs.id(ctx, "changeId");
+        Bucket bucket = buckets.find(id).orElseThrow(ApiException::notFound);
+        Change before = buckets.changes(id).stream().filter(change -> change.id() == changeId && !change.movedOut()).findFirst()
+                .orElseThrow(ApiException::notFound);
+        ChangeInput input = Inputs.body(ctx, ChangeInput.class);
+        if (input.date() == null || !Inputs.inSupportedYears(input.date())) {
+            throw ApiException.badRequest("Please choose the date.");
+        }
+        boolean set = before.setToCents() != null;
+        if (set && input.date().isAfter(LocalDate.now(clock))) {
+            throw ApiException.badRequest("Please choose today or an earlier day for that amount.");
+        }
+        long amount = set ? Inputs.amount(input.amountCents(), "The amount in the bucket")
+                : Inputs.signedAmount(input.amountCents(), "The amount");
+        if (!set && amount == 0) {
+            throw ApiException.badRequest("Please enter how much to put in or take out.");
+        }
+        String note = Inputs.optionalText(input.note(), "the note", NOTE_MAX);
+        // Only what it sets aside beyond what it did before needs room in the account.
+        long more = amount - (set ? before.setToCents() : before.amountCents());
+        if (more > 0) {
+            LocalDate today = LocalDate.now(clock);
+            requireRoomFor(accounts.find(bucket.accountId()).orElseThrow(ApiException::notFound), more,
+                    input.date().isAfter(today) ? input.date() : today);
+        }
+        switch (buckets.updateChange(id, changeId, input.date(), amount, note)) {
+            case NOT_FOUND -> throw ApiException.notFound();
+            case SAME_DAY -> throw ApiException.conflict(
+                    "There's already an amount set for that day. Please change that one, or choose another date.");
+            case DONE -> ApiResponse.ok(ctx, detail(id));
+        }
     }
 
     private void addChange(Context ctx) {

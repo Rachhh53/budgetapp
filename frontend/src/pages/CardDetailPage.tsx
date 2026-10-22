@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useCameFrom } from "../lib/cameFrom";
 import { type Account, type AccountDetail, useAccountPerformance, useAccountProjection, useAccounts } from "../api/accounts";
+import { Reconcile } from "../components/accounts/Reconcile";
 import { useAttachmentCounts } from "../api/attachments";
 import { useCategories, useTags } from "../api/categories";
 import {
@@ -48,7 +49,8 @@ const STATEMENT_ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[9rem_
 
 /** The pop-up form that is open, if any. One at a time, each short enough for the screen. */
 type Open =
-  | { form: "account" | "balance" | "billing" | "minimum" | "payment" | "rewards" | "statement" }
+  | { form: "account" | "balance" | "billing" | "minimum" | "payment" | "rewards" }
+  | { form: "statement"; statement?: CardStatement }
   | { form: "promo"; promo?: Promo }
   | { form: "redemption"; redemption?: Redemption };
 
@@ -235,7 +237,12 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
         {withBalance.length > 0 && <PayoffCard account={account} promos={withBalance} />}
         {withBalance.length > 0 && <IfNotPaidCard promos={withBalance} />}
 
-        <StatementsCard account={account} statements={statements} onAdd={() => setOpen({ form: "statement" })} />
+        <StatementsCard
+          account={account}
+          statements={statements}
+          onAdd={() => setOpen({ form: "statement" })}
+          onEdit={(statement) => setOpen({ form: "statement", statement })}
+        />
 
         <Card
           title="Statement and due dates"
@@ -319,7 +326,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
               you enter, or from the latest statement.
             </p>
           ) : (
-            <BalanceList accountId={account.id} balances={asAccount.balances} changes={performance.data?.balances ?? []} owed />
+            <BalanceList account={account} balances={asAccount.balances} changes={performance.data?.balances ?? []} owed />
           )}
         </Card>
       </div>
@@ -350,7 +357,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
       {open?.form === "redemption" && (
         <RedemptionForm account={account} redemption={open.redemption} builtUpCents={rewards?.builtUpCents ?? 0} onClose={close} />
       )}
-      {open?.form === "statement" && <StatementForm account={account} settings={settings} onClose={close} />}
+      {open?.form === "statement" && <StatementForm account={account} settings={settings} statement={open.statement} onClose={close} />}
       {open?.form === "promo" && <PromoForm account={account} promo={open.promo} onClose={close} />}
     </>
   );
@@ -554,7 +561,17 @@ function IfNotPaidCard({ promos }: { promos: readonly Promo[] }) {
 }
 
 /** The next statement as projected, then the ones entered as they arrived. */
-function StatementsCard({ account, statements, onAdd }: { account: Account; statements: readonly CardStatement[]; onAdd: () => void }) {
+function StatementsCard({
+  account,
+  statements,
+  onAdd,
+  onEdit,
+}: {
+  account: Account;
+  statements: readonly CardStatement[];
+  onAdd: () => void;
+  onEdit: (statement: CardStatement) => void;
+}) {
   const remove = useDeleteStatement(account.id);
   // Which statements have their PDF (or anything else) attached; the dates asked for do not matter to statements.
   const today = todayIso();
@@ -599,6 +616,9 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
                 </span>
                 <span className="col-span-2 flex items-center justify-end gap-1 md:col-span-1">
                   {statement.id !== null && (
+                    <EditButton name={`the statement that closed ${formatDate(statement.closeDate)}`} onClick={() => onEdit(statement)} />
+                  )}
+                  {statement.id !== null && (
                     <FilesButton
                       count={counts.data?.statements.find((files) => files.statementId === statement.id)?.count ?? 0}
                       name={`the statement that closed ${formatDate(statement.closeDate)}`}
@@ -617,6 +637,17 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
                     </button>
                   )}
                 </span>
+                {statement.recordsCents !== null && statement.reconcileFrom !== null && (
+                  <div className="col-span-full">
+                    <Reconcile
+                      account={account}
+                      from={statement.reconcileFrom}
+                      through={statement.closeDate}
+                      recordsCents={statement.recordsCents}
+                      enteredCents={statement.balanceCents}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

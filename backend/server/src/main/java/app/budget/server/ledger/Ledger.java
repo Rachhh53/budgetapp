@@ -141,13 +141,16 @@ public final class Ledger {
     }
 
     /**
-     * One account across one pay period; {@code ending = starting + in − out}.
+     * One account across one pay period; {@code ending = starting + in − out + adjusted}. Each period starts with
+     * what the one before ended on, buckets included (Rachel, 2026-10-21).
      *
      * <p>For a credit card or loan the balance is what is owed, so {@code inCents} is what was
      * added to it (charges) and {@code outCents} what came off it (payments).
      *
-     * @param startingOn     the period's first day, or the day of a balance entered during it
-     * @param entered        true when the starting balance is one the user entered during the period
+     * @param startingOn     the period's first day, or the day of the first balance ever entered when it falls during it
+     * @param entered        true when the starting balance is the first one the user ever entered
+     * @param adjustedCents  what balances entered during the period moved it, signed: the sum of {@code adjustments}
+     * @param adjustments    each balance entered during the period, earliest first, to change or remove
      * @param lowestCents    the lowest end-of-day balance in the period
      * @param bucketsCents   what the account's buckets hold at the end of the period
      * @param availableCents the ending balance less what is in buckets
@@ -166,6 +169,8 @@ public final class Ledger {
             boolean entered,
             long inCents,
             long outCents,
+            long adjustedCents,
+            List<Adjustment> adjustments,
             long endingCents,
             long lowestCents,
             LocalDate lowestOn,
@@ -175,6 +180,20 @@ public final class Ledger {
             long startingAvailableCents,
             boolean lowBalance,
             boolean builtFromZero) {}
+
+    /**
+     * A balance entered during a pay period, shown in it as an adjustment: what the account turned out to hold as
+     * {@code date} began, against what Budget expected (Rachel, 2026-10-21: "that adjustment should be editable and
+     * deletable"). Changing or removing it changes or removes that balance.
+     *
+     * @param entryId         the balance entry it is, for {@code DELETE /api/accounts/{id}/balances/{entryId}}
+     * @param balanceCents    the balance entered
+     * @param differenceCents that less what was expected, signed
+     * @param note            the note entered with it, kept when it is changed
+     * @param since           the balance entered before it, when the records last matched: what moved the account from
+     *                        then up to the day before is what the difference is in; {@code null} for none
+     */
+    public record Adjustment(long entryId, LocalDate date, long balanceCents, long differenceCents, String note, LocalDate since) {}
 
     /** One bucket across one pay period; {@code endingCents − startingCents} is what the period moved. */
     public record BucketPeriod(long bucketId, long accountId, long startingCents, long endingCents) {}
@@ -601,11 +620,54 @@ public final class Ledger {
      * @param unpaid      true for something paid by hand that has not been ticked off yet
      * @param estimatedCents for interest or card rewards typed over the estimate: what was estimated, signed like the amount; {@code null}
      *                    for everything else
+     * @param source      what it came from, to open it and change it: {@code null} for what Budget works out itself
+     *                    (interest, estimates) and for balances entered
      */
-    public record Transaction(LocalDate date, String label, String kind, long amountCents, boolean unpaid, Long estimatedCents) {
+    public record Transaction(
+            LocalDate date, String label, String kind, long amountCents, boolean unpaid, Long estimatedCents, Source source) {
 
         public Transaction(LocalDate date, String label, String kind, long amountCents, boolean unpaid) {
-            this(date, label, kind, amountCents, unpaid, null);
+            this(date, label, kind, amountCents, unpaid, null, null);
+        }
+
+        Transaction withEstimated(Long estimated) {
+            return new Transaction(date, label, kind, amountCents, unpaid, estimated, source);
+        }
+
+        Transaction withSource(Source found) {
+            return new Transaction(date, label, kind, amountCents, unpaid, estimatedCents, found);
+        }
+    }
+
+    /**
+     * Where a line of an account's transactions came from, so it can be opened to change it, as reconciling against a
+     * statement or balance needs (Rachel, 2026-10-21: "so I could adjust or add/delete things if I wanted to
+     * reconcile").
+     *
+     * @param type           {@code entry} (a one-off), {@code occurrence} (one date of a recurring item) or
+     *                       {@code paycheck}
+     * @param entryId        the one-off's id
+     * @param itemId         the recurring item's or the income source's id
+     * @param scheduledDate  the date the item's or paycheck's schedule names
+     * @param dueDate        an occurrence's due date, which its row in the pay period is found by
+     * @param periodStart    the pay period it is listed in; {@code null} until the list is made
+     */
+    public record Source(String type, Long entryId, Long itemId, LocalDate scheduledDate, LocalDate dueDate, LocalDate periodStart) {
+
+        static Source entry(long id) {
+            return new Source("entry", id, null, null, null, null);
+        }
+
+        static Source occurrence(Occurrence occurrence) {
+            return new Source("occurrence", null, occurrence.itemId(), occurrence.scheduledDate(), occurrence.dueDate(), null);
+        }
+
+        static Source paycheck(long sourceId, LocalDate scheduledDate) {
+            return new Source("paycheck", null, sourceId, scheduledDate, null, null);
+        }
+
+        Source in(LocalDate start) {
+            return new Source(type, entryId, itemId, scheduledDate, dueDate, start);
         }
     }
 
@@ -677,8 +739,7 @@ public final class Ledger {
         if (!typed.isEmpty()) {
             found.replaceAll(line -> {
                 InterestRepository.Typed over = TYPED_OVER_KINDS.contains(line.kind()) ? typed.get(typedOverKey(account, line.date())) : null;
-                return over == null ? line
-                        : new Transaction(line.date(), line.label(), line.kind(), line.amountCents(), line.unpaid(), over.estimatedCents());
+                return over == null ? line : line.withEstimated(over.estimatedCents());
             });
         }
         // So are a card's rewards typed over; what was estimated is kept as it came off, a negative amount.
@@ -686,10 +747,16 @@ public final class Ledger {
         if (!rewards.isEmpty()) {
             found.replaceAll(line -> {
                 CardsRepository.TypedRewards over = CARD_REWARDS_KIND.equals(line.kind()) ? rewards.get(line.date()) : null;
-                return over == null ? line
-                        : new Transaction(line.date(), line.label(), line.kind(), line.amountCents(), line.unpaid(), -over.estimatedCents());
+                return over == null ? line : line.withEstimated(-over.estimatedCents());
             });
         }
+        // Each line opened goes to the pay period it is listed in.
+        List<PayCalendar.Period> listedIn = pay.periods(from, to).periods();
+        found.replaceAll(line -> line.source() == null ? line : listedIn.stream()
+                .filter(period -> within(line.date(), period.start(), period.end()))
+                .findFirst()
+                .map(period -> line.withSource(line.source().in(period.start())))
+                .orElse(line));
         found.sort(Comparator.comparing(Transaction::date).reversed());
         return found;
     }
@@ -701,9 +768,13 @@ public final class Ledger {
      * @param depositsCents what was put in between the two, less what was taken out
      * @param growthCents   the change that deposits do not explain: a gain when positive, a loss when
      *                      negative (spec §5.5). Only ever worked out from entered balances
+     * @param recordsCents  what the records came to as its day began, from the entry before and everything since:
+     *                      the same figure its pay period adjusts from, to reconcile against (Rachel, 2026-10-21:
+     *                      "where's my recon and difference in accounts?"); {@code null} for the first entry
      */
     public record BalanceChange(
-            long entryId, LocalDate date, long amountCents, Long changeCents, Long depositsCents, Long growthCents) {}
+            long entryId, LocalDate date, long amountCents, Long changeCents, Long depositsCents, Long growthCents,
+            Long recordsCents) {}
 
     /**
      * How an account has done this year.
@@ -752,12 +823,16 @@ public final class Ledger {
         LocalDate earliest = entered.isEmpty() || entered.getFirst().date().isAfter(yearStart) ? yearStart : entered.getFirst().date();
         Workings workings = workings(List.of(new PayPeriod(earliest, today, earliest)));
         List<Transaction> lines = workings.lines().getOrDefault(account.id(), List.of());
+        // Every balance after the first is an adjustment in this one stretch, by what it differs from the records.
+        Map<LocalDate, Long> differences = new HashMap<>();
+        workings.projection(account.id()).balances().forEach(balance -> balance.adjustments()
+                .forEach(adjustment -> differences.put(adjustment.date(), adjustment.difference().cents())));
 
         List<BalanceChange> changes = new ArrayList<>();
         for (int i = 0; i < entered.size(); i++) {
             BalanceEntry entry = entered.get(i);
             if (i == 0) {
-                changes.add(new BalanceChange(entry.id(), entry.date(), entry.amountCents(), null, null, null));
+                changes.add(new BalanceChange(entry.id(), entry.date(), entry.amountCents(), null, null, null, null));
                 continue;
             }
             BalanceEntry before = entered.get(i - 1);
@@ -766,7 +841,8 @@ public final class Ledger {
             long growth = GainLoss.between(
                     Money.ofCents(before.amountCents()), Money.ofCents(entry.amountCents()), Money.ofCents(deposits)).cents();
             changes.add(new BalanceChange(
-                    entry.id(), entry.date(), entry.amountCents(), entry.amountCents() - before.amountCents(), deposits, growth));
+                    entry.id(), entry.date(), entry.amountCents(), entry.amountCents() - before.amountCents(), deposits, growth,
+                    differences.containsKey(entry.date()) ? (Long) (entry.amountCents() - differences.get(entry.date())) : null));
         }
 
         List<AccountPeriod> now = accountPeriods(workings(List.of(new PayPeriod(today, today, today))), account);
@@ -960,11 +1036,12 @@ public final class Ledger {
             Map<Long, CardProjector.Result> cards,
             Map<Long, List<CardsRepository.Promo>> promos,
             Map<Long, InterestTerms> aprs,
-            List<StatementPaid> statementsPaid) {
+            List<StatementPaid> statementsPaid,
+            Map<Long, List<BalanceEntry>> entered) {
 
         static final Workings NONE = new Workings(
                 List.of(), List.of(), List.of(), Map.of(), Set.of(), Map.of(), Map.of(), List.of(), Map.of(), Map.of(), Map.of(),
-                List.of());
+                List.of(), Map.of());
 
         Projection projection(long accountId) {
             return projections.getOrDefault(accountId, Projection.NONE);
@@ -988,7 +1065,8 @@ public final class Ledger {
             Long threshold = account.lowBalanceThresholdCents();
             figures.add(new AccountPeriod(
                     account.id(), balance.starting().cents(), balance.startingOn(), balance.entered(),
-                    balance.in().cents(), balance.out().cents(), balance.ending().cents(),
+                    balance.in().cents(), balance.out().cents(), balance.adjusted().cents(), adjustments(balance, workings.entered().getOrDefault(account.id(), List.of())),
+                    balance.ending().cents(),
                     balance.lowest().cents(), balance.lowestOn(),
                     bucketsCents,
                     balance.ending().cents() - bucketsCents,
@@ -998,6 +1076,23 @@ public final class Ledger {
                     workings.builtFromZero().contains(account.id())));
         }
         return figures;
+    }
+
+    /** The period's adjustments, each with the balance entry it came from. */
+    private static List<Adjustment> adjustments(PeriodBalance balance, List<BalanceEntry> entries) {
+        return balance.adjustments().stream()
+                .flatMap(adjustment -> entries.stream()
+                        .filter(entry -> entry.date().equals(adjustment.date()))
+                        .findFirst()
+                        .map(entry -> new Adjustment(
+                                entry.id(), adjustment.date(), adjustment.balance().cents(), adjustment.difference().cents(), entry.note(),
+                                entries.stream()
+                                        .map(BalanceEntry::date)
+                                        .filter(date -> date.isBefore(adjustment.date()))
+                                        .reduce((earlier, later) -> later)
+                                        .orElse(null)))
+                        .stream())
+                .toList();
     }
 
     /**
@@ -1066,12 +1161,13 @@ public final class Ledger {
         LocalDate last = periods.getLast().end();
 
         // A projection rolls forward from the balance entered before the first period, however
-        // long ago that was, so everything since the oldest such balance is needed.
+        // long ago that was, so everything since the oldest such balance is needed. One entered on the
+        // first day itself is not where the period starts, only an adjustment in it, so it is the one before.
         LocalDate from = first;
         for (List<BalanceEntry> balances : entered.values()) {
             LocalDate startsFrom = balances.stream()
                     .map(BalanceEntry::date)
-                    .filter(date -> !date.isAfter(first))
+                    .filter(date -> date.isBefore(first))
                     .reduce((earlier, later) -> later)
                     .orElse(first);
             if (startsFrom.isBefore(from)) {
@@ -1095,6 +1191,10 @@ public final class Ledger {
             }
         }
 
+        // Cards and loans start from the same day as everything else, whichever pay periods were asked for, so a
+        // payment worked out from a card comes to the same whether its own period or a later one is shown (Rachel,
+        // 2026-10-21: Mar 31 started $4,500.88 above where Mar 13 ended).
+        LocalDate windowStart = from;
         Map<Long, String> types = allAccounts.stream().collect(Collectors.toMap(Account::id, Account::type));
         Set<Long> cash = allAccounts.stream().filter(AccountType::holdsCash).map(Account::id).collect(Collectors.toSet());
         Map<Long, List<Movement>> movements = new HashMap<>();
@@ -1103,7 +1203,7 @@ public final class Ledger {
 
         for (Paycheck paycheck : pay.paychecks(from, last)) {
             add(movements, lines, types, paycheck.depositAccountId(), paycheck.payDate(), paycheck.netCents(), true, false,
-                    paycheck.label(), "paycheck");
+                    paycheck.label(), "paycheck", Source.paycheck(paycheck.incomeSourceId(), paycheck.scheduledDate()));
             // Taken out before take-home pay, or added by the employer: it lands in its own account on payday.
             for (PayCalendar.Contribution contribution : paycheck.contributions()) {
                 if (types.containsKey(contribution.toAccountId())) {
@@ -1189,7 +1289,8 @@ public final class Ledger {
             Long loan = paysLoan.get(occurrence.itemId());
             if (loan != null && occurrence.payToAccountId() == null && loan != occurrence.payFromAccountId()) {
                 Movement arriving = add(movements, lines, types, loan, occurrence.payBy(), occurrence.amountCents(), true,
-                        outstanding(occurrence, stillToPay.get(loan)), occurrence.name(), Inputs.code(occurrence.kind()));
+                        outstanding(occurrence, stillToPay.get(loan)), occurrence.name(), Inputs.code(occurrence.kind()),
+                        Source.occurrence(occurrence));
                 scheduledInto.computeIfAbsent(loan, id -> new ArrayList<>()).add(arriving);
             }
         }
@@ -1201,10 +1302,10 @@ public final class Ledger {
                     ? entry.description()
                     : entry.payee() != null && !entry.payee().isBlank() ? entry.payee() : ONE_OFF_LABEL;
             add(movements, lines, types, entry.accountId(), entry.date(), entry.amountCents(), entry.kind() == EntryKind.MONEY_IN, false,
-                    label, Inputs.code(entry.kind()));
+                    label, Inputs.code(entry.kind()), Source.entry(entry.id()));
             if (entry.toAccountId() != null) {
                 add(movements, lines, types, entry.toAccountId(), entry.date(), entry.amountCents(), true, false,
-                        label, Inputs.code(entry.kind()));
+                        label, Inputs.code(entry.kind()), Source.entry(entry.id()));
             }
         }
 
@@ -1241,7 +1342,7 @@ public final class Ledger {
                         statement.dueDate(), Money.ZERO, true));
             }
             CardProjector.Result result = CardProjector.project(
-                    anchors(cardId, entered, builtFromZero, since, first),
+                    anchors(cardId, entered, builtFromZero, since, windowStart),
                     fixed,
                     toWorkOut,
                     new CardProjector.Terms(
@@ -1306,7 +1407,7 @@ public final class Ledger {
             regular.addAll(scheduledInto.getOrDefault(loanId, List.of()));
             LocalDate since = all.stream().map(Movement::date).min(Comparator.naturalOrder()).orElse(first);
             List<LoanProjector.Derived> worked = LoanProjector.project(
-                    anchors(loanId, entered, builtFromZero, since, first),
+                    anchors(loanId, entered, builtFromZero, since, windowStart),
                     List.copyOf(scheduledInto.getOrDefault(loanId, List.of())),
                     all.stream().filter(movement -> !regular.contains(movement)).toList(),
                     new LoanProjector.Terms(
@@ -1417,12 +1518,12 @@ public final class Ledger {
         bucketMoves.sort(Comparator.comparing(Move::date));
         return new Workings(
                 listed, carried, oneOffs, projections, builtFromZero, lines, bucketsByAccount, bucketMoves, cardResults, promos, aprs,
-                statementsPaid);
+                statementsPaid, entered);
     }
 
     /**
      * The balances a card or loan is followed from. With balances entered: the one in force when
-     * the first period opens, and any after it (nothing is known about what moved it before
+     * the stretch being worked out starts ({@code first}), and any after it (nothing is known about what moved it before
      * that). With none: nothing owed on the first day something moved it.
      */
     private static List<BalanceAnchor> anchors(
@@ -1463,12 +1564,13 @@ public final class Ledger {
                 // The engine moves it to the day of that balance; remember it so the period can say so.
                 carried.add(new Carried(occurrence, paidFrom.newestEntered()));
             }
+            Source source = Source.occurrence(occurrence);
             add(movements, lines, types, payFrom, occurrence.payBy(), cents, false, unpaid,
-                    occurrence.name(), Inputs.code(occurrence.kind()));
+                    occurrence.name(), Inputs.code(occurrence.kind()), source);
             Long payTo = occurrence.payToAccountId();
             if (payTo != null) {
                 Movement arriving = add(movements, lines, types, payTo, occurrence.payBy(), cents, true,
-                        outstanding(occurrence, stillToPay.get(payTo)), occurrence.name(), Inputs.code(occurrence.kind()));
+                        outstanding(occurrence, stillToPay.get(payTo)), occurrence.name(), Inputs.code(occurrence.kind()), source);
                 scheduledInto.computeIfAbsent(payTo, id -> new ArrayList<>()).add(arriving);
             }
         }
@@ -1580,12 +1682,28 @@ public final class Ledger {
             boolean outstanding,
             String label,
             String kind) {
+        return add(movements, lines, types, accountId, date, cents, incoming, outstanding, label, kind, null);
+    }
+
+    /** As above, for something the user entered or scheduled: {@code source} is what to open to change it. */
+    private static Movement add(
+            Map<Long, List<Movement>> movements,
+            Map<Long, List<Transaction>> lines,
+            Map<Long, String> types,
+            long accountId,
+            LocalDate date,
+            long cents,
+            boolean incoming,
+            boolean outstanding,
+            String label,
+            String kind,
+            Source source) {
         boolean raisesBalance = OWED.contains(types.get(accountId)) != incoming;
         Money amount = Money.ofCents(cents);
         Movement movement = new Movement(date, raisesBalance ? amount : amount.negate(), outstanding);
         movements.computeIfAbsent(accountId, id -> new ArrayList<>()).add(movement);
         lines.computeIfAbsent(accountId, id -> new ArrayList<>())
-                .add(new Transaction(date, label, kind, raisesBalance ? cents : -cents, outstanding));
+                .add(new Transaction(date, label, kind, raisesBalance ? cents : -cents, outstanding, null, source));
         return movement;
     }
 

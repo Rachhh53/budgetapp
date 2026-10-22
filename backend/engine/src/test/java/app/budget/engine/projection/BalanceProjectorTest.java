@@ -94,7 +94,7 @@ class BalanceProjectorTest {
     }
 
     @Test
-    void aBalanceEnteredDuringAPeriodReplacesTheProjectionFromThatDay() {
+    void aBalanceEnteredDuringAPeriodAdjustsItButTheChainHolds() {
         List<Movement> movements = List.of(
                 move("2026-10-01", 248620),
                 // Already in the number the bank showed on Oct 6.
@@ -106,15 +106,33 @@ class BalanceProjectorTest {
         List<PeriodBalance> balances = BalanceProjector.project(
                 List.of(anchor("2026-09-30", 121438), anchor("2026-10-06", 90000)), movements, PERIODS);
 
+        // The period starts where the one before ended and counts everything in it; Oct 6's balance shows as the
+        // difference from the 3,500.58 expected that morning (Rachel, 2026-10-21).
         PeriodBalance first = balances.getFirst();
-        assertThat(first.entered()).isTrue();
-        assertThat(first.starting()).isEqualTo(cents(90000));
-        assertThat(first.startingOn()).isEqualTo(date("2026-10-06"));
-        assertThat(first.in()).isEqualTo(Money.ZERO);
-        assertThat(first.out()).isEqualTo(cents(6000));
+        assertThat(first.entered()).isFalse();
+        assertThat(first.starting()).isEqualTo(cents(121438));
+        assertThat(first.startingOn()).isEqualTo(date("2026-10-01"));
+        assertThat(first.in()).isEqualTo(cents(248620));
+        assertThat(first.out()).isEqualTo(cents(26000));
+        assertThat(first.adjusted()).isEqualTo(cents(-260058));
+        assertThat(first.adjustments()).containsExactly(
+                new PeriodBalance.Adjustment(date("2026-10-06"), cents(90000), cents(-260058)));
         assertThat(first.ending()).isEqualTo(cents(84000));
-        assertThat(balances.get(1).starting()).isEqualTo(cents(84000));
+        assertThat(first.lowest()).isEqualTo(cents(84000));
+        assertThat(balances.get(1).starting()).isEqualTo(first.ending());
         assertThat(balances.get(1).entered()).isFalse();
+    }
+
+    @Test
+    void aBalanceEnteredOnAPeriodsFirstDayIsAnAdjustmentToo() {
+        List<PeriodBalance> balances = BalanceProjector.project(
+                List.of(anchor("2026-09-20", 100000), anchor("2026-10-15", 70000)), List.of(move("2026-10-10", -20000)), PERIODS);
+
+        PeriodBalance second = balances.get(1);
+        assertThat(second.starting()).isEqualTo(balances.getFirst().ending());
+        assertThat(second.startingOn()).isEqualTo(date("2026-10-15"));
+        assertThat(second.adjusted()).isEqualTo(cents(-10000));
+        assertThat(second.ending()).isEqualTo(cents(70000));
     }
 
     @Test

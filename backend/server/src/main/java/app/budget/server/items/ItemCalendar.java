@@ -687,7 +687,7 @@ public final class ItemCalendar {
             // "Every pay period" belongs to the period it was made for, wherever in it it is dated.
             period = Optional.of(planned.ownPeriod());
         } else {
-            period = assigner.assign(due, terms.placement(), terms.autopay());
+            period = assigner.assign(due, terms.placement());
         }
 
         // The period's figures have to add up to what it lists, so an occurrence always counts

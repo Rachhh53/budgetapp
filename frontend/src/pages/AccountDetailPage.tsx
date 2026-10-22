@@ -233,7 +233,7 @@ export function AccountDetailPage() {
               latest number you enter.
             </p>
           ) : (
-            <BalanceList accountId={account.id} balances={balances} changes={performance.data?.balances ?? []} owed={owed} />
+            <BalanceList account={account} balances={balances} changes={performance.data?.balances ?? []} owed={owed} />
           )}
         </Card>
       </div>

@@ -157,7 +157,8 @@ class LedgerApiTest extends ApiTestBase {
         void setUpAMonth() throws Exception {
             enterBalance(checking, "2026-10-01", 121438);
             enterBalance(savings, "2026-10-01", 500000);
-            rent = item("Rent", "bill", 155000, monthly(1), "");
+            // Rent is set aside a paycheck ahead ("Pay a period early"): due on payday, it comes out of the one before.
+            rent = item("Rent", "bill", 155000, monthly(1), "\"placement\":\"one_early\"");
             electric = item("Electric", "bill", 14000, monthly(16), "\"placement\":\"one_early\",\"estimate\":true");
             carLoan = item("Car loan", "bill", 41200, monthly(5), "\"autopay\":true");
             item("Groceries", "budget", 30000, "{\"frequency\":\"every_pay_period\",\"startDate\":\"2026-10-01\"}", "");
@@ -165,7 +166,7 @@ class LedgerApiTest extends ApiTestBase {
             created("/api/entries",
                     "{\"kind\":\"money_out\",\"date\":\"2026-10-09\",\"amountCents\":8500,\"description\":\"Birthday gift for Mom\",\"accountId\":%d}"
                             .formatted(checking));
-            // October's rent was due on payday, so it belonged to the paycheck before, and was paid from it.
+            // October's rent belonged to the paycheck before, and was paid from it.
             server.put("/api/items/" + rent + "/occurrences/2026-10-01", "{\"paid\":true,\"paidDate\":\"2026-09-29\"}", cookie);
         }
 

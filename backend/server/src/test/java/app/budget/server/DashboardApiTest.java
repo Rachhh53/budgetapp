@@ -30,7 +30,7 @@ class DashboardApiTest extends ApiTestBase {
      * Amara's budget. Checking held $100.00 on Sep 15 and warns under $1,000.00; savings held
      * $5,000.00 on Aug 15; the Visa owed $800.00 on Sep 15. Each paycheck brings $2,486.20 home,
      * puts $150.00 in the 401(k) with $50.00 from her employer, and $200.00 moves to savings.
-     * Rent ($1,400.00, the 1st) and water ($50.00, the 20th) are paid by hand and not ticked.
+     * Rent ($1,400.00, the 1st, set aside a paycheck ahead) and water ($50.00, the 20th) are paid by hand and not ticked.
      */
     private void amarasBudget() throws Exception {
         checking = server.post("/api/accounts",
@@ -52,7 +52,7 @@ class DashboardApiTest extends ApiTestBase {
         food = created("/api/categories", "{\"name\":\"Food\",\"color\":\"#15803d\"}");
         long groceries = created("/api/categories", "{\"name\":\"Groceries\",\"color\":\"#166534\",\"parentId\":%d}".formatted(food));
         rent = created("/api/items", """
-                {"name":"Rent","kind":"bill","amountCents":140000,"payFromAccountId":%d,"categoryId":%d,
+                {"name":"Rent","kind":"bill","amountCents":140000,"payFromAccountId":%d,"categoryId":%d,"placement":"one_early",
                  "schedule":{"frequency":"monthly","day1":1,"startDate":"2026-01-01"}}""".formatted(checking, housing));
         water = created("/api/items", """
                 {"name":"Water","kind":"bill","amountCents":5000,"payFromAccountId":%d,

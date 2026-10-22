@@ -190,7 +190,12 @@ function Ring({ slices, totalCents, centre, onPick }: { slices: readonly Slice[]
               <Cell key={slice.key} fill={slice.fill} fillOpacity={slice.fillOpacity} />
             ))}
           </Pie>
-          <Tooltip formatter={(value, name) => [`${formatCents(Number(value))} · ${share(Number(value), totalCents)}`, name]} {...CHART_TOOLTIP} />
+          {/* Above the total in the middle, which comes later on the page and otherwise covers it (Rachel, 2026-10-21). */}
+          <Tooltip
+            formatter={(value, name) => [`${formatCents(Number(value))} · ${share(Number(value), totalCents)}`, name]}
+            {...CHART_TOOLTIP}
+            wrapperStyle={{ zIndex: 10 }}
+          />
         </PieChart>
       </ResponsiveContainer>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-12 text-center">

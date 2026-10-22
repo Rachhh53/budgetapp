@@ -51,6 +51,8 @@ export interface BucketChange {
   note: string | null;
   /** An amount set for the day: the bucket holds exactly this at the end of it; `null` for money put in or taken out. */
   setToCents: number | null;
+  /** Money moved out of the bucket to spend: changed from the pay period, as a move out. */
+  movedOut: boolean;
 }
 
 /** One bucket with what was moved in and out of it by hand, newest first. */
@@ -189,6 +191,19 @@ export function useSetBucketHeld(id: number) {
   const refresh = useRefreshBuckets();
   return useMutation({
     mutationFn: (input: { date: string; amountCents: number }) => api.put<BucketDetail>(`/api/buckets/${id}/held`, input),
+    onSuccess: refresh,
+  });
+}
+
+/**
+ * Changes money put in or taken out by hand (`amountCents` signed), or an amount set for a day (`amountCents` is what
+ * it is set to), in place.
+ */
+export function useUpdateBucketChange(id: number) {
+  const refresh = useRefreshBuckets();
+  return useMutation({
+    mutationFn: ({ changeId, ...input }: { changeId: number; date: string; amountCents: number; note: string | null }) =>
+      api.put<BucketDetail>(`/api/buckets/${id}/changes/${changeId}`, input),
     onSuccess: refresh,
   });
 }

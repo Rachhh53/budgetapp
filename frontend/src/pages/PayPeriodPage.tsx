@@ -37,6 +37,7 @@ import { PrepaymentForm } from "../components/items/PrepaymentForm";
 import { InvoiceForm } from "../components/period/InvoiceForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { PaycheckForm } from "../components/period/PaycheckForm";
+import { BalanceAdjustments } from "../components/period/BalanceAdjustments";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { BUTTON_PRIMARY, INPUT } from "../components/ui";
@@ -586,7 +587,12 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
         label="Projected ending"
         tip="projectedEnding"
         cents={balance.endingCents}
-        note={`${plain(balance.startingCents)} + ${plain(balance.inCents)} − ${plain(balance.outCents)}`}
+        // A balance entered during the period is part of the sum, so the period still starts where the last one ended.
+        note={`${plain(balance.startingCents)} + ${plain(balance.inCents)} − ${plain(balance.outCents)}${
+          balance.adjustedCents === 0
+            ? ""
+            : ` ${balance.adjustedCents < 0 ? "−" : "+"} ${plain(Math.abs(balance.adjustedCents))} balance adjusted`
+        }`}
         className="order-1 col-span-2 lg:order-4 lg:col-span-1"
         highlight
       />
@@ -1713,6 +1719,7 @@ function AccountsPanel({
               <AccountLine label={`Assumed growth${since} · not a real gain`} cents={assumed} sign="+" />
             )}
             <AccountLine label={`${owed ? "Paid off" : "Going out"}${since}`} cents={balance.outCents} sign="−" />
+            <BalanceAdjustments account={shown.account} adjustments={balance.adjustments} />
             <AccountLine
               label={`${owed ? "Least owed" : "Lowest point"} · ${formatDay(balance.lowestOn)}${balance.lowBalance ? " · low balance" : ""}`}
               cents={balance.lowestCents}

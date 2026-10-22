@@ -62,13 +62,72 @@ public final class BucketsRepository {
             LocalDate goalDate,
             Boolean stopAtGoal) {}
 
-    /** Money put into (+) or taken out of (−) a bucket by hand. */
     /**
+     * Money put into (+) or taken out of (−) a bucket by hand, an amount set for a day, or money moved out of it.
+     *
      * @param amountCents what was put in (+) or taken out (−); 0 on an amount set
      * @param setToCents  an amount set for the day: the bucket holds exactly this at the end of it, however what came
      *                    before changes; {@code null} for money put in or taken out
+     * @param movedOut    money moved out of the bucket to spend (V33), changed as such rather than here
      */
-    public record Change(long id, long bucketId, LocalDate date, long amountCents, String note, Long setToCents) {}
+    public record Change(long id, long bucketId, LocalDate date, long amountCents, String note, Long setToCents, boolean movedOut) {}
+
+    /** What changing a bucket change came to. */
+    public enum ChangeEdit {
+        DONE,
+        /** No such change in that bucket, or one moved out to spend, which is changed as a move out. */
+        NOT_FOUND,
+        /** Another amount is already set for that day. */
+        SAME_DAY
+    }
+
+    /**
+     * Changes money put in or taken out by hand, or an amount set for a day, in place (Rachel, 2026-10-21: "I want the
+     * ability to edit basically everything I enter"). For an amount set, {@code amountCents} is what it is set to and
+     * the note stays.
+     */
+    public ChangeEdit updateChange(long bucketId, long changeId, LocalDate date, long amountCents, String note) {
+        return jdbi.inTransaction(handle -> {
+            Optional<Change> found = handle.createQuery("""
+                            SELECT id, bucket_id, date, amount, note, set_to, to_available FROM bucket_changes
+                            WHERE id = :id AND bucket_id = :bucketId
+                            """)
+                    .bind("id", changeId)
+                    .bind("bucketId", bucketId)
+                    .map((rs, ctx) -> change(rs))
+                    .findOne();
+            if (found.isEmpty() || found.get().movedOut()) {
+                return ChangeEdit.NOT_FOUND;
+            }
+            if (found.get().setToCents() != null) {
+                boolean taken = handle.createQuery("""
+                                SELECT count(*) FROM bucket_changes
+                                WHERE bucket_id = :bucketId AND date = :date AND set_to IS NOT NULL AND id <> :id
+                                """)
+                        .bind("bucketId", bucketId)
+                        .bind("date", date.toString())
+                        .bind("id", changeId)
+                        .mapTo(Integer.class)
+                        .one() > 0;
+                if (taken) {
+                    return ChangeEdit.SAME_DAY;
+                }
+                handle.createUpdate("UPDATE bucket_changes SET date = :date, set_to = :setTo WHERE id = :id")
+                        .bind("date", date.toString())
+                        .bind("setTo", amountCents)
+                        .bind("id", changeId)
+                        .execute();
+            } else {
+                handle.createUpdate("UPDATE bucket_changes SET date = :date, amount = :amount, note = :note WHERE id = :id")
+                        .bind("date", date.toString())
+                        .bind("amount", amountCents)
+                        .bind("note", note)
+                        .bind("id", changeId)
+                        .execute();
+            }
+            return ChangeEdit.DONE;
+        });
+    }
 
     /** Every bucket, in the order the user sees them. */
     public List<Bucket> all() {
@@ -187,7 +246,7 @@ public final class BucketsRepository {
     public List<Change> changes(long bucketId) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
-                        SELECT id, bucket_id, date, amount, note, set_to FROM bucket_changes
+                        SELECT id, bucket_id, date, amount, note, set_to, to_available FROM bucket_changes
                         WHERE bucket_id = :bucketId ORDER BY date DESC, id DESC
                         """)
                 .bind("bucketId", bucketId)
@@ -198,7 +257,7 @@ public final class BucketsRepository {
     /** Every change made by hand, to any bucket, oldest first. */
     public List<Change> allChanges() {
         return jdbi.withHandle(handle -> handle
-                .createQuery("SELECT id, bucket_id, date, amount, note, set_to FROM bucket_changes ORDER BY date, id")
+                .createQuery("SELECT id, bucket_id, date, amount, note, set_to, to_available FROM bucket_changes ORDER BY date, id")
                 .map((rs, ctx) -> change(rs))
                 .list());
     }
@@ -404,6 +463,7 @@ public final class BucketsRepository {
                 LocalDate.parse(rs.getString("date")),
                 rs.getLong("amount"),
                 rs.getString("note"),
-                setTo(rs));
+                setTo(rs),
+                rs.getBoolean("to_available"));
     }
 }

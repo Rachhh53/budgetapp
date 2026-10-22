@@ -40,8 +40,8 @@ const RETIREMENT_DETAIL: AccountDetail = {
 const PERFORMANCE: AccountPerformance = {
   thisYear: { since: "2026-09-01", startCents: 3900000, nowCents: 4022500, changeCents: 122500, depositsCents: 67500, growthCents: 55000 },
   balances: [
-    { entryId: 31, date: "2026-10-01", amountCents: 4000000, changeCents: 100000, depositsCents: 45000, growthCents: 55000 },
-    { entryId: 30, date: "2026-09-01", amountCents: 3900000, changeCents: null, depositsCents: null, growthCents: null },
+    { entryId: 31, date: "2026-10-01", amountCents: 4000000, changeCents: 100000, depositsCents: 45000, growthCents: 55000, recordsCents: null },
+    { entryId: 30, date: "2026-09-01", amountCents: 3900000, changeCents: null, depositsCents: null, growthCents: null, recordsCents: null },
   ],
   // A month apart: too short to put as a rate a year.
   actualGrowth: { from: "2026-09-01", to: "2026-10-01", growthCents: 55000, assumedCents: 23100, yearlyRateBp: null },

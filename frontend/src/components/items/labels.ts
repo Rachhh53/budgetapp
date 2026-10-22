@@ -175,6 +175,6 @@ export function describeLandsIn(item: Pick<Item, "schedule" | "placement" | "nex
   if (item.schedule.frequency === "every_pay_period") {
     return "Each period";
   }
-  // "1 early" covers both reasons: placed one early, or due on payday and paid by hand.
+  // "1 early" when it is paid a period early, or when this one occurrence was moved to an earlier period.
   return item.placement === "one_early" || item.next?.early ? "1 early" : "Due period";
 }

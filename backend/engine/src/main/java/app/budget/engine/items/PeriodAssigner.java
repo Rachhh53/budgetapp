@@ -8,10 +8,10 @@ import java.util.Optional;
 /**
  * Decides which pay period an occurrence lands in (spec §5.2).
  *
- * <p>For an occurrence due on D, with P the period containing D: it lands in the period
- * before P when the item is placed one period early, or when D is itself a payday and the
- * item is not on autopay — a bill paid by hand on payday has to come out of the paycheck
- * before. The two reasons never stack: it moves back one period, not two.
+ * <p>For an occurrence due on D, with P the period containing D: it lands in P, or in the period before P when the
+ * item is placed one period early. A period's first day is part of it like any other day, so a bill due on payday is
+ * paid from that payday's paycheck (Rachel, 2026-10-21: "if something happens on the first day of the pay period, no
+ * matter what it is, it shows in the pay period"). It once moved back a period when paid by hand.
  */
 public final class PeriodAssigner {
 
@@ -26,14 +26,12 @@ public final class PeriodAssigner {
      * The period that pays for an occurrence due on {@code due}; empty when that period is
      * outside the ones this assigner was given.
      */
-    public Optional<PayPeriod> assign(LocalDate due, Placement placement, boolean autopay) {
+    public Optional<PayPeriod> assign(LocalDate due, Placement placement) {
         int index = indexContaining(due);
         if (index < 0) {
             return Optional.empty();
         }
-        boolean dueOnPayday = due.equals(periods.get(index).start());
-        boolean early = placement == Placement.ONE_EARLY || (dueOnPayday && !autopay);
-        if (!early) {
+        if (placement != Placement.ONE_EARLY) {
             return Optional.of(periods.get(index));
         }
         return index == 0 ? Optional.empty() : Optional.of(periods.get(index - 1));
