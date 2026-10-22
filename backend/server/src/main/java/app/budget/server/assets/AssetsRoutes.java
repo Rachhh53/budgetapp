@@ -5,6 +5,7 @@ import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
+import app.budget.server.api.Archiving;
 import app.budget.server.api.Inputs;
 import app.budget.server.assets.AssetsRepository.Kind;
 import app.budget.server.assets.NetWorthCalculator.AssetDetail;
@@ -62,7 +63,8 @@ public final class AssetsRoutes {
             Long linkedLoanAccountId,
             Boolean archived,
             Long valueCents,
-            LocalDate valueDate) {}
+            LocalDate valueDate,
+            LocalDate archivedOn) {}
 
     /** Request body for entering a value. */
     public record ValueInput(LocalDate date, Long valueCents) {}
@@ -71,7 +73,7 @@ public final class AssetsRoutes {
 
     private void create(Context ctx) {
         AssetInput input = Inputs.body(ctx, AssetInput.class);
-        AssetsRepository.Fields fields = fields(input);
+        AssetsRepository.Fields fields = fields(input, null);
         Long value = input.valueCents() == null ? null : (Long) Inputs.amount(input.valueCents(), "The value");
         LocalDate valueDate = value == null ? null : valueDate(input.valueDate() == null ? today() : input.valueDate());
         long id = assets.create(fields);
@@ -83,10 +85,8 @@ public final class AssetsRoutes {
 
     private void update(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        AssetsRepository.Fields fields = fields(Inputs.body(ctx, AssetInput.class));
-        if (!assets.update(id, fields)) {
-            throw ApiException.notFound();
-        }
+        AssetsRepository.Asset existing = assets.find(id).orElseThrow(ApiException::notFound);
+        assets.update(id, fields(Inputs.body(ctx, AssetInput.class), existing.archivedOn()));
         ApiResponse.ok(ctx, detail(id));
     }
 
@@ -136,7 +136,8 @@ public final class AssetsRoutes {
         return date;
     }
 
-    private AssetsRepository.Fields fields(AssetInput input) {
+    /** @param archivedBefore the day the asset was archived as of until now; {@code null} when it wasn't */
+    private AssetsRepository.Fields fields(AssetInput input, LocalDate archivedBefore) {
         String name = Inputs.text(input.name(), "a name for this", NAME_MAX);
         Kind kind = Inputs.choice(Kind.class, input.kind(), "what kind of thing this is");
         String color = Inputs.color(input.color());
@@ -153,6 +154,7 @@ public final class AssetsRoutes {
                 throw ApiException.badRequest("Please choose the loan from your loan accounts.");
             }
         }
-        return new AssetsRepository.Fields(name, kind, color, rate, loanId, Boolean.TRUE.equals(input.archived()));
+        return new AssetsRepository.Fields(
+                name, kind, color, rate, loanId, Archiving.archivedOn(input.archived(), input.archivedOn(), archivedBefore, today(), null));
     }
 }

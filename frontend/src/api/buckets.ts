@@ -16,6 +16,8 @@ export interface Bucket {
   goalCents: number | null;
   note: string | null;
   archived: boolean;
+  /** The day it was archived as of: it counts before it and is put away from it on; `null` when it is not archived. */
+  archivedOn: string | null;
   /** The day it counts from: recurring moves, save-ups and interest reach it from then on. */
   openedOn: string;
   /** What it holds today; zero once archived. */
@@ -69,6 +71,8 @@ export interface BucketInput {
   goalCents: number | null;
   note: string | null;
   archived: boolean;
+  /** With `archived`: the day it is archived as of, today or earlier. Left out, the day it had, or today. */
+  archivedOn?: string | null;
   /** When adding: what is already set aside, if anything. */
   startingCents?: number;
   /** The day it counts from: today or earlier. */

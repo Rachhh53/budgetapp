@@ -434,37 +434,59 @@ function StopOrDeleteMove({ move, bucket }: { move: Item; bucket: Bucket }) {
 }
 
 /**
- * The two ways to put a bucket away, side by side. Archiving keeps it and its history, and can
- * be undone here; deleting removes it. No "are you sure?" for either (spec §6): Undo brings it back.
+ * The two ways to put a bucket away, side by side. Archiving is as of a day: the bucket keeps everything before it in
+ * every pay period, lets go of whatever it still holds that day, and can be brought back or given another day here
+ * (Rachel, 2026-10-22: "the archive was as of a certain date- the previous activity needs to remain"). Deleting
+ * removes it. No "are you sure?" for either (spec §6): Undo brings it back.
  */
 function ArchiveOrDelete({ bucket, onDone }: { bucket: Bucket; onDone: () => void }) {
+  const id = useId();
   const remove = useDeleteBucket(bucket.id);
   const save = useSaveBucket(bucket.id);
+  const startOn = useDefaultDate();
+  const opensOn = startOn.date < bucket.openedOn ? bucket.openedOn : startOn.date;
+  const [day, setDay] = useState(bucket.archivedOn ?? opensOn);
   const busy = remove.isPending || save.isPending;
   const failure = remove.error?.message ?? save.error?.message;
+  const send = (archived: boolean) =>
+    save.mutate(
+      {
+        accountId: bucket.accountId,
+        name: bucket.name,
+        color: bucket.color,
+        goalCents: bucket.goalCents,
+        note: bucket.note,
+        archived,
+        archivedOn: archived ? day : null,
+        openedOn: bucket.openedOn,
+        goalDate: bucket.goalDate,
+      },
+      { onSuccess: onDone },
+    );
   return (
     <FormSection title={bucket.archived ? "Bring back or delete" : "Archive or delete"}>
+      <div>
+        <label htmlFor={`${id}-archived-on`} className={LABEL}>
+          {bucket.archived ? "Archived as of" : "Archive as of"}
+        </label>
+        <input
+          id={`${id}-archived-on`}
+          type="date"
+          value={day}
+          min={bucket.openedOn}
+          max={todayIso()}
+          onChange={(event) => setDay(event.target.value)}
+          className={INPUT}
+        />
+        {!bucket.archived && <DefaultDateHint value={day} openedOn={opensOn === startOn.date ? undefined : opensOn} />}
+      </div>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <button
-          type="button"
-          onClick={() =>
-            save.mutate(
-              {
-                accountId: bucket.accountId,
-                name: bucket.name,
-                color: bucket.color,
-                goalCents: bucket.goalCents,
-                note: bucket.note,
-                archived: !bucket.archived,
-                openedOn: bucket.openedOn,
-                goalDate: bucket.goalDate,
-              },
-              { onSuccess: onDone },
-            )
-          }
-          disabled={busy}
-          className={BUTTON_SECONDARY}
-        >
+        {bucket.archived && (
+          <button type="button" onClick={() => send(true)} disabled={busy || day === "" || day === bucket.archivedOn} className={BUTTON_SECONDARY}>
+            {save.isPending ? "Saving…" : "Save the date"}
+          </button>
+        )}
+        <button type="button" onClick={() => send(!bucket.archived)} disabled={busy || (!bucket.archived && day === "")} className={BUTTON_SECONDARY}>
           {save.isPending ? "Saving…" : bucket.archived ? "Bring this bucket back" : "Archive this bucket"}
         </button>
         <button type="button" onClick={() => remove.mutate(undefined, { onSuccess: onDone })} disabled={busy} className={BUTTON_DANGER_OUTLINE}>
@@ -473,8 +495,8 @@ function ArchiveOrDelete({ bucket, onDone }: { bucket: Bucket; onDone: () => voi
       </div>
       <p className={HINT}>
         {bucket.archived
-          ? "Archived: it sets nothing aside. Bring it back to use it again, or delete it for good."
-          : "Archiving keeps the bucket and its history but stops it setting anything aside. Deleting removes it."}{" "}
+          ? "Archived: it keeps everything before that day and sets nothing aside from then on. Bring it back to use it again, or delete it for good."
+          : "Archiving keeps everything before that day, in every pay period, and stops it setting anything aside from then on. Deleting removes it."}{" "}
         Either way the money stays in the account.
       </p>
       {failure && (

@@ -131,6 +131,19 @@ describe("Picker", () => {
 
     expect(onChange).toHaveBeenCalledWith(null);
   });
+
+  it("empties a clearable choice with its clear button", async () => {
+    const { onChange } = setup({ value: "1", clearable: true });
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear the category" }));
+
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it("offers no clear button when a choice is required", () => {
+    setup({ value: "1" });
+    expect(screen.queryByRole("button", { name: "Clear the category" })).not.toBeInTheDocument();
+  });
 });
 
 describe("TextPicker", () => {

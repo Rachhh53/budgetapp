@@ -13,7 +13,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 11, date: "2026-10-02", amountCents: 170510, note: "From statement" },
 };
@@ -35,7 +35,7 @@ const GIFTS: Bucket = {
   color: "#b45309",
   goalCents: 60000,
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   openedOn: "2026-09-01",
   goalDate: null,
   stopAtGoal: false,
@@ -462,6 +462,8 @@ describe("account detail screen", () => {
         institution: "Coastal Credit Union",
         color: "#0f766e",
         archived: true,
+        // Archived as of today unless another day is chosen.
+        archivedOn: todayIso(),
         lowBalanceThresholdCents: null,
       },
     ]);
@@ -577,7 +579,7 @@ describe("account detail screen", () => {
     it("lists each bucket with its goal, and shows that buckets and the rest add up to the balance", async () => {
       const fetchMock = fakeBackend({
         "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
-        "GET /api/buckets": () => ({ status: 200, data: [GIFTS, { ...GIFTS, id: 8, name: "Old trip", archived: true, balanceCents: 0 }] }),
+        "GET /api/buckets": () => ({ status: 200, data: [GIFTS, { ...GIFTS, id: 8, name: "Old trip", archived: true, archivedOn: null, balanceCents: 0 }] }),
         "POST /api/buckets/7/changes": () => ({ status: 201, data: { bucket: GIFTS, changes: [] }, changed: true }),
       });
       renderApp("/accounts/1");
@@ -681,7 +683,7 @@ describe("account detail screen", () => {
 
     it("lists a bucket move set up before, and stops it from today", async () => {
       const fund = {
-        id: 5, name: "Gift fund", kind: "bucket_move", archived: false, note: null, tagIds: [], bucketId: 7, saveUpBucketId: null,
+        id: 5, name: "Gift fund", kind: "bucket_move", archived: false, archivedOn: null, note: null, tagIds: [], bucketId: 7, saveUpBucketId: null,
         amountCents: 5000, amountMode: "per_occurrence", estimate: false, categoryId: null, payFromAccountId: 1, payToAccountId: null,
         autopay: true, placement: "due_period", daysAfterPayday: 0, perOccurrenceCents: 5000,
         schedule: { frequency: "every_pay_period", interval: null, day1: null, day2: null, month: null, startDate: "2026-10-01", endDate: null, weekendRule: "none" },
@@ -730,7 +732,7 @@ describe("account detail screen", () => {
 
     it("lists the recurring items that already put money in a bucket", async () => {
       const fund = {
-        id: 5, name: "Gift fund", kind: "bucket_move", archived: false, bucketId: 7, saveUpBucketId: null, perOccurrenceCents: 5000,
+        id: 5, name: "Gift fund", kind: "bucket_move", archived: false, archivedOn: null, bucketId: 7, saveUpBucketId: null, perOccurrenceCents: 5000,
         schedule: { frequency: "every_pay_period", interval: null, day1: null, day2: null, month: null, startDate: "2026-10-01", endDate: null, weekendRule: "none" },
       };
       fakeBackend({
@@ -912,10 +914,20 @@ describe("account detail screen", () => {
       await show(dialog, "Archive or delete");
       const archive = await within(dialog).findByRole("button", { name: "Archive this bucket" });
       expect(archive.parentElement).toContainElement(within(dialog).getByRole("button", { name: "Delete this bucket" }));
+      // As of a day: everything before it stays in the pay periods (Rachel, 2026-10-22: "the previous activity needs
+      // to remain").
+      const asOf = within(dialog).getByLabelText("Archive as of");
+      expect(asOf).toHaveValue(todayIso());
+      fireEvent.change(asOf, { target: { value: "2026-09-25" } });
       await userEvent.click(archive);
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[0]).toMatchObject({ name: "Holiday gifts", goalCents: 60000, archived: true });
+      expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7")[0]).toMatchObject({
+        name: "Holiday gifts",
+        goalCents: 60000,
+        archived: true,
+        archivedOn: "2026-09-25",
+      });
     });
 
     it("opens a bucket's history from its row, with amounts set, and removes one", async () => {

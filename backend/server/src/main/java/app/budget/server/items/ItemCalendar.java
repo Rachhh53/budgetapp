@@ -10,6 +10,7 @@ import app.budget.engine.items.Placement;
 import app.budget.engine.items.UsageBill;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.ScheduleRule;
+import app.budget.server.api.Archiving;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.items.InvoicesRepository.Invoice;
 import app.budget.server.items.ItemsRepository.Item;
@@ -203,12 +204,12 @@ public final class ItemCalendar {
     public record Amounts(long perOccurrenceCents, long perYearCents) {}
 
     /**
-     * Every occurrence of every active item that falls due, or is paid from a period, within
-     * {@code from}–{@code to}. A margin either side is included; callers keep what they need.
+     * Every occurrence of every item that falls due, or is paid from a period, within {@code from}–{@code to}. A margin
+     * either side is included; callers keep what they need. An archived item has what came before the day it was
+     * archived as of, and nothing from that day on.
      */
     public Expansion expand(LocalDate from, LocalDate to) {
-        List<Item> active = items.all().stream().filter(item -> !item.archived()).toList();
-        return expand(active, from, to);
+        return expand(items.all(), from, to);
     }
 
     /**
@@ -288,7 +289,7 @@ public final class ItemCalendar {
                 : new Amounts(amount.cents(), AnnualAmount.yearly(amount, perYear).cents());
     }
 
-    /** As {@link #expand(LocalDate, LocalDate)}, for just these items (archived ones included, if given). */
+    /** As {@link #expand(LocalDate, LocalDate)}, for just these items. */
     public Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
         Expansion plain = expandSchedules(chosen, from, to);
         List<Item> packs = chosen.stream().filter(item -> item.versions().stream().anyMatch(version -> version.terms().pack().isPresent())).toList();
@@ -302,6 +303,7 @@ public final class ItemCalendar {
         for (Item item : packs) {
             plannedPacks(item).stream()
                     .filter(pack -> !pack.dueDate().isBefore(lo) && !pack.dueDate().isAfter(hi))
+                    .filter(pack -> !Archiving.awayOn(item.archivedOn(), pack.dueDate()))
                     .forEach(occurrences::add);
         }
         occurrences.sort(Comparator.comparing(Occurrence::payBy).thenComparing(Occurrence::name));
@@ -485,8 +487,9 @@ public final class ItemCalendar {
                     .toList();
             Map<LocalDate, Override> edited = edits.getOrDefault(item.id(), Map.of());
             for (Planned<Terms> planned : planner.occurrences(versions, lo, hi)) {
-                // While an item is paused, what its schedule names simply does not happen.
-                if (paused.stream().anyMatch(pause -> pause.covers(planned.scheduled()))) {
+                // While an item is paused, what its schedule names simply does not happen; nor once it is archived.
+                if (paused.stream().anyMatch(pause -> pause.covers(planned.scheduled()))
+                        || Archiving.awayOn(item.archivedOn(), planned.scheduled())) {
                     continue;
                 }
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
@@ -553,7 +556,7 @@ public final class ItemCalendar {
      * Each is filed and named as the item's first session is.
      */
     public List<Occurrence> paidAheadCosts(LocalDate from, LocalDate to) {
-        return paidAheadCosts(items.all().stream().filter(item -> !item.archived()).toList(), from, to);
+        return paidAheadCosts(items.all(), from, to);
     }
 
     /** {@link #paidAheadCosts(LocalDate, LocalDate)} for {@code chosen} only. */
@@ -680,9 +683,16 @@ public final class ItemCalendar {
         Terms terms = planned.version().details();
         LocalDate due = edit.dueDate() != null ? edit.dueDate() : planned.due();
 
+        // Paid, it belongs to the day it was paid, early or late (Rachel, 2026-10-22: "it says paid march 15 though ...
+        // it gets paid when it's paid not when it's due"; "no you can pay late"). Ticking one paid dates it inside the
+        // pay period it is ticked from unless another day is chosen, so ticking off old bills keeps them where they
+        // were. Moved to a period by hand, it stays there.
+        boolean paidOn = edit.paid() && edit.paidDate() != null && edit.periodOverride() == null;
         Optional<PayPeriod> period;
         if (edit.periodOverride() != null) {
             period = assigner.startingOn(edit.periodOverride());
+        } else if (paidOn) {
+            period = assigner.containing(edit.paidDate());
         } else if (planned.ownPeriod() != null) {
             // "Every pay period" belongs to the period it was made for, wherever in it it is dated.
             period = Optional.of(planned.ownPeriod());
@@ -692,7 +702,8 @@ public final class ItemCalendar {
 
         // The period's figures have to add up to what it lists, so an occurrence always counts
         // on a day inside the period that pays for it: "due Oct 16, pay by Oct 14".
-        LocalDate payBy = period.map(found -> clamp(due, found)).orElse(due);
+        LocalDate counted = paidOn ? edit.paidDate() : due;
+        LocalDate payBy = period.map(found -> clamp(counted, found)).orElse(counted);
         LocalDate periodStart = period.map(PayPeriod::start).orElse(null);
         boolean early = periodStart != null
                 && assigner.containing(due).filter(dueIn -> dueIn.start().isAfter(periodStart)).isPresent();

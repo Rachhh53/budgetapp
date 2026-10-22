@@ -36,8 +36,10 @@ public final class ItemsRepository {
     /**
      * A recurring item with every version of it.
      *
-     * @param createdOn the day it was added: saving up for it cannot have started any earlier
-     * @param versions  oldest first; never empty
+     * @param archivedOn the day it was archived as of: nothing of it falls on that day or later; {@code null} when it
+     *                   is not archived
+     * @param createdOn  the day it was added: saving up for it cannot have started any earlier
+     * @param versions   oldest first; never empty
      */
     public record Item(
             long id,
@@ -45,6 +47,7 @@ public final class ItemsRepository {
             ItemKind kind,
             String note,
             boolean archived,
+            LocalDate archivedOn,
             LocalDate createdOn,
             List<Long> tagIds,
             List<Version> versions) {
@@ -193,8 +196,12 @@ public final class ItemsRepository {
         }
     }
 
-    /** What stays the same across an item's whole life. */
-    public record Identity(String name, ItemKind kind, String note, boolean archived, List<Long> tagIds) {}
+    /**
+     * What stays the same across an item's whole life.
+     *
+     * @param archivedOn the day it is archived as of; {@code null} when it is not archived
+     */
+    public record Identity(String name, ItemKind kind, String note, LocalDate archivedOn, List<Long> tagIds) {}
 
     /**
      * A "just this one" edit. {@code null} means that part of the occurrence was not changed.
@@ -247,14 +254,15 @@ public final class ItemsRepository {
     public long create(Identity identity, Terms terms, LocalDate effectiveFrom) {
         return jdbi.inTransaction(handle -> {
             long id = handle.createQuery("""
-                            INSERT INTO items (name, kind, note, archived, created_at)
-                            VALUES (:name, :kind, :note, :archived, :now)
+                            INSERT INTO items (name, kind, note, archived, archived_on, created_at)
+                            VALUES (:name, :kind, :note, :archived, :archivedOn, :now)
                             RETURNING id
                             """)
                     .bind("name", identity.name())
                     .bind("kind", Inputs.code(identity.kind()))
                     .bind("note", identity.note())
-                    .bind("archived", identity.archived())
+                    .bind("archived", identity.archivedOn() != null)
+                    .bind("archivedOn", identity.archivedOn() == null ? null : identity.archivedOn().toString())
                     .bind("now", clock.instant().toString())
                     .mapTo(Long.class)
                     .one();
@@ -308,12 +316,16 @@ public final class ItemsRepository {
                         .bind("usesPer", usesPer(terms))
                         .execute();
             }
-            handle.createUpdate("UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived WHERE id = :id")
+            handle.createUpdate("""
+                            UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived, archived_on = :archivedOn
+                            WHERE id = :id
+                            """)
                     .bind("id", id)
                     .bind("name", identity.name())
                     .bind("kind", Inputs.code(identity.kind()))
                     .bind("note", identity.note())
-                    .bind("archived", identity.archived())
+                    .bind("archived", identity.archivedOn() != null)
+                    .bind("archivedOn", identity.archivedOn() == null ? null : identity.archivedOn().toString())
                     .execute();
             replaceTags(handle, id, identity.tagIds());
 
@@ -365,12 +377,15 @@ public final class ItemsRepository {
 
     /**
      * Archives one item and adds another in its place, in one step: for changing what an item
-     * is from now on while leaving the old one's history exactly as it was. Returns the new id.
-     * The caller has checked that the item exists.
+     * is from now on while leaving the old one's history exactly as it was: the old one is archived as of the day the
+     * new one starts. Returns the new id. The caller has checked that the item exists.
      */
     public long replace(long id, Identity identity, Terms terms) {
         return jdbi.inTransaction(handle -> {
-            handle.createUpdate("UPDATE items SET archived = 1 WHERE id = :id").bind("id", id).execute();
+            handle.createUpdate("UPDATE items SET archived = 1, archived_on = :archivedOn WHERE id = :id")
+                    .bind("id", id)
+                    .bind("archivedOn", terms.schedule().startDate().toString())
+                    .execute();
             long created = handle.createQuery("""
                             INSERT INTO items (name, kind, note, archived, created_at)
                             VALUES (:name, :kind, :note, 0, :now)
@@ -500,10 +515,10 @@ public final class ItemsRepository {
     }
 
     /** The columns of {@code items}, before versions and tags are attached. */
-    private record ItemRow(long id, String name, ItemKind kind, String note, boolean archived, LocalDate createdOn) {}
+    private record ItemRow(long id, String name, ItemKind kind, String note, boolean archived, LocalDate archivedOn, LocalDate createdOn) {}
 
     private List<ItemRow> rows(Handle handle, String clause, Long id) {
-        var query = handle.createQuery("SELECT id, name, kind, note, archived, created_at FROM items " + clause);
+        var query = handle.createQuery("SELECT id, name, kind, note, archived, archived_on, created_at FROM items " + clause);
         if (id != null) {
             query.bind("id", id);
         }
@@ -513,6 +528,7 @@ public final class ItemsRepository {
                 ItemKind.valueOf(rs.getString("kind").toUpperCase(Locale.ROOT)),
                 rs.getString("note"),
                 rs.getBoolean("archived"),
+                rs.getString("archived_on") == null ? null : LocalDate.parse(rs.getString("archived_on")),
                 // Stored as an instant; the day it was on this PC is what counts.
                 Instant.parse(rs.getString("created_at")).atZone(clock.getZone()).toLocalDate())).list();
     }
@@ -523,7 +539,7 @@ public final class ItemsRepository {
                 .mapTo(Long.class)
                 .list();
         return new Item(
-                row.id(), row.name(), row.kind(), row.note(), row.archived(), row.createdOn(), tagIds, versions(handle, row.id()));
+                row.id(), row.name(), row.kind(), row.note(), row.archived(), row.archivedOn(), row.createdOn(), tagIds, versions(handle, row.id()));
     }
 
     /** A version row before its schedule is loaded. */

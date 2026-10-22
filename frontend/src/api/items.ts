@@ -128,6 +128,8 @@ export interface Item extends ItemTerms {
   kind: ItemKind;
   note: string | null;
   archived: boolean;
+  /** The day it was archived as of: it counts before it and is put away from it on; `null` when it is not archived. */
+  archivedOn: string | null;
   /** The day it was added. Shown, never changed. */
   createdOn: string;
   tagIds: number[];
@@ -156,6 +158,8 @@ export interface ItemInput extends ItemTerms {
   kind: ItemKind;
   note: string | null;
   archived: boolean;
+  /** With `archived`: the day it is archived as of, today or earlier. Left out, the day it had, or today. */
+  archivedOn?: string | null;
   tagIds: number[];
   /** When changing an item: the change applies from this date on. */
   effectiveFrom?: string;
@@ -233,6 +237,7 @@ export function itemAsInput(item: Item): ItemInput {
     kind: item.kind,
     note: item.note,
     archived: item.archived,
+    archivedOn: item.archivedOn,
     tagIds: item.tagIds,
     amountCents: item.amountCents,
     amountMode: item.amountMode,

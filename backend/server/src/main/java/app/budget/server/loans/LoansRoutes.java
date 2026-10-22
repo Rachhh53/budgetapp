@@ -271,7 +271,7 @@ public final class LoansRoutes {
                 false);
         String name = account.name() + " payment";
         long itemId = items.create(
-                new Identity(name.length() > MAX_NAME ? name.substring(0, MAX_NAME) : name, ItemKind.TRANSFER, null, false, List.of()),
+                new Identity(name.length() > MAX_NAME ? name.substring(0, MAX_NAME) : name, ItemKind.TRANSFER, null, null, List.of()),
                 terms,
                 today);
         loans.save(new Settings(

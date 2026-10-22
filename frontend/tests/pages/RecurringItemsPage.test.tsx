@@ -17,7 +17,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: null,
 };
@@ -33,7 +33,7 @@ const RENT: Item = {
   name: "Rent",
   kind: "bill",
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 155000,
@@ -113,7 +113,7 @@ const GIFTS: Bucket = {
   color: "#b45309",
   goalCents: 60000,
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   openedOn: "2026-09-01",
   goalDate: null,
   stopAtGoal: false,
@@ -412,7 +412,7 @@ describe("recurring items screen", () => {
   });
 
   it("hides archived items until Archived is chosen, and counts them only there", async () => {
-    withItems([{ ...ELECTRIC, archived: true, next: null }, RENT]);
+    withItems([{ ...ELECTRIC, archived: true, archivedOn: null, next: null }, RENT]);
     renderApp("/recurring");
 
     const table = await screen.findByRole("table", { name: "Recurring items" });
@@ -437,7 +437,7 @@ describe("recurring items screen", () => {
     expect(screen.queryByRole("button", { name: /^Archived/ })).not.toBeInTheDocument();
     unmount();
 
-    withItems([{ ...ELECTRIC, archived: true, next: null }]);
+    withItems([{ ...ELECTRIC, archived: true, archivedOn: null, next: null }]);
     renderApp("/recurring");
     expect(await screen.findByText("Everything here is archived.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archived · 1" })).toBeInTheDocument();
@@ -483,7 +483,7 @@ describe("recurring items screen", () => {
         name: "Electric",
         kind: "bill",
         note: null,
-        archived: false,
+        archived: false, archivedOn: null,
         tagIds: [],
         amountCents: 14000,
         amountMode: "per_occurrence",
@@ -915,17 +915,41 @@ describe("recurring items screen", () => {
     expect(screen.getByRole("button", { name: "Change the amount of Rent" })).toBeInTheDocument();
   });
 
+  it("archives an item as of a day, so it keeps what came before in the pay periods", async () => {
+    const fetchMock = withItems([RENT], { "PUT /api/items/1": () => ({ status: 200, data: RENT }) });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
+    const whole = screen.getByRole("dialog", { name: "Edit Rent" });
+    await userEvent.click(within(whole).getByRole("radio", { name: "Archive or delete" }));
+    expect(within(whole).queryByLabelText("Archived as of")).not.toBeInTheDocument();
+    await userEvent.click(within(whole).getByRole("checkbox", { name: "Archived" }));
+    // Rachel, 2026-10-22: "the archive was as of a certain date- the previous activity needs to remain".
+    const asOf = within(whole).getByLabelText("Archived as of");
+    expect(asOf).toHaveValue(todayIso());
+    fireEvent.change(asOf, { target: { value: "2026-09-20" } });
+    await userEvent.click(within(whole).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")[0]).toMatchObject({ archived: true, archivedOn: "2026-09-20" });
+  });
+
   it("opens only the part of the item its Edit button is on", async () => {
     const fetchMock = withItems([RENT], { "PUT /api/items/1": () => ({ status: 200, data: RENT }) });
     renderApp("/recurring/1");
 
-    // Edit item is the small one: what it is, archiving, deleting.
+    // Edit item is the small one: what it is, how it's charged, archiving and deleting, each a screen of its own so
+    // none scrolls.
     await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const whole = screen.getByRole("dialog", { name: "Edit Rent" });
     expect(within(whole).getByRole("radio", { name: "Bill or expense" })).toBeChecked();
     expect(within(whole).getByRole("textbox", { name: "Name" })).toHaveValue("Rent");
+    expect(within(whole).queryByRole("checkbox", { name: "Archived" })).not.toBeInTheDocument();
+    await userEvent.click(within(whole).getByRole("radio", { name: "Archive or delete" }));
     expect(within(whole).getByRole("checkbox", { name: "Archived" })).not.toBeChecked();
     expect(within(whole).getByRole("button", { name: "Delete item…" })).toBeInTheDocument();
+    expect(within(whole).queryByRole("textbox", { name: "Name" })).not.toBeInTheDocument();
+    await userEvent.click(within(whole).getByRole("radio", { name: "What it is" }));
     expect(within(whole).queryByRole("textbox", { name: "Amount each time" })).not.toBeInTheDocument();
     expect(within(whole).queryByRole("combobox", { name: "How often" })).not.toBeInTheDocument();
     // A transfer needs a second account, so choosing one brings the accounts with it.
@@ -977,7 +1001,7 @@ describe("recurring items screen", () => {
   });
 
   it("offers no pause on an archived item, and says how to bring it back", async () => {
-    withItems([{ ...RENT, archived: true, next: null }]);
+    withItems([{ ...RENT, archived: true, archivedOn: null, next: null }]);
     renderApp("/recurring/1");
 
     const card = await screen.findByRole("region", { name: "Pause" });
@@ -1048,6 +1072,7 @@ describe("recurring items screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rent" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Archive or delete" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete item…" }));
     expect(within(dialog).getByRole("button", { name: "Keep it" })).toHaveFocus();
     expect(calls(fetchMock)).not.toContain("DELETE /api/items/1");

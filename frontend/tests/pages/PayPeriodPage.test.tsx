@@ -8,7 +8,7 @@ import type { Entry } from "../../src/api/entries";
 import type { IncomeSource, OneOffPaycheck, PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
-import { addDays, todayIso } from "../../src/lib/dates";
+import { addDays, paidDateWithin, todayIso } from "../../src/lib/dates";
 import { bodiesSentTo, calls, DEFAULT_SETTINGS, fakeBackend, renderApp } from "../helpers";
 
 const CHECKING: Account = {
@@ -18,7 +18,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null },
 };
@@ -136,7 +136,7 @@ const GIFTS: Bucket = {
   color: "#b45309",
   goalCents: 60000,
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   openedOn: "2026-09-01",
   goalDate: null,
   stopAtGoal: false,
@@ -181,7 +181,7 @@ const ELECTRIC_ITEM: Item = {
   name: "Electric",
   kind: "bill",
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 14000,
@@ -1794,7 +1794,9 @@ describe("pay period screen: billed later", () => {
     expect(manual).toHaveTextContent("Invoice for visits through Sep 30 · due Oct 10");
     await userEvent.click(within(manual).getByRole("checkbox", { name: "Therapy paid" }));
 
-    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/7/invoices/3")).toEqual([{ paid: true, paidDate: todayIso() }]));
+    // Dated inside the period it is ticked from: today while it runs, else the day it counts on.
+    const paidDate = paidDateWithin(WAITING.start, WAITING.end, "2026-10-10", todayIso());
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/7/invoices/3")).toEqual([{ paid: true, paidDate }]));
     expect(calls(fetchMock).some((call) => call.includes("/occurrences/"))).toBe(false);
   });
 });
@@ -1888,5 +1890,35 @@ describe("pay period screen: paid ahead", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/12/paid-ahead/packs/2026-10-12")).toEqual([{ date: "2026-10-16" }]));
+  });
+});
+
+describe("pay period screen: paid from", () => {
+  // Rachel, 2026-10-22: "make filters on the pay period page so I can sort or filter by account it was paid out of".
+  const TWO_ACCOUNTS: PeriodDetail = { ...OCTOBER, occurrences: [{ ...ELECTRIC, payFromAccountId: 2 }, VISA_PAYMENT, CAR_LOAN, GROCERIES] };
+
+  it("narrows what goes out to the account it is paid from, and All brings everything back", async () => {
+    withPeriod(TWO_ACCOUNTS);
+    renderApp();
+
+    const pills = within(await screen.findByRole("group", { name: "Show what is paid from" }));
+    expect(pills.getAllByRole("button").map((button) => button.textContent)).toEqual(["All", "Everyday Checking", "Rainy Day Savings"]);
+    await userEvent.click(pills.getByRole("button", { name: "Rainy Day Savings" }));
+
+    expect(pills.getByRole("button", { name: "Rainy Day Savings" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Electric")).toBeInTheDocument();
+    expect(screen.queryByText("Car loan")).not.toBeInTheDocument();
+    expect(screen.queryByText("Vet emergency")).not.toBeInTheDocument();
+
+    await userEvent.click(pills.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Car loan")).toBeInTheDocument();
+  });
+
+  it("offers no filter when everything comes out of one account", async () => {
+    withPeriod();
+    renderApp();
+
+    await panel("Pay manually & one-offs");
+    expect(screen.queryByRole("group", { name: "Show what is paid from" })).not.toBeInTheDocument();
   });
 });

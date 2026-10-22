@@ -138,10 +138,11 @@ class LedgerApiTest extends ApiTestBase {
         }
 
         @Test
-        void anArchivedAccountIsNotBuiltUp() throws Exception {
+        void anArchivedAccountIsNotListedFromTheDayItWasArchivedAsOf() throws Exception {
             assertThat(server.put("/api/accounts/" + visa,
                     "{\"name\":\"Visa\",\"type\":\"credit_card\",\"color\":\"#0f766e\",\"archived\":true}", cookie).status()).isEqualTo(200);
 
+            // Archived today, Oct 1, so not in the period starting today. ArchivingApiTest covers the periods before.
             assertThat(period("2026-10-01").get("accounts").findValues("accountId")).extracting(JsonNode::asLong)
                     .containsExactlyInAnyOrder(checking, savings);
         }

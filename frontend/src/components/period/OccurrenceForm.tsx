@@ -21,6 +21,11 @@ interface OccurrenceFormProps {
   byHand: boolean;
   /** Paid from a checking account, so a check may have been written for it. */
   fromChecking: boolean;
+  /**
+   * The day it is dated when ticked paid here, unless another is chosen: one inside the pay period it is opened from.
+   * Left out (opened from Coming up, outside any period), today: the day it really is being paid.
+   */
+  paidDate?: string;
   onClose: () => void;
 }
 
@@ -32,7 +37,7 @@ interface OccurrenceFormProps {
  * The item itself (its name, schedule, accounts, the amount from now on) is changed on its own
  * page, a card at a time, which this links to. That keeps the form short enough never to scroll.
  */
-export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: OccurrenceFormProps) {
+export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: paidDateWithin, onClose }: OccurrenceFormProps) {
   const id = useId();
   const save = useEditOccurrence();
   const today = todayIso();
@@ -40,7 +45,7 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
   const [dueDate, setDueDate] = useState(occurrence.dueDate);
   const [note, setNote] = useState(occurrence.note ?? "");
   const [paid, setPaid] = useState(occurrence.paid);
-  const [paidDate, setPaidDate] = useState(occurrence.paidDate ?? today);
+  const [paidDate, setPaidDate] = useState(occurrence.paidDate ?? paidDateWithin ?? today);
   const [code, setCode] = useState(occurrence.confirmationCode ?? "");
   const [check, setCheck] = useState(occurrence.checkNumber ?? "");
   const [payFrom, setPayFrom] = useState(occurrence.payFromAccountId);

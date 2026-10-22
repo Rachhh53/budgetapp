@@ -18,7 +18,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: null,
 };
@@ -308,7 +308,7 @@ describe("One expense", () => {
       color: "#b45309",
       goalCents: null,
       note: null,
-      archived: false,
+      archived: false, archivedOn: null,
       openedOn: "2026-01-01",
       goalDate: null,
       stopAtGoal: false,

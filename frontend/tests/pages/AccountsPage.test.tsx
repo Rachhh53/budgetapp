@@ -12,7 +12,7 @@ const CHECKING: Account = {
   type: "checking",
   subtypeLabel: null,
   color: "#0f766e",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 10, date: "2026-10-02", amountCents: 170510, note: null },
 };
@@ -23,7 +23,7 @@ const SAVINGS: Account = {
   type: "savings",
   subtypeLabel: "High-yield",
   color: "#c2410c",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 11, date: "2026-09-30", amountCents: 842000, note: null },
 };
@@ -34,11 +34,11 @@ const CARD: Account = {
   type: "credit_card",
   subtypeLabel: null,
   color: "#4338ca",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: null,
 };
-const OLD: Account = { ...SAVINGS, id: 4, name: "Old Savings", archived: true, latestBalance: null };
+const OLD: Account = { ...SAVINGS, id: 4, name: "Old Savings", archived: true, archivedOn: null, latestBalance: null };
 
 describe("accounts screen", () => {
   it("welcomes someone with no accounts yet", async () => {
@@ -147,7 +147,7 @@ describe("accounts screen", () => {
         subtypeLabel: "401(k)",
         institution: "Coastal Credit Union",
         color: "#7e22ce",
-        archived: false,
+        archived: false, archivedOn: null,
         lowBalanceThresholdCents: null,
       },
     ]);

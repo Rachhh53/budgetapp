@@ -138,12 +138,15 @@ class AnnualCostsApiTest extends ApiTestBase {
         }
 
         @Test
-        void anArchivedItemIsLeftOut() throws Exception {
+        void anArchivedItemCountsUntilTheDayItWasArchivedAsOf() throws Exception {
+            // Rachel, 2026-10-22: "the previous activity needs to remain".
             server.put("/api/items/" + rent, """
                     {"name":"Rent","kind":"bill","amountCents":150000,"payFromAccountId":%d,"autopay":true,"archived":true,
-                     "schedule":{"frequency":"monthly","day1":1,"startDate":"2025-01-01"}}""".formatted(checking), cookie);
+                     "archivedOn":"2026-06-01","schedule":{"frequency":"monthly","day1":1,"startDate":"2025-01-01"}}"""
+                    .formatted(checking), cookie);
 
-            assertThat(costs("").get("rows").findValuesAsText("name")).containsExactly("Electric");
+            // All of 2025, and January to May 2026: the June 1 rent is on the day it was archived as of.
+            assertThat(longs(row(costs(""), "Rent").get("totalsCents"))).containsExactly(0, 1_800_000, 750_000);
         }
     }
 

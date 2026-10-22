@@ -538,7 +538,7 @@ public final class CardsRoutes {
         if (dueDayMoved && rule.frequency() == Frequency.MONTHLY) {
             items.update(
                     linked.id(),
-                    new Identity(linked.name(), linked.kind(), linked.note(), linked.archived(), linked.tagIds()),
+                    new Identity(linked.name(), linked.kind(), linked.note(), linked.archivedOn(), linked.tagIds()),
                     new Terms(
                             terms.amountCents(), terms.amountMode(), terms.estimate(), terms.categoryId(), terms.payFromAccountId(),
                             terms.payToAccountId(), terms.autopay(), terms.placement(),
@@ -700,7 +700,7 @@ public final class CardsRoutes {
                 false,
                 false);
         long itemId = items.create(
-                new Identity(shortened(account.name() + " · " + promo.label() + " payoff"), ItemKind.CARD_PAYMENT, null, false, List.of()),
+                new Identity(shortened(account.name() + " · " + promo.label() + " payoff"), ItemKind.CARD_PAYMENT, null, null, List.of()),
                 terms,
                 firstPayday);
         cards.setPayoffItem(promo.id(), itemId);

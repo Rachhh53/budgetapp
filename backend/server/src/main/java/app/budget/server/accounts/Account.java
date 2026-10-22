@@ -1,5 +1,6 @@
 package app.budget.server.accounts;
 
+import app.budget.server.api.Archiving;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -9,6 +10,8 @@ import java.util.List;
  * @param type                     lower-case {@link AccountType}
  * @param lowBalanceThresholdCents warn when the balance is projected to dip below this;
  *                                 {@code null} when the user has not asked for a warning
+ * @param archivedOn               the day it was archived as of: it counts before it and is put away from it on;
+ *                                 {@code null} when it is not archived
  * @param latestBalance            the most recent balance the user entered, or {@code null} if none yet
  */
 public record Account(
@@ -19,8 +22,14 @@ public record Account(
         String subtypeLabel,
         String color,
         boolean archived,
+        LocalDate archivedOn,
         Long lowBalanceThresholdCents,
         BalanceEntry latestBalance) {
+
+    /** True when the account is put away on {@code day}: archived as of that day or earlier. */
+    public boolean awayOn(LocalDate day) {
+        return Archiving.awayOn(archivedOn, day);
+    }
 
     /** A balance the user typed in for one day. Amounts are whole cents. */
     public record BalanceEntry(long id, LocalDate date, long amountCents, String note) {}

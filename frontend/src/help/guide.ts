@@ -183,7 +183,7 @@ export const TOPICS: readonly Topic[] = [
       {
         heading: "Which paycheck pays it",
         body: [
-          "A bill is paid from the pay period it's due in, a payday included. Tick Pay a period early to pay it from the paycheck before.",
+          "A bill is paid from the pay period it's due in, a payday included. Tick Pay a period early to pay it from the paycheck before. Once you tick one paid, it moves to the pay period of the day you paid it.",
         ],
       },
       {

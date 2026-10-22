@@ -1,4 +1,4 @@
-import { ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, Plus, X } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from "react";
 import { INPUT, LABEL } from "./ui";
 
@@ -52,6 +52,9 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
   const [place, setPlace] = useState<CSSProperties>();
 
   const selected = options.find((option) => option.id === value);
+  // An optional choice says how to empty it (Rachel, 2026-10-22: "can't remove a category from a saved expense"):
+  // deleting the text and moving on also works, but nothing on screen said so.
+  const canClear = clearable === true && selected !== undefined && !open;
   const typed = query.trim();
   const matches = typed === ""
     ? options
@@ -180,8 +183,19 @@ export function Picker({ label, options, value, onChange, noun, onCreate, cleara
           }}
           onKeyDown={onKeyDown}
           onBlur={onBlur}
-          className={`${INPUT} pr-9 ${selected?.color && !open ? "pl-8" : ""}`}
+          className={`${INPUT} ${canClear ? "pr-20" : "pr-9"} ${selected?.color && !open ? "pl-8" : ""}`}
         />
+        {canClear && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            aria-label={`Clear the ${noun}`}
+            title={`Clear the ${noun}`}
+            className="absolute top-1/2 right-8 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-md text-muted hover:text-ink md:size-8"
+          >
+            <X aria-hidden className="size-4" />
+          </button>
+        )}
         <ChevronDown aria-hidden className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted" />
       </div>
 

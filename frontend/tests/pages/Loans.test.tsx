@@ -13,7 +13,7 @@ const MORTGAGE: Account = {
   type: "loan",
   subtypeLabel: "Mortgage",
   color: "#b45309",
-  archived: false,
+  archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
   latestBalance: { id: 21, date: "2026-10-01", amountCents: 24000000, note: null },
 };
@@ -59,7 +59,7 @@ const MORTGAGE_BILL: Item = {
   name: "Mortgage",
   kind: "bill",
   note: null,
-  archived: false,
+  archived: false, archivedOn: null,
   createdOn: "2026-01-05",
   tagIds: [],
   amountCents: 198000,
