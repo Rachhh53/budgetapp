@@ -305,7 +305,7 @@ describe("pay stub page", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save stub…" }));
     const dialog = screen.getByRole("dialog", { name: "Save this stub" });
     const choices = within(dialog).getAllByRole("radio");
-    expect(choices).toHaveLength(4);
+    expect(choices).toHaveLength(5);
     choices.forEach((choice) => expect(choice).not.toBeChecked());
     expect(dialog).toHaveTextContent("From this stub: take-home $2,486.20, gross $3,600.00, with 3 deductions.");
 
@@ -319,6 +319,36 @@ describe("pay stub page", () => {
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/pay-stubs/7/save")).toEqual([{ apply: "pay_change" }]));
     // Back on the income's own page.
     expect(await screen.findByRole("heading", { name: "Northwind Health" })).toBeInTheDocument();
+  });
+
+  it("saves a bonus stub as a one-off paycheck with the name given", async () => {
+    const fetchMock = withStub(STUB, { "POST /api/pay-stubs/7/save": () => ({ status: 200, data: { ...SAVED, applied: "one_off" } }) });
+    renderApp("/income/1/stubs/7");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save stub…" }));
+    const dialog = screen.getByRole("dialog", { name: "Save this stub" });
+    // The name is only asked for once a one-off is chosen.
+    expect(within(dialog).queryByLabelText("Name (optional)")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^A one-off paycheck \(bonus\)/ }));
+    expect(within(dialog).getByLabelText("Name (optional)")).toHaveAttribute("placeholder", "Bonus");
+    await userEvent.type(within(dialog).getByLabelText("Name (optional)"), "  Q3 bonus ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save stub" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "POST /api/pay-stubs/7/save")).toEqual([{ apply: "one_off", name: "Q3 bonus" }]),
+    );
+  });
+
+  it("leaves a one-off's name to the backend when none is typed", async () => {
+    const fetchMock = withStub(STUB, { "POST /api/pay-stubs/7/save": () => ({ status: 200, data: { ...SAVED, applied: "one_off" } }) });
+    renderApp("/income/1/stubs/7");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save stub…" }));
+    const dialog = screen.getByRole("dialog", { name: "Save this stub" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^A one-off paycheck \(bonus\)/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save stub" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/pay-stubs/7/save")).toEqual([{ apply: "one_off" }]));
   });
 
   it("opens on just this paycheck when the stub was added from a paycheck's row", async () => {

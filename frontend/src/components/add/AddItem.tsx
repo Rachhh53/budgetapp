@@ -1,4 +1,4 @@
-import { ArrowLeftRight, CalendarClock, ChevronDown, type LucideIcon, Minus, Plus, Upload } from "lucide-react";
+import { ArrowLeftRight, ArrowUpFromLine, CalendarClock, ChevronDown, type LucideIcon, Minus, Plus, Upload } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -11,10 +11,12 @@ import {
   useState,
 } from "react";
 import { useAccounts } from "../../api/accounts";
+import type { MoveOut } from "../../api/buckets";
+import { MoveOutForm } from "../buckets/MoveOutForm";
 import { useCategories, useTags } from "../../api/categories";
 import type { Entry, EntryKind } from "../../api/entries";
 import type { PeriodDetail } from "../../api/periods";
-import { formatDay } from "../../lib/dates";
+import { formatDay, todayIso } from "../../lib/dates";
 import { ItemFormBody } from "../items/ItemForm";
 import { Modal } from "../Modal";
 import { Segmented } from "../Segmented";
@@ -34,6 +36,11 @@ interface AddItemContext {
   /** Opens the form on a one-off that already exists, to change or delete it. */
   /** Opens a one-off for changing; `startAt` names the fields to open on, for a card's own Edit button. */
   editEntry: (entry: Entry, startAt?: EntryPart) => void;
+  /**
+   * Opens "Move money out of a bucket", or with `move` that move, to change or delete it; with `paysBack`, a new
+   * move that pays yourself back for that expense.
+   */
+  moveOut: (move?: MoveOut, paysBack?: Entry) => void;
   /** Opens "Upload a pay stub or receipt…". */
   upload: () => void;
   menuOpen: boolean;
@@ -83,6 +90,12 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
     setMenuOpen(false);
     setUploading(true);
   }, []);
+  // A move out of a bucket: `{}` for a new one.
+  const [movingOut, setMovingOut] = useState<{ move?: MoveOut; paysBack?: Entry } | null>(null);
+  const moveOut = useCallback((move?: MoveOut, paysBack?: Entry) => {
+    setMenuOpen(false);
+    setMovingOut({ move, paysBack });
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -109,9 +122,12 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
   }, [add, form, hasMenu, uploading]);
 
   const context = useMemo(
-    () => ({ add, editEntry, upload, menuOpen, setMenuOpen, setPeriod, setHasMenu }),
-    [add, editEntry, upload, menuOpen],
+    () => ({ add, editEntry, moveOut, upload, menuOpen, setMenuOpen, setPeriod, setHasMenu }),
+    [add, editEntry, moveOut, upload, menuOpen],
   );
+  // A new move opens on today, or on the pay period's first day when another period is on screen.
+  const today = todayIso();
+  const moveDate = period && (today < period.start || today > period.end) ? period.start : today;
 
   return (
     <Context.Provider value={context}>
@@ -126,6 +142,9 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
           period={period}
           onClose={() => setForm(null)}
         />
+      )}
+      {movingOut && (
+        <MoveOutForm move={movingOut.move} paysBack={movingOut.paysBack} date={moveDate} onClose={() => setMovingOut(null)} />
       )}
       {uploading && (
         <UploadDialog
@@ -232,7 +251,7 @@ const MENU: readonly { kind: AddKind; label: string; about: string; shortcut?: s
  * ↓/↑ move, Home/End jump, Enter chooses, Esc closes and hands the focus back to the button.
  */
 export function AddItemButton() {
-  const { add, upload, menuOpen, setMenuOpen, setHasMenu } = useAddItem();
+  const { add, moveOut, upload, menuOpen, setMenuOpen, setHasMenu } = useAddItem();
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
 
@@ -326,6 +345,20 @@ export function AddItemButton() {
               {shortcut && <kbd className="hidden shrink-0 text-sm text-muted md:block">{shortcut}</kbd>}
             </button>
           ))}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => moveOut()}
+            className="flex min-h-11 w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-bg focus-visible:bg-bg"
+          >
+            <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-bg text-accent-ink">
+              <ArrowUpFromLine className="size-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold">Out of a bucket</span>
+              <span className="block text-sm text-muted">Back to spending money in the same account</span>
+            </span>
+          </button>
           <div className="mt-2 border-t border-line pt-2">
             <button
               type="button"

@@ -3,6 +3,7 @@ import { type FormEvent, useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import {
   type CardSettings,
+  type CardStatement,
   type CardSettingsInput,
   type MinimumRule,
   type Promo,
@@ -92,7 +93,7 @@ export function BillingForm({ account, settings, onClose }: { account: Account; 
           label="Estimated spending a month (optional)"
           value={estimate}
           onChange={setEstimate}
-          hint="For a card you don't enter charge by charge: one estimate is added when each statement closes, and the real statement replaces it. Leave it empty if you add charges as they happen."
+          hint="What the month comes to in all. Charges you do enter count toward it, and only the rest is added when each statement closes; the real statement replaces it."
         />
         {failure && (
           <p role="alert" className="text-danger">
@@ -208,17 +209,30 @@ function lastClose(day: number, today: string): string {
   return month === 1 ? onDay(year - 1, 12) : onDay(year, month - 1);
 }
 
-/** A statement as it arrived: the real numbers, which take over from the estimate. */
-export function StatementForm({ account, settings, onClose }: { account: Account; settings: CardSettings | null; onClose: () => void }) {
+/**
+ * A statement as it arrived: the real numbers, which take over from the estimate. With `statement`, changes one
+ * already entered (Rachel, 2026-10-21: "I want the ability to edit basically everything I enter").
+ */
+export function StatementForm({
+  account,
+  settings,
+  statement,
+  onClose,
+}: {
+  account: Account;
+  settings: CardSettings | null;
+  statement?: CardStatement;
+  onClose: () => void;
+}) {
   const id = useId();
-  const save = useSaveStatement(account.id);
+  const save = useSaveStatement(account.id, statement?.id ?? undefined);
   const today = todayIso();
   const startOn = useDefaultDate();
-  const [opensOn] = useState(settings ? lastClose(settings.statementCloseDay, startOn.date) : startOn.date);
+  const [opensOn] = useState(statement?.closeDate ?? (settings ? lastClose(settings.statementCloseDay, startOn.date) : startOn.date));
   const [closeDate, setCloseDate] = useState(opensOn);
-  const [balance, setBalance] = useState("");
-  const [minimum, setMinimum] = useState("");
-  const [dueDate, setDueDate] = useState("");
+  const [balance, setBalance] = useState(statement ? centsToInput(statement.balanceCents) : "");
+  const [minimum, setMinimum] = useState(statement?.minimumDueCents != null ? centsToInput(statement.minimumDueCents) : "");
+  const [dueDate, setDueDate] = useState(statement?.dueDate ?? "");
   const [problem, setProblem] = useState<string>();
 
   const submit = (event: FormEvent) => {
@@ -239,7 +253,7 @@ export function StatementForm({ account, settings, onClose }: { account: Account
 
   const failure = problem ?? save.error?.message;
   return (
-    <Modal title={`Add a statement — ${account.name}`} icon={FileText} tone={account.color} onClose={onClose}>
+    <Modal title={`${statement ? "Change statement" : "Add a statement"} — ${account.name}`} icon={FileText} tone={account.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <MoneyField label="Statement balance" value={balance} onChange={setBalance} required hero />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -278,9 +292,11 @@ export function StatementForm({ account, settings, onClose }: { account: Account
           value={minimum}
           onChange={setMinimum}
           hint={
-            settings
-              ? "Leave the due date empty to use the card's usual due day. A closing date you already entered is replaced."
-              : "A closing date you already entered is replaced."
+            statement
+              ? undefined
+              : settings
+                ? "Leave the due date empty to use the card's usual due day. A closing date you already entered is replaced."
+                : "A closing date you already entered is replaced."
           }
         />
         {failure && (

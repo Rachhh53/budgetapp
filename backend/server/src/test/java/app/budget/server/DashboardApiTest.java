@@ -30,7 +30,7 @@ class DashboardApiTest extends ApiTestBase {
      * Amara's budget. Checking held $100.00 on Sep 15 and warns under $1,000.00; savings held
      * $5,000.00 on Aug 15; the Visa owed $800.00 on Sep 15. Each paycheck brings $2,486.20 home,
      * puts $150.00 in the 401(k) with $50.00 from her employer, and $200.00 moves to savings.
-     * Rent ($1,400.00, the 1st) and water ($50.00, the 20th) are paid by hand and not ticked.
+     * Rent ($1,400.00, the 1st, set aside a paycheck ahead) and water ($50.00, the 20th) are paid by hand and not ticked.
      */
     private void amarasBudget() throws Exception {
         checking = server.post("/api/accounts",
@@ -52,7 +52,7 @@ class DashboardApiTest extends ApiTestBase {
         food = created("/api/categories", "{\"name\":\"Food\",\"color\":\"#15803d\"}");
         long groceries = created("/api/categories", "{\"name\":\"Groceries\",\"color\":\"#166534\",\"parentId\":%d}".formatted(food));
         rent = created("/api/items", """
-                {"name":"Rent","kind":"bill","amountCents":140000,"payFromAccountId":%d,"categoryId":%d,
+                {"name":"Rent","kind":"bill","amountCents":140000,"payFromAccountId":%d,"categoryId":%d,"placement":"one_early",
                  "schedule":{"frequency":"monthly","day1":1,"startDate":"2026-01-01"}}""".formatted(checking, housing));
         water = created("/api/items", """
                 {"name":"Water","kind":"bill","amountCents":5000,"payFromAccountId":%d,
@@ -176,6 +176,37 @@ class DashboardApiTest extends ApiTestBase {
     @Nested
     class SpendingByCategory {
         @Test
+        void eachCategoryOpensIntoItsSubcategoriesPayeesAndTags() throws Exception {
+            amarasBudget();
+            long weekly = created("/api/tags", "{\"name\":\"Weekly shop\",\"color\":\"#475569\"}");
+            created("/api/entries", """
+                    {"kind":"money_out","date":"2026-09-25","amountCents":2000,"description":"Bread","payee":"Corner Bakery",
+                     "accountId":%d,"categoryId":%d,"tagIds":[%d]}""".formatted(checking, food, weekly));
+
+            JsonNode foodSpent = dashboard("?range=three_months").get("spending").get("categories").get(2);
+
+            assertThat(foodSpent.get("name").asText()).isEqualTo("Food");
+            assertThat(foodSpent.get("totalCents").asLong()).isEqualTo(8_450);
+            // The market under Groceries; the bread given Food itself.
+            JsonNode subcategories = foodSpent.get("subcategories");
+            assertThat(subcategories.findValuesAsText("name")).containsExactly("Groceries", "Not in a subcategory");
+            assertThat(subcategories.get(0).get("totalCents").asLong()).isEqualTo(6_450);
+            assertThat(subcategories.get(1).get("categoryId")).isNull();
+            // The payee where one is entered, else the one-off's own name.
+            JsonNode payees = foodSpent.get("payees");
+            assertThat(payees.findValuesAsText("name")).containsExactly("Farmers market", "Corner Bakery");
+            assertThat(payees.get(1).get("totalCents").asLong()).isEqualTo(2_000);
+            JsonNode tags = foodSpent.get("tags");
+            assertThat(tags.findValuesAsText("name")).containsExactly("No tag", "Weekly shop");
+            assertThat(tags.get(1).get("id").asLong()).isEqualTo(weekly);
+            // Housing has no subcategory and no tag, so there is nothing to split it by.
+            JsonNode housing = dashboard("?range=three_months").get("spending").get("categories").get(0);
+            assertThat(housing.get("subcategories")).isEmpty();
+            assertThat(housing.get("tags")).isEmpty();
+            assertThat(housing.get("payees").findValuesAsText("name")).containsExactly("Rent");
+        }
+
+        @Test
         void theLastThreeMonthsAreSharedOutByTopLevelCategoryLargestFirst() throws Exception {
             amarasBudget();
 
@@ -184,7 +215,7 @@ class DashboardApiTest extends ApiTestBase {
             assertThat(spending.get("from").asText()).isEqualTo("2026-07-02");
             assertThat(spending.get("to").asText()).isEqualTo("2026-10-01");
             // Rent on Aug 1, Sep 1 and Oct 1; water on Jul 20, Aug 20 and Sep 20; the market under Food › Groceries.
-            assertThat(spending.get("categories").findValuesAsText("name")).containsExactly("Housing", "No category", "Food");
+            assertThat(spending.get("categories")).extracting(category -> category.get("name").asText()).containsExactly("Housing", "No category", "Food");
             assertThat(spending.get("categories").get(0).get("totalCents").asLong()).isEqualTo(420_000);
             assertThat(spending.get("categories").get(0).get("color").asText()).isEqualTo("#0f766e");
             assertThat(spending.get("categories").get(1).get("categoryId").isNull()).isTrue();

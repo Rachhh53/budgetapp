@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useCameFrom } from "../lib/cameFrom";
 import {
+  type ActualGrowth,
   holdsCash,
   useAccount,
   useAccountPerformance,
@@ -30,7 +31,7 @@ import { CardDetailPage } from "./CardDetailPage";
 import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
-import { formatRate } from "../lib/rates";
+import { formatChange, formatRate } from "../lib/rates";
 import { HelpLink } from "../components/help/HelpLink";
 
 /**
@@ -127,7 +128,8 @@ export function AccountDetailPage() {
           </p>
         )}
         <Card>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* An investment has a fifth figure, Actual growth, set beside Assumed growth on a wide window. */}
+          <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${investment ? "lg:grid-cols-3 xl:grid-cols-5" : "lg:grid-cols-4"}`}>
             <div>
               <p className="text-muted">Balance</p>
               {today ? (
@@ -177,6 +179,9 @@ export function AccountDetailPage() {
                   {investment ? "a year, your assumption" : cash ? "APY" : "a year"} since {formatDate(currentRate.effectiveDate)}
                 </p>
               </div>
+            )}
+            {investment && performance.data && (
+              <ActualGrowthStat actual={performance.data.actualGrowth} assumedRate={currentRate !== undefined} />
             )}
           </div>
           {account.lowBalanceThresholdCents !== null && (
@@ -228,7 +233,7 @@ export function AccountDetailPage() {
               latest number you enter.
             </p>
           ) : (
-            <BalanceList accountId={account.id} balances={balances} changes={performance.data?.balances ?? []} owed={owed} />
+            <BalanceList account={account} balances={balances} changes={performance.data?.balances ?? []} owed={owed} />
           )}
         </Card>
       </div>
@@ -243,6 +248,53 @@ export function AccountDetailPage() {
       )}
       {updating && <BalanceForm account={account} onClose={() => setUpdating(false)} />}
     </>
+  );
+}
+
+/**
+ * What an investment really grew by, beside the growth assumed for it (spec §5.5). It is only
+ * ever worked out from balances that were entered, so it says which ones; a few weeks are not
+ * put as a rate a year, since a market's ups and downs over them would read as a wild one.
+ */
+function ActualGrowthStat({ actual, assumedRate }: { actual: ActualGrowth | null; assumedRate: boolean }) {
+  if (!actual) {
+    return (
+      <div>
+        <p className="text-muted">Actual growth</p>
+        <p className="mt-1 font-medium">Not known yet.</p>
+        <p className="text-muted">Enter another balance to see how it really grew.</p>
+      </div>
+    );
+  }
+  const span = `${formatDate(actual.from)} to ${formatDate(actual.to)}`;
+  // Without a rate assumed now or then, "$0.00 assumed" would only be noise.
+  const assumed = (assumedRate || actual.assumedCents !== 0) && (
+    <>
+      , <span data-amount>{formatCents(actual.assumedCents)}</span> assumed
+    </>
+  );
+  return (
+    <div>
+      <p className="text-muted">Actual growth</p>
+      {actual.yearlyRateBp !== null ? (
+        <>
+          <p className="text-2xl font-bold tabular-nums">{formatChange(actual.yearlyRateBp)}</p>
+          <p className="text-muted">
+            a year, from the balances you entered {span} · <span data-amount>{signed(actual.growthCents)}</span> growth{assumed}
+          </p>
+        </>
+      ) : (
+        <>
+          <p data-amount className="text-2xl font-bold tabular-nums">
+            {signed(actual.growthCents)}
+          </p>
+          <p className="text-muted">
+            from the balances you entered {span}
+            {assumed}. Enter balances at least 3 months apart to see a yearly rate.
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 

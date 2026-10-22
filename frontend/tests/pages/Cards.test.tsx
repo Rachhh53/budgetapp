@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Account, AccountDetail } from "../../src/api/accounts";
-import type { Card, CardDetail, CardSettings, Promo } from "../../src/api/cards";
+import type { Card, CardDetail, CardRewards, CardSettings, Promo } from "../../src/api/cards";
 import type { PayPeriod, PayPeriods } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
@@ -68,18 +68,34 @@ const CARD: Card = {
   promo: TRANSFER,
 };
 
+/** Rewards that come off each statement, with nothing built up. */
+const NO_BUILD_UP: CardRewards = {
+  rateBp: 150,
+  buildUp: false,
+  yearlyMonth: null,
+  thresholdCents: null,
+  startCents: null,
+  startDate: null,
+  builtUpCents: 0,
+  nextCreditDate: null,
+  nextCreditCents: null,
+  redemptions: [],
+};
+
 function detailOf(card: Card, promos: Promo[] = card.promo ? [card.promo] : []): CardDetail {
   return {
     card,
     promos,
     statements: [
-      { id: null, closeDate: "2026-10-20", balanceCents: 312500, minimumDueCents: 3125, dueDate: "2026-11-15", entered: false, paidCents: 0, status: "planned" },
-      { id: 4, closeDate: "2026-09-20", balanceCents: 72500, minimumDueCents: 2500, dueDate: "2026-10-15", entered: true, paidCents: 0, status: "due" },
+      { id: null, closeDate: "2026-10-20", balanceCents: 312500, minimumDueCents: 3125, dueDate: "2026-11-15", entered: false, paidCents: 0, status: "planned", recordsCents: null, reconcileFrom: null },
+      { id: 4, closeDate: "2026-09-20", balanceCents: 72500, minimumDueCents: 2500, dueDate: "2026-10-15", entered: true, paidCents: 0, status: "due", recordsCents: null, reconcileFrom: null },
     ],
     rates: [{ id: 2, kind: "apr", rateBp: 2449, effectiveDate: "2026-01-01" }] as CardDetail["rates"],
     nextCloseDate: "2026-10-20",
     nextDueDate: "2026-11-15",
     minimum: { shareBp: 100, floorCents: 2500, plusInterest: true },
+    rewardsBp: null,
+    rewards: null,
   };
 }
 
@@ -153,6 +169,34 @@ describe("a card's page", () => {
     expect(statements[1]).toHaveTextContent("Due Oct 15, 2026 · To pay");
     // Far from its end, a promotion has no warning banner.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says quietly when a statement and the records differ, and opens what went in to fix it", async () => {
+    const detail = detailOf(CARD);
+    detail.statements[1] = { ...detail.statements[1]!, recordsCents: 71700, reconcileFrom: "2026-08-21" };
+    const lunch = {
+      date: "2026-09-02",
+      label: "Lunch",
+      kind: "money_out",
+      amountCents: 4000,
+      unpaid: false,
+      estimatedCents: null,
+      source: { type: "entry", entryId: 12, itemId: null, scheduledDate: null, dueDate: null, periodStart: "2026-09-01" },
+    };
+    withCard(CARD, {
+      "GET /api/cards/3": () => ({ status: 200, data: detail }),
+      "GET /api/accounts/3/transactions": () => ({ status: 200, data: [lunch] }),
+    });
+    renderApp("/accounts/3");
+
+    const statements = within(await screen.findByRole("region", { name: "Statements" }));
+    // In words, not red: by how much, and which way.
+    expect(statements.getByText(/Your records came to \$717.00, \$8.00 less than what you entered\./)).toBeInTheDocument();
+    await userEvent.click(statements.getByRole("button", { name: "See what went in" }));
+
+    expect(await statements.findByRole("button", { name: "Lunch" })).toBeInTheDocument();
+    expect(statements.getByText("Aug 21 – Sep 20, newest first. Open one to change or delete it.")).toBeInTheDocument();
+    expect(statements.getByRole("button", { name: "+ Add a charge" })).toBeInTheDocument();
   });
 
   it("warns in words before a promotion ends, more strongly when interest is deferred", async () => {
@@ -248,6 +292,104 @@ describe("a card's page", () => {
     expect(bodiesSentTo(fetchMock, "PUT /api/cards/3/minimum")[0]).toEqual({ shareBp: 200, floorCents: 3500, plusInterest: false });
   });
 
+  it("sets the card's cash back, which comes off at each statement close, and takes it away again", async () => {
+    const fetchMock = withCard(CARD, { "PUT /api/cards/3/rewards": () => ({ status: 200, data: detailOf(CARD), changed: true }) });
+    renderApp("/accounts/3");
+
+    const section = within(await screen.findByRole("region", { name: "Rewards" }));
+    expect(section.getByText(/No rewards set/)).toBeInTheDocument();
+    await userEvent.click(section.getByRole("button", { name: "Edit rewards" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rewards — Harbor Visa" });
+    const rate = within(dialog).getByLabelText("Cash back on what is charged (%)");
+    await userEvent.type(rate, "25");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please enter the cash back as a percentage from 0.01 to 20, like 1.50.");
+
+    await userEvent.clear(rate);
+    await userEvent.type(rate, "1.5");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/cards/3/rewards")).toEqual([
+      { rateBp: 150, buildUp: false, yearlyMonth: null, thresholdCents: null, startCents: null, startDate: null },
+    ]));
+  });
+
+  it("shows a card's rewards and can take them away", async () => {
+    const fetchMock = withCard(CARD, {
+      "GET /api/cards/3": () => ({ status: 200, data: { ...detailOf(CARD), rewardsBp: 150, rewards: { ...NO_BUILD_UP, rateBp: 150 } } }),
+      "PUT /api/cards/3/rewards": () => ({ status: 200, data: detailOf(CARD), changed: true }),
+    });
+    renderApp("/accounts/3");
+
+    const section = within(await screen.findByRole("region", { name: "Rewards" }));
+    expect(section.getByText("1.50% cash back on what is charged")).toBeInTheDocument();
+    await userEvent.click(section.getByRole("button", { name: "Edit rewards" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Cash back on what is charged (%)")).toHaveValue("1.50");
+    await userEvent.click(within(dialog).getByRole("button", { name: "No rewards" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/cards/3/rewards")).toEqual([
+      { rateBp: null, buildUp: false, yearlyMonth: null, thresholdCents: null, startCents: null, startDate: null },
+    ]));
+  });
+
+  it("lets rewards build up, used every year in a month, from what the card says has built up", async () => {
+    const fetchMock = withCard(CARD, {
+      "GET /api/cards/3": () => ({ status: 200, data: { ...detailOf(CARD), rewardsBp: 150, rewards: NO_BUILD_UP } }),
+      "PUT /api/cards/3/rewards": () => ({ status: 200, data: detailOf(CARD), changed: true }),
+    });
+    renderApp("/accounts/3");
+
+    const section = within(await screen.findByRole("region", { name: "Rewards" }));
+    await userEvent.click(section.getByRole("button", { name: "Edit rewards" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rewards — Harbor Visa" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Let them build up" }));
+    await userEvent.type(within(dialog).getByLabelText("Built up so far"), "42.10");
+    await userEvent.clear(within(dialog).getByLabelText("As of"));
+    await userEvent.type(within(dialog).getByLabelText("As of"), "2026-10-01");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Use them all on their own"), "yearly");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Month"), "11");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/cards/3/rewards")).toEqual([
+        { rateBp: 150, buildUp: true, yearlyMonth: 11, thresholdCents: null, startCents: 4210, startDate: "2026-10-01" },
+      ]),
+    );
+  });
+
+  it("shows what has built up and redeems it as a statement credit", async () => {
+    const built: CardRewards = {
+      ...NO_BUILD_UP,
+      buildUp: true,
+      thresholdCents: 5000,
+      builtUpCents: 3210,
+      nextCreditDate: "2026-12-20",
+      nextCreditCents: 5240,
+      redemptions: [{ id: 4, date: "2026-11-02", amountCents: 1000, note: "Gift", creditedCents: 1000 }],
+    };
+    const fetchMock = withCard(CARD, {
+      "GET /api/cards/3": () => ({ status: 200, data: { ...detailOf(CARD), rewardsBp: 150, rewards: built } }),
+      "POST /api/cards/3/rewards/redemptions": () => ({ status: 201, data: { id: 5 }, changed: true }),
+    });
+    renderApp("/accounts/3");
+
+    const region = await screen.findByRole("region", { name: "Rewards" });
+    expect(region).toHaveTextContent("Built up today$32.10");
+    expect(region).toHaveTextContent("All of it goes on once it reaches $50.00.");
+    expect(region).toHaveTextContent("Next credit: $52.40 on Dec 20, 2026");
+    expect(region).toHaveTextContent("Nov 2, 2026A set amount · Gift$10.00");
+    await userEvent.click(within(region).getByRole("button", { name: "Redeem" }));
+    const dialog = await screen.findByRole("dialog", { name: "Redeem rewards" });
+    expect(dialog).toHaveTextContent("$32.10 has built up as of today.");
+    await userEvent.clear(within(dialog).getByLabelText("Day it goes on"));
+    await userEvent.type(within(dialog).getByLabelText("Day it goes on"), "2026-11-15");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Redeem" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "POST /api/cards/3/rewards/redemptions")).toEqual([{ date: "2026-11-15", amountCents: null, note: null }]),
+    );
+  });
+
   it("adds a promo rate on everything the card owes, with no amount and no deferred interest", async () => {
     const fetchMock = withCard({ ...CARD, promo: null }, { "POST /api/cards/3/promos": () => ({ status: 201, data: detailOf(CARD), changed: true }) }, []);
     renderApp("/accounts/3");
@@ -341,6 +483,28 @@ describe("a card's page", () => {
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/cards/3/statements/4"));
   });
 
+  it("changes a statement that was entered, and offers nothing to change on the projected one", async () => {
+    const fetchMock = withCard(CARD, { "PUT /api/cards/3/statements/4": () => ({ status: 200, data: detailOf(CARD), changed: true }) });
+    renderApp("/accounts/3");
+
+    // Rachel, 2026-10-21: "I want the ability to edit basically everything I enter. namely statements".
+    const statements = within(await screen.findByRole("region", { name: "Statements" }));
+    expect(statements.getAllByRole("button", { name: /^Edit the statement/ })).toHaveLength(1);
+    await userEvent.click(statements.getByRole("button", { name: "Edit the statement that closed Sep 20, 2026" }));
+    const dialog = screen.getByRole("dialog", { name: "Change statement — Harbor Visa" });
+    const balance = within(dialog).getByRole("textbox", { name: "Statement balance" });
+    expect(balance).toHaveValue("725.00");
+    await userEvent.clear(balance);
+    await userEvent.type(balance, "730");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save statement" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/cards/3/statements/4")).toEqual([
+        { closeDate: "2026-09-20", balanceCents: 73000, minimumDueCents: 2500, dueDate: "2026-10-15" },
+      ]),
+    );
+  });
+
   it("says so kindly when the card can't be found", async () => {
     withCard(CARD, { "GET /api/cards/3": () => ({ status: 404, error: "We couldn't find that." }) });
     renderApp("/accounts/3");
@@ -384,8 +548,8 @@ describe("a card on the pay period screen", () => {
     buckets: [],
     bucketMoves: [],
     accounts: [
-      { accountId: 1, startingCents: 500000, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, endingCents: 500000, lowestCents: 500000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 500000, lowBalance: false, builtFromZero: false },
-      { accountId: 3, startingCents: 312500, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, endingCents: 312500, lowestCents: 312500, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 312500, lowBalance: false, builtFromZero: false },
+      { accountId: 1, startingCents: 500000, startingBucketsCents: 0, startingAvailableCents: 500000, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 500000, lowestCents: 500000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 500000, lowBalance: false, builtFromZero: false },
+      { accountId: 3, startingCents: 312500, startingBucketsCents: 0, startingAvailableCents: 312500, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 312500, lowestCents: 312500, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 312500, lowBalance: false, builtFromZero: false },
     ],
     promosEnding: [ENDING],
   };
@@ -438,7 +602,7 @@ const PAYMENT: Item = (() => {
     perOccurrenceCents: 0,
     perYearCents: 0,
     next: { scheduledDate: "2026-10-15", dueDate: "2026-10-15", periodStart: "2026-10-15", early: false },
-    history: [{ effectiveFrom: "2026-10-01", perOccurrenceCents: 0, perYearCents: 0 }],
+    history: [{ versionId: 1, effectiveFrom: "2026-10-01", perOccurrenceCents: 0, perYearCents: 0 }],
     paused: false,
     pausedUntil: null,
     fromBucketId: null,

@@ -104,6 +104,10 @@ export interface CardStatement {
   /** What has been paid toward it since it closed. */
   paidCents: number;
   status: StatementStatus;
+  /** An entered statement: what the card's own records came to at its close; `null` for the projected one. */
+  recordsCents: number | null;
+  /** When the two differ, the first day to look through: since the records last matched. `null` when they match. */
+  reconcileFrom: string | null;
 }
 
 export interface StatementInput {
@@ -152,6 +156,58 @@ export interface CardDetail {
   nextDueDate: string | null;
   /** How its minimum payment is estimated until a statement with the real one is entered. */
   minimum: MinimumRule;
+  /** Cash back on what is charged, in basis points (1.5% is 150); `null` for none. */
+  rewardsBp: number | null;
+  /** How its rewards are used; `null` for none. */
+  rewards: CardRewards | null;
+}
+
+/** A card's rewards: off each statement, or left to build up and used by a rule or a redemption. */
+export interface CardRewards {
+  rateBp: number;
+  /** False when they come off each statement close on their own. */
+  buildUp: boolean;
+  /** Built up: every year, all of it goes on at the statement closing in this month (1–12). */
+  yearlyMonth: number | null;
+  /** Built up: all of it goes on once at least this has built up. */
+  thresholdCents: number | null;
+  /** Built up: what the card said had built up on `startDate`. */
+  startCents: number | null;
+  startDate: string | null;
+  /** Built up: what has built up as of today. */
+  builtUpCents: number;
+  /** Built up: the next statement credit in the year ahead, by a rule or a redemption. */
+  nextCreditDate: string | null;
+  nextCreditCents: number | null;
+  redemptions: Redemption[];
+}
+
+/** A statement credit asked for from built-up rewards. */
+export interface Redemption {
+  id: number;
+  date: string;
+  /** `null` for everything built up by then. */
+  amountCents: number | null;
+  note: string | null;
+  /** What it comes to: never more than had built up by then. */
+  creditedCents: number;
+}
+
+/** What is sent to set a card's rewards. */
+export interface RewardsInput {
+  /** `null` takes its rewards away. */
+  rateBp: number | null;
+  buildUp: boolean;
+  yearlyMonth: number | null;
+  thresholdCents: number | null;
+  startCents: number | null;
+  startDate: string | null;
+}
+
+export interface RedemptionInput {
+  date: string;
+  amountCents: number | null;
+  note: string | null;
 }
 
 /** How a card's minimum payment is estimated: a share of the statement balance, never less than a floor. */
@@ -207,11 +263,17 @@ export function useSaveMinimumRule(cardId: number) {
   });
 }
 
-/** Records a statement as it arrived. The same closing date again replaces it. */
-export function useSaveStatement(cardId: number) {
+/**
+ * Records a statement as it arrived (the same closing date again replaces it), or with `statementId` changes that
+ * statement in place, closing date included, keeping what is attached to it.
+ */
+export function useSaveStatement(cardId: number, statementId?: number) {
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: (input: StatementInput) => api.post<CardDetail>(`/api/cards/${cardId}/statements`, input),
+    mutationFn: (input: StatementInput) =>
+      statementId === undefined
+        ? api.post<CardDetail>(`/api/cards/${cardId}/statements`, input)
+        : api.put<CardDetail>(`/api/cards/${cardId}/statements/${statementId}`, input),
     onSuccess: refresh,
   });
 }
@@ -249,6 +311,35 @@ export function useAddPayoff(cardId: number) {
   const refresh = useRefresh();
   return useMutation({
     mutationFn: (promoId: number) => api.post<CardDetail>(`/api/cards/${cardId}/promos/${promoId}/payoff`, {}),
+    onSuccess: refresh,
+  });
+}
+
+/** Sets a card's cash back and how it's used, or with a `null` rate takes its rewards away (spec §5.6). */
+export function useSaveRewards(cardId: number) {
+  const refresh = useRefresh();
+  return useMutation({
+    mutationFn: (input: RewardsInput) => api.put<CardDetail>(`/api/cards/${cardId}/rewards`, input),
+    onSuccess: refresh,
+  });
+}
+
+/** Adds a statement credit from built-up rewards, or with `redemptionId` changes one. */
+export function useSaveRedemption(cardId: number, redemptionId?: number) {
+  const refresh = useRefresh();
+  return useMutation({
+    mutationFn: (input: RedemptionInput) =>
+      redemptionId === undefined
+        ? api.post<unknown>(`/api/cards/${cardId}/rewards/redemptions`, input)
+        : api.put<unknown>(`/api/cards/${cardId}/rewards/redemptions/${redemptionId}`, input),
+    onSuccess: refresh,
+  });
+}
+
+export function useDeleteRedemption(cardId: number, redemptionId: number) {
+  const refresh = useRefresh();
+  return useMutation({
+    mutationFn: () => api.delete<CardDetail>(`/api/cards/${cardId}/rewards/redemptions/${redemptionId}`),
     onSuccess: refresh,
   });
 }

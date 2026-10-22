@@ -79,7 +79,8 @@ public final class OccurrencePlanner {
             // budget added today belongs to the paycheck already being spent.
             boolean started = !period.end().isBefore(rule.startDate());
             boolean ended = rule.endDate() != null && period.start().isAfter(rule.endDate());
-            if (!started || ended) {
+            // A seasonal rule follows the month of the paycheck the period belongs to.
+            if (!started || ended || !rule.runsIn(period.scheduledPayday())) {
                 continue;
             }
             LocalDate due = period.start().plusDays(version.daysAfterPayday());

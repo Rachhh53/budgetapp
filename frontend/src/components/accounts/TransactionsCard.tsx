@@ -1,9 +1,12 @@
 import { useId, useState } from "react";
 import type { Account } from "../../api/accounts";
-import { type AccountTransaction, useAccountTransactions } from "../../api/periods";
+import { type AccountTransaction, TYPED_OVER_KINDS, useAccountTransactions } from "../../api/periods";
 import { addDays, formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
+import { EditName } from "../EditButton";
+import { clickRowToEdit, ROW_OPENS } from "../rowEdit";
 import { BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
+import { InterestForm } from "./InterestForm";
 
 /** What each kind of line is called. Anything new the backend sends falls back to its own word. */
 const KIND_LABELS: Record<string, string> = {
@@ -21,6 +24,7 @@ const KIND_LABELS: Record<string, string> = {
   card_interest: "Estimate",
   deferred_interest: "Estimate",
   card_estimate: "Estimate",
+  card_rewards: "Estimate",
   loan_interest: "Interest",
   escrow: "Part of your payment that does not lower the loan",
   loan_payment: "Payment, before a recurring item paid it",
@@ -45,6 +49,8 @@ export function TransactionsCard({ account, title = "Transactions" }: { account:
   const [from, setFrom] = useState(`${today.slice(0, 4)}-01-01`);
   const [to, setTo] = useState(addDays(today, DAYS_AHEAD));
   const [page, setPage] = useState(0);
+  // The interest line open to be typed over.
+  const [editing, setEditing] = useState<AccountTransaction>();
   // A cleared or backwards pair of dates asks for nothing, and says why instead.
   const sensible = from !== "" && to !== "" && from <= to;
   const transactions = useAccountTransactions(account.id, sensible ? from : undefined, sensible ? to : undefined);
@@ -113,7 +119,12 @@ export function TransactionsCard({ account, title = "Transactions" }: { account:
           <>
             <ul className="divide-y divide-line">
               {onPage.map((line, index) => (
-                <TransactionRow key={`${line.date}-${line.kind}-${line.label}-${first + index}`} line={line} upcoming={line.date > today} />
+                <TransactionRow
+                  key={`${line.date}-${line.kind}-${line.label}-${first + index}`}
+                  line={line}
+                  upcoming={line.date > today}
+                  onEdit={canTypeOver(line, today) ? () => setEditing(line) : undefined}
+                />
               ))}
             </ul>
             <nav aria-label="Transaction pages" className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -135,18 +146,47 @@ export function TransactionsCard({ account, title = "Transactions" }: { account:
           </>
         )}
       </details>
+      {editing && <InterestForm account={account} line={editing} upcoming={editing.date > today} onClose={() => setEditing(undefined)} />}
     </section>
   );
 }
 
-function TransactionRow({ line, upcoming }: { line: AccountTransaction; upcoming: boolean }) {
+/**
+ * Whether a line is interest that can be typed over. Interest still to come has no real figure
+ * yet, so it stays worked out and follows every change before it (Rachel, 2026-10-19: "it's
+ * upcoming it shouldn't be set in stone"); growth is typed over a whole month, once the month is
+ * over. A line typed over before that rule still opens, so its estimate can be put back.
+ */
+function canTypeOver(line: AccountTransaction, today: string): boolean {
+  if (!TYPED_OVER_KINDS.has(line.kind)) {
+    return false;
+  }
+  if (line.estimatedCents !== null) {
+    return true;
+  }
+  // A growth line is the month's days within the dates shown, dated the last of them: only one on the month's last day is the whole month.
+  const wholeMonth = line.kind !== "growth" || addDays(line.date, 1).slice(8) === "01";
+  return wholeMonth && line.date <= today;
+}
+
+/**
+ * One line. Interest Budget worked out opens to be typed over, the way every row that opens a
+ * form does: its name is the button, and a click anywhere on the row is handed to it.
+ */
+function TransactionRow({ line, upcoming, onEdit }: { line: AccountTransaction; upcoming: boolean; onEdit?: () => void }) {
   const entered = line.kind === "balance";
-  // Words, not just a colour or a sign, say what state a line is in.
-  const notes = [KIND_LABELS[line.kind] ?? line.kind, upcoming && "Upcoming", line.unpaid && "Not paid yet"].filter(Boolean).join(" · ");
+  const typedOver = line.estimatedCents !== null;
+  // Words, not just a colour or a sign, say what state a line is in. Interest typed over is no longer an estimate.
+  const kind = typedOver ? "Typed over" : (KIND_LABELS[line.kind] ?? line.kind);
+  const notes = [kind, upcoming && "Upcoming", line.unpaid && "Not paid yet"].filter(Boolean).join(" · ");
   return (
-    <li className="flex items-start justify-between gap-3 py-2">
+    <li onClick={clickRowToEdit} className={`-mx-2 flex items-start justify-between gap-3 rounded-md px-2 py-2 ${ROW_OPENS}`}>
       <span className="min-w-0">
-        <span className="block break-words font-medium">{line.label}</span>
+        {onEdit ? (
+          <EditName name={line.label} onClick={onEdit} />
+        ) : (
+          <span className="block break-words font-medium">{line.label}</span>
+        )}
         <span className="block text-sm text-muted">
           {formatDate(line.date)} · {notes}
         </span>

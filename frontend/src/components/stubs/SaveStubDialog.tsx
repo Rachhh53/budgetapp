@@ -4,7 +4,7 @@ import { type PayStub, type StubApply, useSaveStub } from "../../api/payStubs";
 import { formatDate } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Modal } from "../Modal";
-import { BUTTON_PRIMARY, BUTTON_SECONDARY } from "../ui";
+import { BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT } from "../ui";
 import { goesToAnAccount } from "./labels";
 
 interface Choice {
@@ -49,7 +49,7 @@ export function SaveStubDialog({
     {
       value: "correct",
       label: `Correct ${stub.sourceName}'s amounts`,
-      detail: "Every paycheck the amounts in use today cover.",
+      detail: "Every paycheck using today's amounts.",
       unavailable: pay ? undefined : noNet,
     },
     {
@@ -63,7 +63,7 @@ export function SaveStubDialog({
       label: "Just this paycheck",
       detail:
         pay && paycheck
-          ? `Only the paycheck of ${formatDate(paycheck.payDate)}. Nothing else about ${stub.sourceName} changes.`
+          ? `Only the paycheck of ${formatDate(paycheck.payDate)}.`
           : "",
       unavailable: !pay
         ? noNet
@@ -71,11 +71,20 @@ export function SaveStubDialog({
           ? undefined
           : `${stub.sourceName} has no paycheck within a few days of ${stub.payDate ? formatDate(stub.payDate) : "the stub's date"}.`,
     },
-    { value: "none", label: "Don't change anything", detail: "Keep the stub, and leave your paychecks as they are." },
+    {
+      value: "one_off",
+      label: "A one-off paycheck (bonus)",
+      // Short enough for one line on a phone: the dialog has five choices and must not scroll.
+      detail: `Its own paycheck on ${stub.payDate ? formatDate(stub.payDate) : "the stub's date"}.`,
+      unavailable: pay ? undefined : noNet,
+    },
+    { value: "none", label: "Don't change anything", detail: "Keep the stub and change nothing." },
   ];
 
   const offered = choices.find((choice) => choice.value === startOn && !choice.unavailable)?.value;
   const [apply, setApply] = useState<StubApply | undefined>(offered);
+  // A one-off's name. Left blank, a stub saved this way before keeps the name it was given, and a new one is called Bonus.
+  const [name, setName] = useState("");
   const [problem, setProblem] = useState<string>();
 
   const unfiled = stub.lines.filter((line) => goesToAnAccount(line.tracksAs) && line.accountId === null && line.amountCents !== 0).length;
@@ -87,7 +96,8 @@ export function SaveStubDialog({
       return;
     }
     setProblem(undefined);
-    save.mutate(apply, { onSuccess: onSaved });
+    const oneOffName = apply === "one_off" && name.trim() !== "" ? name.trim() : undefined;
+    save.mutate({ apply, name: oneOffName }, { onSuccess: onSaved });
   };
 
   const failure = problem ?? save.error?.message;
@@ -102,28 +112,47 @@ export function SaveStubDialog({
         <fieldset className="space-y-1.5">
           <legend className="mb-1.5 font-medium">What should it change?</legend>
           {choices.map((choice) => (
-            <label
+            <div
               key={choice.value}
-              className={`flex gap-3 rounded-lg border px-3 py-1.5 has-checked:border-accent has-checked:bg-bg/60 ${
-                choice.unavailable ? "border-line text-muted" : "cursor-pointer border-line hover:bg-bg/60"
+              className={`rounded-lg border px-3 py-1.5 has-checked:border-accent has-checked:bg-bg/60 ${
+                choice.unavailable ? "border-line text-muted" : "border-line hover:bg-bg/60"
               }`}
             >
-              <input
-                type="radio"
-                name={`${id}-apply`}
-                value={choice.value}
-                checked={apply === choice.value}
-                disabled={choice.unavailable !== undefined}
-                onChange={() => setApply(choice.value)}
-                className="mt-1 size-5 shrink-0 accent-(--accent)"
-              />
-              <span className="min-w-0">
-                <span className="block font-semibold">{choice.label}</span>
-                <span data-amount className="block text-sm text-muted">
-                  {choice.unavailable ?? choice.detail}
+              <label className={`flex gap-3 ${choice.unavailable ? "" : "cursor-pointer"}`}>
+                <input
+                  type="radio"
+                  name={`${id}-apply`}
+                  value={choice.value}
+                  checked={apply === choice.value}
+                  disabled={choice.unavailable !== undefined}
+                  onChange={() => setApply(choice.value)}
+                  className="mt-1 size-5 shrink-0 accent-(--accent)"
+                />
+                <span className="min-w-0">
+                  <span className="block font-semibold">{choice.label}</span>
+                  <span data-amount className="block text-sm text-muted">
+                    {choice.unavailable ?? choice.detail}
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              {/* Asked inside its own choice, on one row, so the dialog still fits a phone without scrolling. */}
+              {choice.value === "one_off" && apply === "one_off" && (
+                <div className="mt-1.5 mb-1 flex items-center gap-3 pl-8">
+                  <label htmlFor={`${id}-name`} className="shrink-0 text-sm font-medium">
+                    Name (optional)
+                  </label>
+                  <input
+                    id={`${id}-name`}
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    maxLength={80}
+                    autoComplete="off"
+                    placeholder={stub.applied === "one_off" ? "Keeps its name" : "Bonus"}
+                    className={`${INPUT} min-w-0 flex-1`}
+                  />
+                </div>
+              )}
+            </div>
           ))}
         </fieldset>
 

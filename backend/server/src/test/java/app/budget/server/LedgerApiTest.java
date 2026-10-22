@@ -157,7 +157,8 @@ class LedgerApiTest extends ApiTestBase {
         void setUpAMonth() throws Exception {
             enterBalance(checking, "2026-10-01", 121438);
             enterBalance(savings, "2026-10-01", 500000);
-            rent = item("Rent", "bill", 155000, monthly(1), "");
+            // Rent is set aside a paycheck ahead ("Pay a period early"): due on payday, it comes out of the one before.
+            rent = item("Rent", "bill", 155000, monthly(1), "\"placement\":\"one_early\"");
             electric = item("Electric", "bill", 14000, monthly(16), "\"placement\":\"one_early\",\"estimate\":true");
             carLoan = item("Car loan", "bill", 41200, monthly(5), "\"autopay\":true");
             item("Groceries", "budget", 30000, "{\"frequency\":\"every_pay_period\",\"startDate\":\"2026-10-01\"}", "");
@@ -165,7 +166,7 @@ class LedgerApiTest extends ApiTestBase {
             created("/api/entries",
                     "{\"kind\":\"money_out\",\"date\":\"2026-10-09\",\"amountCents\":8500,\"description\":\"Birthday gift for Mom\",\"accountId\":%d}"
                             .formatted(checking));
-            // October's rent was due on payday, so it belonged to the paycheck before, and was paid from it.
+            // October's rent belonged to the paycheck before, and was paid from it.
             server.put("/api/items/" + rent + "/occurrences/2026-10-01", "{\"paid\":true,\"paidDate\":\"2026-09-29\"}", cookie);
         }
 
@@ -248,6 +249,36 @@ class LedgerApiTest extends ApiTestBase {
             // The balance entered on Oct 1 does not include rent that has not been paid yet.
             assertThat(account.get("outCents").asLong()).isEqualTo(113700 + 155000);
             assertThat(account.get("endingCents").asLong()).isEqualTo(256358 - 155000);
+        }
+
+        @Test
+        void oneOccurrenceCanBePaidFromAnotherAccountJustThisOnce() throws Exception {
+            long checkingOut = account(period("2026-10-01"), checking).get("outCents").asLong();
+            long savingsOut = account(period("2026-10-01"), savings).get("outCents").asLong();
+
+            Reply moved = server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"payFromAccountId\":%d}".formatted(savings), cookie);
+
+            assertThat(moved.status()).isEqualTo(200);
+            assertThat(moved.data().get("payFromAccountId").asLong()).isEqualTo(savings);
+            assertThat(account(period("2026-10-01"), checking).get("outCents").asLong()).isEqualTo(checkingOut - 14000);
+            assertThat(account(period("2026-10-01"), savings).get("outCents").asLong()).isEqualTo(savingsOut + 14000);
+            // November's is still paid from checking.
+            assertThat(account(period("2026-11-01"), checking).get("outCents").asLong()).isEqualTo(30000 + 20000 + 41200 + 14000);
+
+            // Choosing the item's own account again puts it back.
+            server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"payFromAccountId\":%d}".formatted(checking), cookie);
+            assertThat(account(period("2026-10-01"), checking).get("outCents").asLong()).isEqualTo(checkingOut);
+        }
+
+        @Test
+        void aOneTimeAccountHasToBeOneThatCanPayIt() throws Exception {
+            long transfer = item("Top up", "transfer", 5000, monthly(20), "\"payToAccountId\":" + savings);
+
+            Reply toItself = server.put("/api/items/" + transfer + "/occurrences/2026-10-20", "{\"payFromAccountId\":%d}".formatted(savings), cookie);
+            assertThat(toItself.status()).isEqualTo(400);
+            assertThat(toItself.error()).isEqualTo("Please choose an account other than the one this goes to.");
+            Reply missing = server.put("/api/items/" + electric + "/occurrences/2026-10-16", "{\"payFromAccountId\":999}", cookie);
+            assertThat(missing.error()).isEqualTo("Please choose the account this one is paid from.");
         }
 
         @Test

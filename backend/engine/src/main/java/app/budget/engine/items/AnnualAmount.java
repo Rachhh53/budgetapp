@@ -4,6 +4,9 @@ import app.budget.engine.Money;
 import app.budget.engine.schedule.Frequency;
 import app.budget.engine.schedule.ScheduleRule;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.Month;
+import java.util.Arrays;
 
 /**
  * Converts between a yearly total and the amount of one occurrence, for items the user
@@ -33,9 +36,24 @@ public final class AnnualAmount {
      * @param year    the calendar year to count hand-picked dates in
      */
     public static PerYear perYear(ScheduleRule rule, ScheduleRule payRule, int year) {
+        PerYear allYear = allYear(rule, payRule, year);
+        if (!rule.seasonal() || rule.frequency() == Frequency.YEARLY) {
+            return allYear;
+        }
+        // Only some months: the nominal count shared by the months it runs in, so weekly from November
+        // through March is 52 × 5 / 12 times a year, and a yearly total is spread over those dates alone.
+        long months = Month.values().length;
+        long running = Arrays.stream(Month.values()).filter(month -> rule.runsIn(LocalDate.of(year, month, 1))).count();
+        return new PerYear(Math.toIntExact(allYear.occurrences() * running), Math.toIntExact(allYear.years() * months));
+    }
+
+    /** {@link #perYear} for the rule as if it ran every month. */
+    private static PerYear allYear(ScheduleRule rule, ScheduleRule payRule, int year) {
         return switch (rule.frequency()) {
-            case WEEKLY -> new PerYear(52, 1);
-            case BIWEEKLY -> new PerYear(26, 1);
+            // Twice a week is 104 times a year.
+            // Every 10 weeks is 52 times in 10 years.
+            case WEEKLY -> new PerYear(52 * rule.daysAWeek(), rule.interval());
+            case BIWEEKLY -> new PerYear(26 * rule.daysAWeek(), 1);
             case SEMI_MONTHLY -> new PerYear(24, 1);
             case MONTHLY -> new PerYear(12, 1);
             // Every 5 months is 12 times in 5 years.

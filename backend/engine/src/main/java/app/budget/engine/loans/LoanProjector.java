@@ -100,8 +100,10 @@ public final class LoanProjector {
             // A balance entered for the payment day is taken to hold that month's interest already.
             if (interestDays.contains(day) && anchored == null && terms.rate() != null) {
                 BasisPoints rate = terms.rate().rateOn(day).orElse(null);
-                Money interest = rate == null ? Money.ZERO : Amortization.monthlyInterest(owed, rate);
-                if (!interest.isZero()) {
+                // An amount typed over the estimate simply becomes the month's interest, zero included.
+                Money typed = terms.rate().typedOn(day).orElse(null);
+                Money interest = typed != null ? typed : rate == null ? Money.ZERO : Amortization.monthlyInterest(owed, rate);
+                if (!interest.isZero() || typed != null) {
                     owed = owed.plus(interest);
                     derived.add(new Derived(day, Kind.INTEREST, interest));
                 }

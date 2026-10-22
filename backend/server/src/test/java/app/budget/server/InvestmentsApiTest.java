@@ -454,5 +454,63 @@ class InvestmentsApiTest extends ApiTestBase {
             assertThat(thisYear.get("depositsCents").asLong()).isEqualTo(19 * 248620L);
             assertThat(thisYear.get("growthCents").asLong()).isZero();
         }
+
+        @Test
+        void actualGrowthRunsFromTheFirstBalanceToTheLatestBesideWhatWasAssumed() throws Exception {
+            server.post("/api/accounts/" + retirement + "/rates", "{\"rateBp\":700,\"effectiveDate\":\"2026-01-01\"}", cookie);
+            enterBalance(retirement, "2026-04-01", 3700000);
+            enterBalance(retirement, "2026-07-01", 3850000);
+            enterBalance(retirement, "2026-10-01", 4000000);
+
+            JsonNode performance = performance(retirement);
+            JsonNode actual = performance.get("actualGrowth");
+
+            assertThat(actual.get("from").asText()).isEqualTo("2026-04-01");
+            assertThat(actual.get("to").asText()).isEqualTo("2026-10-01");
+            // The same as the growth between each pair of balances, added up.
+            JsonNode balances = performance.get("balances");
+            assertThat(actual.get("growthCents").asLong())
+                    .isEqualTo(balances.get(0).get("growthCents").asLong() + balances.get(1).get("growthCents").asLong());
+            // What was assumed is the assumed growth the account's own list shows over those days.
+            long listed = 0;
+            for (JsonNode line : server.get("/api/accounts/" + retirement + "/transactions?from=2026-04-01&to=2026-09-30", cookie).data()) {
+                if (line.get("kind").asText().equals("growth")) {
+                    listed += line.get("amountCents").asLong();
+                }
+            }
+            assertThat(listed).isPositive();
+            assertThat(actual.get("assumedCents").asLong()).isEqualTo(listed);
+            // Six months apart is long enough to say it as a rate a year.
+            assertThat(actual.get("yearlyRateBp").isNull()).isFalse();
+        }
+
+        @Test
+        void withoutAnAssumedRateNothingWasAssumed() throws Exception {
+            enterBalance(retirement, "2026-04-01", 3700000);
+            enterBalance(retirement, "2026-10-01", 4000000);
+
+            assertThat(performance(retirement).get("actualGrowth").get("assumedCents").asLong()).isZero();
+        }
+
+        @Test
+        void balancesUnderThreeMonthsApartGiveGrowthButNoRate() throws Exception {
+            enterBalance(retirement, "2026-09-01", 3900000);
+            enterBalance(retirement, "2026-10-01", 4000000);
+
+            JsonNode actual = performance(retirement).get("actualGrowth");
+
+            assertThat(actual.get("growthCents").asLong()).isEqualTo(55000);
+            assertThat(actual.get("yearlyRateBp").isNull()).isTrue();
+        }
+
+        @Test
+        void actualGrowthNeedsTwoBalancesAndAnInvestment() throws Exception {
+            enterBalance(retirement, "2026-04-01", 3700000);
+            enterBalance(checking, "2026-04-01", 100000);
+            enterBalance(checking, "2026-09-01", 200000);
+
+            assertThat(performance(retirement).get("actualGrowth").isNull()).isTrue();
+            assertThat(performance(checking).get("actualGrowth").isNull()).isTrue();
+        }
     }
 }

@@ -3,6 +3,7 @@ import { type ReactNode, useId, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useCameFrom } from "../lib/cameFrom";
 import { type Account, useAccounts } from "../api/accounts";
+import { useBuckets } from "../api/buckets";
 import { useCategories, useTags } from "../api/categories";
 import {
   type Entry,
@@ -169,13 +170,39 @@ function Figure({ label, cents, children }: { label: string; cents: number; chil
  * paid checkbox, and Undo takes any of it back: there is nothing here to forget to save.
  */
 function ReimbursementCard({ detail, reimbursement }: { detail: EntryDetail; reimbursement: Reimbursement }) {
-  const { entry, paybacks } = detail;
+  const { entry, paybacks, movesOut } = detail;
   const save = useSetReimbursement(entry.id);
   const names = useNames();
-  const { add, editEntry } = useAddItem();
+  const { add, editEntry, moveOut } = useAddItem();
+  const buckets = useBuckets();
+  const openBuckets = (buckets.data ?? []).filter((bucket) => !bucket.archived);
+  const bucketName = (bucketId: number) => buckets.data?.find((bucket) => bucket.id === bucketId)?.name ?? "a bucket";
+  // Money that came in and money moved out of a bucket for it, one list by date.
+  const cameBack = [
+    ...paybacks.map((payback) => ({
+      key: `entry-${payback.id}`,
+      date: payback.date,
+      what: payback.description,
+      from: null as string | null,
+      cents: payback.amountCents,
+      estimate: payback.estimate,
+      open: () => editEntry(payback),
+    })),
+    ...movesOut.map((move) => ({
+      key: `bucket-${move.id}`,
+      date: move.date,
+      what: move.note,
+      from: `Out of ${bucketName(move.bucketId)}`,
+      cents: move.amountCents,
+      estimate: false,
+      open: () => moveOut(move),
+    })),
+  ].sort((a, b) => a.date.localeCompare(b.date));
   const dateId = useId();
   const { status, submittedOn, to } = reimbursement;
   const sent = status === "submitted" || status === "reimbursed";
+  // The day sent in, as it is being typed; undefined when it isn't.
+  const [sentOn, setSentOn] = useState<string>();
 
   const set = (change: Partial<{ status: ReimbursementStatus; submittedOn: string | null; to: string | null }>) =>
     save.mutate({ status, submittedOn, to, ...change });
@@ -265,9 +292,17 @@ function ReimbursementCard({ detail, reimbursement }: { detail: EntryDetail; rei
                 <input
                   id={dateId}
                   type="date"
-                  value={submittedOn ?? ""}
-                  // A date half typed is not a date yet: only a whole one, or none, is saved.
-                  onChange={(event) => set({ submittedOn: event.target.value === "" ? null : event.target.value })}
+                  value={sentOn ?? submittedOn ?? ""}
+                  // Kept here while it is typed and saved on leaving the field: saved on every key, each save
+                  // came back into the field mid-typing and started the day over (Rachel, 2026-10-20: "when I
+                  // choose day and type 16 it keeps setting to 06"). Picking from the calendar is one change.
+                  onChange={(event) => setSentOn(event.target.value)}
+                  onBlur={() => {
+                    if (sentOn !== undefined && sentOn !== (submittedOn ?? "")) {
+                      set({ submittedOn: sentOn === "" ? null : sentOn });
+                    }
+                    setSentOn(undefined);
+                  }}
                   className={INPUT}
                 />
               </div>
@@ -280,34 +315,45 @@ function ReimbursementCard({ detail, reimbursement }: { detail: EntryDetail; rei
           </p>
         )}
 
-        {(status !== "none" || paybacks.length > 0) && (
+        {(status !== "none" || cameBack.length > 0) && (
           <div className="border-t border-line pt-3">
             <h3 className="font-semibold">Money that came back</h3>
-            {paybacks.length === 0 ? (
-              <p className={HINT}>Nothing yet. When it arrives, add it here and it is counted against this expense.</p>
+            {cameBack.length === 0 ? (
+              <p className={HINT}>
+                Nothing yet. When it arrives, or you pay yourself back from a bucket, add it here and it is counted against this
+                expense.
+              </p>
             ) : (
               <ul className="divide-y divide-line">
-                {paybacks.map((payback) => (
-                  <li key={payback.id} onClick={clickRowToEdit} className={`-mx-2 flex min-h-11 items-center gap-3 rounded-lg px-2 py-1 ${ROW_OPENS}`}>
-                    <span className="shrink-0 text-muted">{formatDate(payback.date)}</span>
+                {cameBack.map((back) => (
+                  <li key={back.key} onClick={clickRowToEdit} className={`-mx-2 flex min-h-11 items-center gap-3 rounded-lg px-2 py-1 ${ROW_OPENS}`}>
+                    <span className="shrink-0 text-muted">{formatDate(back.date)}</span>
                     <button
                       type="button"
                       data-edit
-                      onClick={() => editEntry(payback)}
-                      aria-label={`Edit ${payback.description}`}
-                      title={`Edit ${payback.description}`}
+                      onClick={back.open}
+                      aria-label={`Edit ${back.what}`}
+                      title={`Edit ${back.what}`}
                       className="min-w-0 flex-1 cursor-pointer truncate rounded-sm text-left font-medium"
                     >
-                      {payback.description}
+                      {back.what}
+                      {back.from && <span className="block truncate text-sm font-normal text-muted">{back.from}</span>}
                     </button>
-                    <Amount cents={payback.amountCents} estimate={payback.estimate} className="shrink-0 font-semibold" />
+                    <Amount cents={back.cents} estimate={back.estimate} className="shrink-0 font-semibold" />
                   </li>
                 ))}
               </ul>
             )}
-            <button type="button" onClick={() => add("money_in", undefined, entry)} className={`${BUTTON_SECONDARY} mt-3`}>
-              + Add money that came back
-            </button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={() => add("money_in", undefined, entry)} className={BUTTON_SECONDARY}>
+                + Add money that came back
+              </button>
+              {openBuckets.length > 0 && (
+                <button type="button" onClick={() => moveOut(undefined, entry)} className={BUTTON_SECONDARY}>
+                  + Pay back from a bucket
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

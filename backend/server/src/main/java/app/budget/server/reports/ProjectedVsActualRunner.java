@@ -167,6 +167,10 @@ public final class ProjectedVsActualRunner {
         // A paycheck has no tag or category: a report that asks for one of those is not about paychecks.
         if (include.contains(CompareInclude.PAYCHECKS) && definition.tagIds().isEmpty() && categoryIds.isEmpty()) {
             for (Paycheck paycheck : pay.paychecks(dates.from(), dates.to())) {
+                // A one-off paycheck (a bonus) was never projected, as one-off spending was not: it has nothing to compare.
+                if (!paycheck.scheduled()) {
+                    continue;
+                }
                 long projected = paycheck.projectedCents() == null ? paycheck.netCents() : paycheck.projectedCents();
                 rows.add(new Row(
                         "paycheck", null, paycheck.incomeSourceId(), paycheck.scheduledDate(), paycheck.payDate(),

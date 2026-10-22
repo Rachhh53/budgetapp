@@ -1,6 +1,7 @@
 import { Paperclip } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { Link } from "react-router";
+import { useAccounts } from "../../api/accounts";
 import { type AttachmentOwner, useAttachments } from "../../api/attachments";
 import { type Occurrence, type OccurrenceEdit, useEditOccurrence } from "../../api/periods";
 import { formatDay, todayIso } from "../../lib/dates";
@@ -42,6 +43,17 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
   const [paidDate, setPaidDate] = useState(occurrence.paidDate ?? today);
   const [code, setCode] = useState(occurrence.confirmationCode ?? "");
   const [check, setCheck] = useState(occurrence.checkNumber ?? "");
+  const [payFrom, setPayFrom] = useState(occurrence.payFromAccountId);
+  const accounts = useAccounts();
+  // What it can be paid from just this once: open checking, savings and cards, never where it goes (Rachel, 2026-10-20).
+  const payFromChoices = (accounts.data ?? []).filter(
+    (account) =>
+      account.id === occurrence.payFromAccountId ||
+      (!account.archived && account.id !== occurrence.payToAccountId && ["checking", "savings", "credit_card"].includes(account.type)),
+  );
+  const chosenAccount = accounts.data?.find((account) => account.id === payFrom);
+  // A check needs a checking account: the one chosen here, once the accounts are in.
+  const checking = chosenAccount ? chosenAccount.type === "checking" : fromChecking;
   const [problem, setProblem] = useState<string>();
   // The receipts belong to this one time the item came due, named by the date its schedule gives it.
   const owner: AttachmentOwner = { type: "occurrence", itemId: occurrence.itemId, scheduledDate: occurrence.scheduledDate };
@@ -85,9 +97,12 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
       if (code.trim() !== (occurrence.confirmationCode ?? "")) {
         edit.confirmationCode = code.trim();
       }
-      if (fromChecking && check.trim() !== (occurrence.checkNumber ?? "")) {
+      if (checking && check.trim() !== (occurrence.checkNumber ?? "")) {
         edit.checkNumber = check.trim();
       }
+    }
+    if (payFrom !== occurrence.payFromAccountId) {
+      edit.payFromAccountId = payFrom;
     }
     if (Object.keys(edit).length === 0) {
       onClose();
@@ -95,6 +110,13 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
     }
     save.mutate({ occurrence, edit }, { onSuccess: onClose });
   };
+
+  // Skipping this one time (Rachel, 2026-10-20: "the ability to delete an entry from pay period like if I'm just skipping it that month").
+  // The item and its other dates stay; the pay period lists it under Skipped, with Put back. An invoice or a planned pack is
+  // something to pay, not a date of the schedule, so it has no Skip.
+  const skippable = occurrence.invoiceId == null && !occurrence.plannedPack;
+  // One already skipped (listed on its item's page) is put back the same way.
+  const skip = () => save.mutate({ occurrence, edit: { skipped: !occurrence.skipped } }, { onSuccess: onClose });
 
   const failure = problem ?? save.error?.message;
   const fileCount = attached.data?.attachments.length ?? 0;
@@ -154,7 +176,7 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
         {byHand && (
           <>
 
-            <div className={fromChecking ? "grid grid-cols-2 gap-3" : undefined}>
+            <div className={checking ? "grid grid-cols-2 gap-3" : undefined}>
               <div>
                 <label htmlFor={`${id}-code`} className={LABEL}>
                   Confirmation code
@@ -168,7 +190,7 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
                   className={`${INPUT} font-mono`}
                 />
               </div>
-              {fromChecking && (
+              {checking && (
                 <div>
                   <label htmlFor={`${id}-check`} className={LABEL}>
                     Check number
@@ -188,11 +210,29 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
           </>
         )}
 
-        <div>
-          <label htmlFor={`${id}-note`} className={LABEL}>
-            Note (optional)
-          </label>
-          <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={NOTE_MAX} autoComplete="off" className={INPUT} />
+        {/* Side by side, on a phone too, so the form fits one screen with Skip this one. */}
+        <div className={occurrence.kind === "bucket_move" ? undefined : "grid grid-cols-2 gap-3"}>
+          {occurrence.kind !== "bucket_move" && (
+            <div>
+              <label htmlFor={`${id}-from`} className={LABEL}>
+                Paid from, this one
+              </label>
+              <select id={`${id}-from`} value={payFrom} onChange={(event) => setPayFrom(Number(event.target.value))} className={INPUT}>
+                {payFromChoices.length === 0 && <option value={payFrom}>Its usual account</option>}
+                {payFromChoices.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div>
+            <label htmlFor={`${id}-note`} className={LABEL}>
+              Note (optional)
+            </label>
+            <input id={`${id}-note`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={NOTE_MAX} autoComplete="off" className={INPUT} />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -218,11 +258,17 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, onClose }: Oc
           </p>
         )}
 
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+        {/* On a phone, Save on top and the other two side by side under it, so the form still fits one screen. */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+          {skippable && (
+            <button type="button" onClick={skip} disabled={save.isPending} className={`${BUTTON_SECONDARY} sm:mr-auto`}>
+              {occurrence.skipped ? "Put back" : "Skip this one"}
+            </button>
+          )}
+          <button type="button" onClick={onClose} className={`${BUTTON_SECONDARY} ${skippable ? "" : "col-span-2"}`}>
             Cancel
           </button>
-          <button type="submit" disabled={save.isPending} className={BUTTON_PRIMARY}>
+          <button type="submit" disabled={save.isPending} className={`${BUTTON_PRIMARY} order-first col-span-2 sm:order-none`}>
             {save.isPending ? "Saving…" : "Save"}
           </button>
         </div>

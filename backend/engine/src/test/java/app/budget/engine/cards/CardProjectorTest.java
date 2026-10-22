@@ -78,6 +78,153 @@ class CardProjectorTest {
     }
 
     @Test
+    void interestTypedOverIsWhatTheStatementCarriesAndLaterMonthsFollowIt() {
+        Terms typed = new Terms(20, 15, Mode.STATEMENT_BALANCE, null, APR.withTyped(Map.of(date("2026-10-20"), cents(1500))), List.of(), Map.of());
+        Result result = CardProjector.project(List.of(owed("2026-10-01", 100000)), List.of(), List.of(), typed, date("2026-11-30"));
+
+        // October is 15.00 as typed; November is 1,015.00 × 24.49% ÷ 12 = 20.71.
+        assertThat(result.derived()).containsExactly(
+                new Derived(date("2026-10-20"), Kind.INTEREST, cents(1500), -1),
+                new Derived(date("2026-11-20"), Kind.INTEREST, cents(2071), -1));
+        assertThat(result.statements()).extracting(Statement::balance).containsExactly(cents(101500), cents(103571));
+        assertThat(result.statements().getFirst().interest()).isEqualTo(cents(1500));
+    }
+
+    @Test
+    void rewardsOnWhatWasChargedComeOffAtTheCloseSoThePaymentIsSmaller() {
+        Terms rewarded = terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(150), Map.of());
+        Result result = CardProjector.project(
+                List.of(owed("2026-10-01", 0)),
+                // The payment and the charge after the close are not earned on in October.
+                List.of(charge("2026-10-05", 40000), charge("2026-10-12", 12345), charge("2026-10-14", -5000), charge("2026-10-25", 20000)),
+                List.of(new Payment(date("2026-11-15"), 3, false)),
+                rewarded,
+                date("2026-11-30"));
+
+        // 523.45 charged × 1.5% = 7.85 (7.85175, to the cent). November: 200.00 × 1.5% = 3.00.
+        assertThat(result.derived()).containsExactly(
+                new Derived(date("2026-10-20"), Kind.REWARDS, cents(-785), -1),
+                new Derived(date("2026-11-15"), Kind.PAYMENT, cents(-46560), 3),
+                new Derived(date("2026-11-20"), Kind.REWARDS, cents(-300), -1));
+        assertThat(result.statements().getFirst().balance()).isEqualTo(cents(46560));
+    }
+
+    @Test
+    void rewardsLeftToBuildUpAreTrackedAndNeverComeOffOnTheirOwn() {
+        Terms building = terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(200), Map.of())
+                .withRewardsBuildUp(new CardProjector.BuildUp(null, null, cents(1500), date("2026-09-30"), List.of()));
+        Result result = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 50000), charge("2026-11-05", 25000)), List.of(), building,
+                date("2026-11-30"));
+
+        // 15.00 built up already, + 10.00 in October, + 5.00 in November; the balance never drops for it.
+        assertThat(result.derived()).noneMatch(line -> line.kind() == Kind.REWARDS || line.kind() == Kind.REWARDS_REDEEMED);
+        assertThat(result.rewards()).containsExactly(
+                new CardProjector.RewardsPoint(date("2026-10-20"), cents(1000), Money.ZERO, cents(2500)),
+                new CardProjector.RewardsPoint(date("2026-11-20"), cents(500), Money.ZERO, cents(3000)));
+        assertThat(result.statements().getFirst().balance()).isEqualTo(cents(50000));
+    }
+
+    @Test
+    void aRedemptionGoesOnAsACreditNeverMoreThanHasBuiltUp() {
+        Terms building = terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(200), Map.of())
+                .withRewardsBuildUp(new CardProjector.BuildUp(null, null, cents(1500), null, List.of(
+                        new CardProjector.Redemption(date("2026-10-10"), cents(1000), 7),
+                        new CardProjector.Redemption(date("2026-11-01"), null, 8),
+                        new CardProjector.Redemption(date("2026-11-02"), cents(500), 9))));
+        Result result = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 50000)), List.of(), building, date("2026-11-30"));
+
+        // 10.00 of the 15.00 on Oct 10; 5.00 left + 10.00 earned at the close, all 15.00 on Nov 1; nothing left for Nov 2.
+        assertThat(result.derived()).filteredOn(line -> line.kind() == Kind.REWARDS_REDEEMED).containsExactly(
+                new Derived(date("2026-10-10"), Kind.REWARDS_REDEEMED, cents(-1000), 7),
+                new Derived(date("2026-11-01"), Kind.REWARDS_REDEEMED, cents(-1500), 8));
+        // The October statement is the charge less the credit.
+        assertThat(result.statements().getFirst().balance()).isEqualTo(cents(49000));
+        assertThat(result.rewards().getLast().builtUp()).isEqualTo(Money.ZERO);
+    }
+
+    @Test
+    void aRuleUsesEverythingBuiltUpInTheMonthChosenOrOnceItReachesTheAmount() {
+        Terms yearly = terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(200), Map.of())
+                .withRewardsBuildUp(new CardProjector.BuildUp(11, null, Money.ZERO, null, List.of()));
+        Result inNovember = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 50000), charge("2026-11-05", 25000)), List.of(), yearly,
+                date("2026-12-31"));
+        assertThat(inNovember.derived()).filteredOn(line -> line.kind() == Kind.REWARDS_REDEEMED).containsExactly(
+                new Derived(date("2026-11-20"), Kind.REWARDS_REDEEMED, cents(-1500), -1));
+
+        Terms reaching = terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(200), Map.of())
+                .withRewardsBuildUp(new CardProjector.BuildUp(null, cents(1200), Money.ZERO, null, List.of()));
+        Result once = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 50000), charge("2026-11-05", 25000)), List.of(), reaching,
+                date("2026-12-31"));
+        // 10.00 in October is short of 12.00; 15.00 in November is past it, so all of it goes on, off that statement.
+        assertThat(once.derived()).filteredOn(line -> line.kind() == Kind.REWARDS_REDEEMED).containsExactly(
+                new Derived(date("2026-11-20"), Kind.REWARDS_REDEEMED, cents(-1500), -1));
+        // November's statement is 15.00 less than the same card's with no rule (both carry October's interest).
+        Terms noRule = terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(200), Map.of())
+                .withRewardsBuildUp(new CardProjector.BuildUp(null, null, Money.ZERO, null, List.of()));
+        Result kept = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 50000), charge("2026-11-05", 25000)), List.of(), noRule,
+                date("2026-12-31"));
+        assertThat(once.statements().get(1).balance()).isEqualTo(kept.statements().get(1).balance().minus(cents(1500)));
+    }
+
+    @Test
+    void rewardsAreEarnedOnTheMonthlyEstimateAndComeOffAfterInterest() {
+        Terms rewarded = terms(Mode.STATEMENT_BALANCE, 45000L, List.of(), Map.of()).withRewards(BasisPoints.of(200), Map.of());
+        Result result = CardProjector.project(List.of(owed("2026-10-01", 100000)), List.of(), List.of(), rewarded, date("2026-10-31"));
+
+        // 1,000.00 carried: 20.41 interest. 450.00 estimated × 2% = 9.00 back.
+        assertThat(result.derived()).containsExactly(
+                new Derived(date("2026-10-20"), Kind.ESTIMATED_SPENDING, cents(45000), -1),
+                new Derived(date("2026-10-20"), Kind.INTEREST, cents(2041), -1),
+                new Derived(date("2026-10-20"), Kind.REWARDS, cents(-900), -1));
+        assertThat(result.statements().getFirst().balance()).isEqualTo(cents(146141));
+    }
+
+    @Test
+    void aMonthsRewardsTypedOverAreWhatComesOffZeroIncluded() {
+        Terms rewarded = terms(Mode.STATEMENT_BALANCE)
+                .withRewards(BasisPoints.of(150), Map.of(date("2026-10-20"), cents(1234), date("2026-11-20"), Money.ZERO));
+        Result result = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 10000), charge("2026-11-05", 10000)), List.of(), rewarded,
+                date("2026-11-30"));
+
+        assertThat(result.derived()).filteredOn(line -> line.kind() == Kind.REWARDS).containsExactly(
+                new Derived(date("2026-10-20"), Kind.REWARDS, cents(-1234), -1),
+                new Derived(date("2026-11-20"), Kind.REWARDS, Money.ZERO, -1));
+    }
+
+    @Test
+    void aCardWithoutRewardsOrWithNothingChargedGetsNone() {
+        Result none = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(charge("2026-10-05", 10000)), List.of(), terms(Mode.STATEMENT_BALANCE), date("2026-10-31"));
+        Result nothingCharged = CardProjector.project(
+                List.of(owed("2026-10-01", 0)), List.of(), List.of(), terms(Mode.STATEMENT_BALANCE).withRewards(BasisPoints.of(150), Map.of()),
+                date("2026-10-31"));
+
+        assertThat(none.derived()).isEmpty();
+        assertThat(nothingCharged.derived()).isEmpty();
+    }
+
+    @Test
+    void aStatementTheUserEnteredAlreadyHoldsItsRewards() {
+        Statement real = new Statement(date("2026-10-20"), cents(9850), null, date("2026-11-15"), Money.ZERO, true);
+        Result result = CardProjector.project(
+                List.of(owed("2026-10-01", 0), owed("2026-10-21", 9850)),
+                List.of(charge("2026-10-05", 10000), charge("2026-11-05", 10000)),
+                List.of(),
+                new Terms(20, 15, Mode.STATEMENT_BALANCE, null, APR, List.of(), Map.of(date("2026-10-20"), real))
+                        .withRewards(BasisPoints.of(150), Map.of()),
+                date("2026-11-30"));
+
+        // Only November, on the charge made after the entered statement closed.
+        assertThat(result.derived()).filteredOn(line -> line.kind() == Kind.REWARDS).containsExactly(new Derived(date("2026-11-20"), Kind.REWARDS, cents(-150), -1));
+    }
+
+    @Test
     void onlyWhatWasLeftUnpaidIsChargedInterest() {
         Result result = CardProjector.project(
                 List.of(owed("2026-10-01", 100000)),
@@ -106,6 +253,23 @@ class CardProjectorTest {
                 new Derived(date("2026-11-20"), Kind.ESTIMATED_SPENDING, cents(45000), -1),
                 new Derived(date("2026-12-15"), Kind.PAYMENT, cents(-45000), 2),
                 new Derived(date("2026-12-20"), Kind.ESTIMATED_SPENDING, cents(45000), -1));
+    }
+
+    @Test
+    void chargesEnteredCountTowardTheEstimateSoTheyNeverStack() {
+        Result result = CardProjector.project(
+                List.of(owed("2026-10-01", 0)),
+                // 300.00 of bills charged to the card in October; 500.00 in November, more than the estimate.
+                List.of(charge("2026-10-05", 30000), charge("2026-11-05", 50000)),
+                List.of(),
+                terms(Mode.FULL_BALANCE, 45000L, List.of(), Map.of()),
+                date("2026-12-31"));
+
+        // October adds only the 150.00 the charges left; November nothing; December, with nothing entered, all of it.
+        assertThat(result.derived()).filteredOn(line -> line.kind() == Kind.ESTIMATED_SPENDING).containsExactly(
+                new Derived(date("2026-10-20"), Kind.ESTIMATED_SPENDING, cents(15000), -1),
+                new Derived(date("2026-12-20"), Kind.ESTIMATED_SPENDING, cents(45000), -1));
+        assertThat(result.statements().getFirst().balance()).isEqualTo(cents(45000));
     }
 
     @Test

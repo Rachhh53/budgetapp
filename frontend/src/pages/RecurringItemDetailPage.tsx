@@ -1,20 +1,22 @@
 import { type ReactNode, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { useCameFrom } from "../lib/cameFrom";
 import { useAccounts } from "../api/accounts";
 import { useBuckets } from "../api/buckets";
 import { useCategories, useTags } from "../api/categories";
-import { type Item, useItems } from "../api/items";
+import { type Item, useItems, useRemoveVersion } from "../api/items";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
 import { ByMonthCard } from "../components/items/ByMonthCard";
 import { BilledLaterCard } from "../components/items/BilledLaterCard";
+import { PaidAheadCard } from "../components/items/PaidAheadCard";
+import { UpcomingCard } from "../components/items/UpcomingCard";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
 import { PauseControls } from "../components/items/PauseItem";
-import { BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
+import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { HelpLink } from "../components/help/HelpLink";
@@ -63,6 +65,10 @@ export function RecurringItemDetailPage() {
       </>
     );
   }
+  // A bucket move lives on its bucket's account (Rachel, 2026-10-19): an old link to it opens that account.
+  if (item.kind === "bucket_move") {
+    return <Navigate to={`/accounts/${item.payFromAccountId}`} replace />;
+  }
 
   const allAccounts = accounts.data ?? [];
   const allCategories = categories.data ?? [];
@@ -73,9 +79,7 @@ export function RecurringItemDetailPage() {
   const parent = allCategories.find((candidate) => candidate.id === category?.parentId);
   const itemTags = (tags.data ?? []).filter((tag) => item.tagIds.includes(tag.id));
   const everyPaycheck = item.schedule.frequency === "every_pay_period";
-  // Set up on its bucket, and changed there: one form, so one button.
-  const ownForm = item.kind !== "bucket_move";
-  const edit = (part: ItemPart, name: string) => (ownForm ? <EditButton name={name} onClick={() => setEditing(part)} /> : undefined);
+  const edit = (part: ItemPart, name: string) => <EditButton name={name} onClick={() => setEditing(part)} />;
   // A payment that follows its card says how, in place of an amount.
   const follows = item.followsCard && item.cardPaymentMode ? PAYMENT_MODE_LABELS[item.cardPaymentMode] : null;
 
@@ -102,11 +106,9 @@ export function RecurringItemDetailPage() {
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
           <EditPageButton label="Edit item" onClick={() => setEditing("item")} />
-          {ownForm && (
-            <button type="button" onClick={() => setEditing("amount")} aria-label={`Change the amount of ${item.name}`} className={BUTTON_PRIMARY}>
-              Change the amount
-            </button>
-          )}
+          <button type="button" onClick={() => setEditing("amount")} aria-label={`Change the amount of ${item.name}`} className={BUTTON_PRIMARY}>
+            Change the amount
+          </button>
         </div>
       </div>
 
@@ -119,6 +121,15 @@ export function RecurringItemDetailPage() {
                 <>
                   <p className="text-2xl font-bold">{follows}</p>
                   <p className="text-muted">worked out from the card each time</p>
+                </>
+              ) : item.usesHundredths != null ? (
+                // Billed by use: what each time costs, and about how often, which together make each month's bill.
+                <>
+                  <Amount cents={item.amountCents} estimate={false} className="-ml-2 text-3xl font-bold" />
+                  <p className="text-muted">
+                    each time · about {item.usesHundredths / 100} a {item.usesPer === "month" ? "month" : "week"}, about{" "}
+                    <span data-amount>{formatCents(item.perOccurrenceCents)}</span> a month
+                  </p>
                 </>
               ) : (
                 <>
@@ -156,12 +167,12 @@ export function RecurringItemDetailPage() {
               <p className="text-muted">{item.kind === "transfer" ? "From" : "Paid from"}</p>
               <p className="text-2xl font-bold break-words">{accountName(item.payFromAccountId)}</p>
               <p className="text-muted">
-                {item.kind === "bucket_move"
-                  ? `set aside in ${bucketName(item.bucketId)}`
-                  : item.payToAccountId !== null
-                    ? `to ${accountName(item.payToAccountId)}`
-                    : item.kind === "budget"
-                      ? "money set aside to spend"
+                {item.payToAccountId !== null
+                  ? `to ${accountName(item.payToAccountId)}`
+                  : item.kind === "budget"
+                    ? "money set aside to spend"
+                    : item.paidAhead
+                      ? "paid ahead, used session by session"
                       : item.autopay
                         ? "paid automatically"
                         : "paid by hand"}
@@ -173,34 +184,38 @@ export function RecurringItemDetailPage() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-4">
             {item.billedLater && <BilledLaterCard item={item} />}
+            {item.paidAhead && <PaidAheadCard item={item} />}
+            <UpcomingCard item={item} />
             <ByMonthCard item={item} />
             <Card title="Schedule" action={edit("schedule", "the schedule")}>
               <dl className="grid gap-4 sm:grid-cols-3">
                 <Fact term="How often">{describeItemSchedule(item.schedule)}</Fact>
                 <Fact term={item.schedule.frequency === "one_time" ? "Date" : "Starts"}>{formatDate(item.schedule.startDate)}</Fact>
-                {item.schedule.endDate !== null && <Fact term="Ends">{formatDate(item.schedule.endDate)}</Fact>}
-                <Fact term="Which paycheck pays it">
-                  {everyPaycheck
-                    ? item.daysAfterPayday === 0
+                {item.schedule.endDate !== null && <Fact term="Last date">{formatDate(item.schedule.endDate)}</Fact>}
+                {/* Every paycheck is part of the schedule; otherwise which paycheck pays it is edited with where it's paid from. */}
+                {everyPaycheck && (
+                  <Fact term="Which paycheck pays it">
+                    {item.daysAfterPayday === 0
                       ? "Every paycheck, on payday"
-                      : `Every paycheck, ${item.daysAfterPayday} ${item.daysAfterPayday === 1 ? "day" : "days"} after payday`
-                    : item.placement === "one_early"
-                      ? "One period early"
-                      : "The period it's due in"}
-                </Fact>
+                      : `Every paycheck, ${item.daysAfterPayday} ${item.daysAfterPayday === 1 ? "day" : "days"} after payday`}
+                  </Fact>
+                )}
               </dl>
             </Card>
 
             <Card
-              title={item.kind === "bucket_move" ? "Where it goes" : item.payToAccountId !== null ? "From and to" : "Where it's paid from"}
+              title={item.payToAccountId !== null ? "From and to" : "Where it's paid from"}
               action={edit("accounts", "where it is paid from")}
             >
               <dl className="grid gap-4 sm:grid-cols-3">
                 <Fact term={item.kind === "transfer" ? "From" : "Paid from"}>{accountName(item.payFromAccountId)}</Fact>
                 {item.payToAccountId !== null && <Fact term={item.kind === "card_payment" ? "Card" : "To"}>{accountName(item.payToAccountId)}</Fact>}
-                {item.kind !== "budget" && item.kind !== "bucket_move" && <Fact term="Autopay">{item.autopay ? "Yes" : "No, paid by hand"}</Fact>}
+                {item.kind !== "budget" && <Fact term="Autopay">{item.autopay ? "Yes" : "No, paid by hand"}</Fact>}
+                {!everyPaycheck && (
+                  <Fact term="Which paycheck pays it">{item.placement === "one_early" ? "One period early" : "The period it's due in"}</Fact>
+                )}
                 {item.fromBucketId !== null && <Fact term="Comes out of">{bucketName(item.fromBucketId)}</Fact>}
-                {(item.kind === "transfer" || item.kind === "bucket_move") && item.bucketId !== null && (
+                {item.kind === "transfer" && item.bucketId !== null && (
                   <Fact term="Into bucket">{bucketName(item.bucketId)}</Fact>
                 )}
                 {item.saveUpBucketId !== null && (
@@ -274,18 +289,38 @@ function nextNote(item: Item): string {
 
 /** What the item has been set to, version by version, newest first. "Amount", not "price": a budget or a bucket move has no price. */
 function AmountHistory({ item }: { item: Item }) {
+  // One put in by mistake can be removed; the one before it then carries on. The last one always stays.
+  const remove = useRemoveVersion(item.id);
   return (
     <Card title="Amount history">
       <ul className="divide-y divide-line">
         {[...item.history].reverse().map((point) => (
           <li key={point.effectiveFrom} className="flex flex-wrap items-center justify-between gap-x-3 py-2">
             <span className="text-muted">From {formatDate(point.effectiveFrom)}</span>
-            <span data-amount className="tabular-nums">
-              {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
+            <span className="flex items-center gap-2">
+              <span data-amount className="tabular-nums">
+                {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
+              </span>
+              {item.history.length > 1 && (
+                <button
+                  type="button"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(point.versionId)}
+                  aria-label={`Remove the amount from ${formatDate(point.effectiveFrom)}`}
+                  className={BUTTON_LINK}
+                >
+                  Remove
+                </button>
+              )}
             </span>
           </li>
         ))}
       </ul>
+      {remove.isError && (
+        <p role="alert" className="mt-2 text-danger">
+          {remove.error.message}
+        </p>
+      )}
       <p className="mt-2 text-sm text-muted">
         {item.history.length < 2
           ? "No changes yet. When the amount changes, choose Change the amount: everything dated before that day keeps this amount."

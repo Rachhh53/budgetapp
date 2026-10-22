@@ -118,6 +118,53 @@ public final class InterestRepository {
                 .execute()) > 0;
     }
 
+    /**
+     * Interest typed over the estimate (migration V27).
+     *
+     * @param date           the day the interest is added; for an investment, the first of the month
+     *                       whose growth it is
+     * @param estimatedCents what was estimated when it was first typed over
+     */
+    public record Typed(LocalDate date, long amountCents, long estimatedCents) {}
+
+    /** Every amount typed over, by account and then by date. */
+    public Map<Long, Map<LocalDate, Typed>> allTyped() {
+        return jdbi.withHandle(handle -> handle
+                .createQuery("SELECT account_id, date, amount, estimated_amount FROM interest_overrides")
+                .map((rs, ctx) -> Map.entry(rs.getLong("account_id"), new Typed(
+                        LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getLong("estimated_amount"))))
+                .stream()
+                .collect(Collectors.groupingBy(
+                        Map.Entry::getKey, Collectors.toMap(entry -> entry.getValue().date(), Map.Entry::getValue))));
+    }
+
+    /**
+     * Types over one month's interest. {@code estimatedCents} is only stored the first time, so it
+     * keeps what the app showed before anything was typed.
+     */
+    public void saveTyped(long accountId, LocalDate date, long amountCents, long estimatedCents) {
+        jdbi.useHandle(handle -> handle
+                .createUpdate("""
+                        INSERT INTO interest_overrides (account_id, date, amount, estimated_amount)
+                        VALUES (:accountId, :date, :amount, :estimated)
+                        ON CONFLICT (account_id, date) DO UPDATE SET amount = excluded.amount
+                        """)
+                .bind("accountId", accountId)
+                .bind("date", date.toString())
+                .bind("amount", amountCents)
+                .bind("estimated", estimatedCents)
+                .execute());
+    }
+
+    /** Puts the estimate back. False when nothing was typed over on that date. */
+    public boolean deleteTyped(long accountId, LocalDate date) {
+        return jdbi.withHandle(handle -> handle
+                .createUpdate("DELETE FROM interest_overrides WHERE account_id = :accountId AND date = :date")
+                .bind("accountId", accountId)
+                .bind("date", date.toString())
+                .execute()) > 0;
+    }
+
     private static Settings settings(ResultSet rs) throws SQLException {
         long bucketId = rs.getLong("destination_bucket_id");
         boolean noBucket = rs.wasNull();

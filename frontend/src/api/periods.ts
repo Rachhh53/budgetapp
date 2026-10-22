@@ -1,8 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ACCOUNTS_KEY } from "./accounts";
+import { BUCKETS_KEY, type MoveOut } from "./buckets";
 import { api } from "./client";
 import type { Entry } from "./entries";
 import type { Unbilled } from "./invoices";
+import type { RunningOut } from "./paidAhead";
 import { PAY_KEY, type PayPeriods, type Paycheck, type PromoEnd } from "./income";
+import { ITEMS_KEY } from "./items";
 import type { ItemKind, Placement } from "./items";
 
 /** One occurrence of a recurring item, with any "just this one" edit applied. */
@@ -43,25 +47,50 @@ export interface Occurrence {
    * left out) for anything the item's schedule names. It is changed through its own address.
    */
   invoiceId?: number | null;
-  /** An invoice: the last visit it pays for. */
+  /** An invoice: the last visit it pays for. A planned pack: the last session it would cover. */
   coversThrough?: string | null;
+  /**
+   * The next pack of something paid ahead as a pack, planned by Budget on the first session nothing paid
+   * covers. It is paid by recording the payment, never edited or ticked (spec §4.6).
+   */
+  plannedPack?: boolean;
   /** The check this one was paid with; `null` when none was written. */
   checkNumber: string | null;
 }
 
 /**
- * One account across one pay period: `ending = starting + in − out`. For a credit card or
- * loan the balance is what is owed, so `in` is what was charged and `out` what was paid off.
+ * A balance entered during a pay period, shown in it as an adjustment to what Budget expected that morning.
+ * Editing it changes that balance; deleting it removes it.
+ */
+export interface BalanceAdjustment {
+  entryId: number;
+  date: string;
+  /** The balance entered. */
+  balanceCents: number;
+  /** That less what the account was expected to hold as the day began, signed. */
+  differenceCents: number;
+  note: string | null;
+  /** The balance entered before it, when the records last matched; `null` for none. */
+  since: string | null;
+}
+
+/**
+ * One account across one pay period: `ending = starting + in − out + adjusted`, and it starts with what the period
+ * before ended on. For a credit card or loan the balance is what is owed, so `in` is what was charged and `out` what
+ * was paid off.
  */
 export interface AccountPeriod {
   accountId: number;
   startingCents: number;
-  /** The period's first day, or the day of a balance entered during it. */
+  /** The period's first day, or the day of the first balance ever entered when it falls during the period. */
   startingOn: string;
-  /** True when the starting balance is one the user entered during the period. */
+  /** True when the starting balance is the first one ever entered. */
   entered: boolean;
   inCents: number;
   outCents: number;
+  /** What balances entered during the period moved it, signed: the sum of `adjustments`. */
+  adjustedCents: number;
+  adjustments: BalanceAdjustment[];
   endingCents: number;
   /** The lowest end-of-day balance in the period, and the day it happens. */
   lowestCents: number;
@@ -70,6 +99,10 @@ export interface AccountPeriod {
   bucketsCents: number;
   /** The ending balance less what is in buckets. */
   availableCents: number;
+  /** What the buckets hold as the period starts: what they held at the end of the period before. */
+  startingBucketsCents: number;
+  /** The starting balance less `startingBucketsCents`: what the period starts with to spend. */
+  startingAvailableCents: number;
   /** True when no balance was ever entered for the account, so it is added up from nothing. */
   builtFromZero: boolean;
   /** True when the user asked for a warning and the balance dips below it. */
@@ -105,6 +138,8 @@ export interface InterestLine {
   amountCents: number;
   /** The APY it was worked out at, in basis points. */
   rateBp: number;
+  /** False once the amount was typed over in the account's transactions. */
+  estimate: boolean;
 }
 
 /** Everything in one pay period. */
@@ -135,6 +170,10 @@ export interface PeriodDetail {
   statementsPaid?: StatementPaid[];
   /** The current period only: visits of billed-later items that no invoice covers yet, up to today. */
   unbilled?: Unbilled[];
+  /** Paid-ahead items whose money runs out in this period; on the current period, also any that already ran out. */
+  paidAheadRunningOut?: RunningOut[];
+  /** Money moved out of a bucket to money not in a bucket, dated in this period: listed under Income. */
+  movesOut?: MoveOut[];
 }
 
 /** The statement a card payment that follows its card was sized from. */
@@ -161,6 +200,10 @@ export interface OccurrenceEdit {
   confirmationCode?: string;
   /** An empty number clears it. Only for something paid from a checking account. */
   checkNumber?: string;
+  /** Paid from another account just this once; the item's own account puts it back. */
+  payFromAccountId?: number;
+  /** Doesn't happen this time (left out of the period and its figures); false puts it back. */
+  skipped?: boolean;
 }
 
 /** What one account holds (or owes) at the end of today, and what of that is outside its buckets. */
@@ -196,6 +239,60 @@ export interface AccountTransaction {
   amountCents: number;
   /** Paid by hand and not ticked off yet. */
   unpaid: boolean;
+  /** Interest typed over: what Budget had estimated. `null` for an estimate and for everything else. */
+  estimatedCents: number | null;
+  /** What it came from, to open it and change it; `null` for what Budget works out and for balances entered. */
+  source: TransactionSource | null;
+}
+
+/** Where a line of an account's transactions came from. */
+export interface TransactionSource {
+  type: "entry" | "occurrence" | "paycheck";
+  entryId: number | null;
+  /** The recurring item's or the income source's id. */
+  itemId: number | null;
+  scheduledDate: string | null;
+  /** An occurrence's due date, which its pay period row is found by. */
+  dueDate: string | null;
+  /** The pay period it is listed in. */
+  periodStart: string | null;
+}
+
+/** The lines that are interest Budget works out, which can be typed over when the real figure is known (spec §5.4). */
+/** A card's rewards at a statement close are typed over the same way (spec §5.6). */
+export const TYPED_OVER_KINDS: ReadonlySet<string> = new Set(["interest", "growth", "card_interest", "loan_interest", "card_rewards"]);
+
+/**
+ * Typing over one interest line changes the account's balance from that day on, so everything
+ * that follows the account (its pages, the pay periods, its buckets' share of interest) is asked again.
+ */
+function useRefreshAfterInterest() {
+  const queryClient = useQueryClient();
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+      queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+      queryClient.invalidateQueries({ queryKey: BUCKETS_KEY }),
+    ]);
+}
+
+/** Types over one interest line of an account: the day it is added (for growth, any day of its month) and the real amount. */
+export function useTypeOverInterest(accountId: number) {
+  const refresh = useRefreshAfterInterest();
+  return useMutation({
+    mutationFn: ({ date, amountCents }: { date: string; amountCents: number }) =>
+      api.put<{ done: boolean }>(`/api/accounts/${accountId}/transactions/interest/${date}`, { amountCents }),
+    onSuccess: refresh,
+  });
+}
+
+/** Puts Budget's estimate back on an interest line that was typed over. */
+export function useUseEstimatedInterest(accountId: number) {
+  const refresh = useRefreshAfterInterest();
+  return useMutation({
+    mutationFn: (date: string) => api.delete<{ done: boolean }>(`/api/accounts/${accountId}/transactions/interest/${date}`),
+    onSuccess: refresh,
+  });
 }
 
 /** What moved one account within `from`–`to`, newest first. */
@@ -238,6 +335,31 @@ export function useEditOccurrence() {
       occurrence.invoiceId != null
         ? api.put<unknown>(`/api/items/${occurrence.itemId}/invoices/${occurrence.invoiceId}`, edit)
         : api.put<Occurrence>(`/api/items/${occurrence.itemId}/occurrences/${occurrence.scheduledDate}`, edit),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+    // An item's page lists its coming dates too, and its next one.
+    onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: PAY_KEY }), queryClient.invalidateQueries({ queryKey: ITEMS_KEY })]),
+  });
+}
+
+/** An item's next few dates from today, skipped ones included, each to change just that once on its page. */
+export function useUpcoming(itemId: number) {
+  return useQuery({ queryKey: [...ITEMS_KEY, itemId, "upcoming"], queryFn: () => api.get<Occurrence[]>(`/api/items/${itemId}/upcoming`) });
+}
+
+/** Types over a card's rewards at one statement close: what really came off, never negative. */
+export function useTypeOverRewards(accountId: number) {
+  const refresh = useRefreshAfterInterest();
+  return useMutation({
+    mutationFn: ({ date, amountCents }: { date: string; amountCents: number }) =>
+      api.put<{ done: boolean }>(`/api/accounts/${accountId}/transactions/rewards/${date}`, { amountCents }),
+    onSuccess: refresh,
+  });
+}
+
+/** Puts Budget's estimate back on a card's rewards that were typed over. */
+export function useUseEstimatedRewards(accountId: number) {
+  const refresh = useRefreshAfterInterest();
+  return useMutation({
+    mutationFn: (date: string) => api.delete<{ done: boolean }>(`/api/accounts/${accountId}/transactions/rewards/${date}`),
+    onSuccess: refresh,
   });
 }

@@ -2,7 +2,7 @@ import { Paperclip } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
-import { type Tag, useTags } from "../api/categories";
+import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, REIMBURSEMENT_LABELS, REIMBURSEMENT_STATUSES, type ReimbursementStatus, useEntries, useExpenseYears } from "../api/entries";
 import { useAddItem } from "../components/add/AddItem";
 import { Amount, EstimateKey } from "../components/Amount";
@@ -43,7 +43,11 @@ export function ExpensesPage() {
   const accounts = useAccounts();
   const tags = useTags();
   const { add } = useAddItem();
+  const categories = useCategories();
+  // A category, then tags, narrow the list (Rachel, 2026-10-20: "should have categories as a filter and then tags").
+  const [categoryId, setCategoryId] = useState<number | null>(null);
   const [tagId, setTagId] = useState<number | null>(null);
+  const categoryChoiceId = useId();
   const [standing, setStanding] = useState<Standing>("all");
   const yearId = useId();
   const standingId = useId();
@@ -51,10 +55,18 @@ export function ExpensesPage() {
 
   // Newest first: what was just added is at the top.
   const expenses = (entries.data ?? []).filter((entry) => entry.kind === "money_out").reverse();
-  const usedTags = (tags.data ?? []).filter((tag) => expenses.some((expense) => expense.tagIds.includes(tag.id)));
-  // A tag chosen in one year may not be used in another: then it filters nothing.
+  // A category takes in its sub-categories, as everywhere else.
+  const allCategories = categories.data ?? [];
+  const inCategory = (expense: Entry, id: number) =>
+    expense.categoryId === id || allCategories.some((category) => category.id === expense.categoryId && category.parentId === id);
+  const usedCategories = allCategories.filter((category) => expenses.some((expense) => inCategory(expense, category.id)));
+  // A category chosen in one year may not be used in another: then it filters nothing.
+  const categoryFilter = usedCategories.some((category) => category.id === categoryId) ? categoryId : null;
+  const ofCategory = categoryFilter === null ? expenses : expenses.filter((expense) => inCategory(expense, categoryFilter));
+  // The tags offered are those used in what the category leaves, so a tag never shows an empty list.
+  const usedTags = (tags.data ?? []).filter((tag) => ofCategory.some((expense) => expense.tagIds.includes(tag.id)));
   const tagFilter = usedTags.some((tag) => tag.id === tagId) ? tagId : null;
-  const shown = expenses.filter(
+  const shown = ofCategory.filter(
     (expense) =>
       (tagFilter === null || expense.tagIds.includes(tagFilter)) &&
       (standing === "all" || expense.reimbursement?.status === standing),
@@ -62,7 +74,7 @@ export function ExpensesPage() {
   const totalCents = shown.reduce((sum, expense) => sum + expense.amountCents, 0);
   const owedCents = shown.reduce((sum, expense) => sum + (expense.reimbursement?.owedCents ?? 0), 0);
   const reimbursedCents = shown.reduce((sum, expense) => sum + (expense.reimbursement?.reimbursedCents ?? 0), 0);
-  const filtered = tagFilter !== null || standing !== "all";
+  const filtered = categoryFilter !== null || tagFilter !== null || standing !== "all";
   const needsAccount = accounts.data !== undefined && accounts.data.every((account) => account.archived);
 
   return (
@@ -134,6 +146,26 @@ export function ExpensesPage() {
               {usedTags.length > 0 && <TagFilter tags={usedTags} value={tagFilter} onChange={setTagId} />}
             </div>
             <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-end">
+              {usedCategories.length > 0 && (
+                <div>
+                  <label htmlFor={categoryChoiceId} className={LABEL}>
+                    Category
+                  </label>
+                  <select
+                    id={categoryChoiceId}
+                    value={categoryFilter ?? ""}
+                    onChange={(event) => setCategoryId(event.target.value === "" ? null : Number(event.target.value))}
+                    className={`${INPUT} sm:w-52`}
+                  >
+                    <option value="">Any</option>
+                    {categoryChoices(usedCategories).map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div>
                 <label htmlFor={standingId} className={LABEL}>
                   Reimbursement
@@ -171,7 +203,7 @@ export function ExpensesPage() {
             </div>
           )}
           {expenses.length > 0 && shown.length === 0 && (
-            <p className="pt-4 text-muted">Nothing in {year} matches what is chosen above. Try another tag, or any reimbursement.</p>
+            <p className="pt-4 text-muted">Nothing in {year} matches what is chosen above. Try another category or tag, or any reimbursement.</p>
           )}
 
           {shown.length > 0 && (
@@ -214,6 +246,17 @@ function Figure({ label, cents, children }: { label: string; cents: number; chil
       <p className="text-muted">{children}</p>
     </div>
   );
+}
+
+/** Categories in name order, each sub-category under its parent as "Parent › Sub". */
+function categoryChoices(used: readonly Category[]): { id: number; label: string }[] {
+  const byId = new Map(used.map((category) => [category.id, category]));
+  return used
+    .map((category) => {
+      const parent = category.parentId === null ? undefined : byId.get(category.parentId);
+      return { id: category.id, label: parent ? `${parent.name} › ${category.name}` : category.name };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** The row of tag pills along the top of the list: All, then every tag this year's expenses use. */

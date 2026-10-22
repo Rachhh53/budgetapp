@@ -69,5 +69,6 @@ export const APPLIED_LABELS: Record<StubApply, string> = {
   correct: "Corrected the amounts",
   pay_change: "Recorded a pay change",
   paycheck: "Set that one paycheck",
+  one_off: "Added a one-off paycheck",
   none: "Kept, nothing changed",
 };

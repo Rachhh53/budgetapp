@@ -54,7 +54,12 @@ public final class BucketMoves {
         /** The bill that was saved up for is paid, so the money leaves the bucket with it. */
         SAVE_UP_PAID,
         /** This bucket's share of the account's interest. */
-        INTEREST
+        INTEREST,
+        /**
+         * An amount the user set for the day. Until {@link #settle} it carries that amount; after, the difference
+         * that brings the bucket to it at the end of the day, from everything before it as it is now.
+         */
+        SET
     }
 
     /**
@@ -118,7 +123,9 @@ public final class BucketMoves {
         // What the user entered is taken as entered, whatever its date.
         for (Change change : changes) {
             if (open.containsKey(change.bucketId())) {
-                moves.add(new Move(change.bucketId(), change.date(), change.amountCents(), Kind.MANUAL, change.note(), null));
+                moves.add(change.setToCents() != null
+                        ? new Move(change.bucketId(), change.date(), change.setToCents(), Kind.SET, change.note(), null)
+                        : new Move(change.bucketId(), change.date(), change.amountCents(), Kind.MANUAL, change.note(), null));
             }
         }
         for (Entry entry : entriesWithSplits) {
@@ -165,7 +172,7 @@ public final class BucketMoves {
         savedUpFor.forEach((itemId, due) -> saveUps(itemsById.get(itemId), due, open, periods, moves));
         billedLaterSaveUps(occurrences, visits, open, moves);
 
-        moves.sort(Comparator.comparing(Move::date));
+        moves.sort(IN_ORDER);
         return moves;
     }
 
@@ -181,6 +188,12 @@ public final class BucketMoves {
         Map<Long, Long> held = new HashMap<>();
         List<Move> kept = new ArrayList<>();
         for (Move move : moves) {
+            // An amount set is what the bucket holds from there on.
+            if (move.kind() == Kind.SET) {
+                held.put(move.bucketId(), move.amountCents());
+                kept.add(move);
+                continue;
+            }
             long amount = move.amountCents();
             if (move.kind() == Kind.SPENT && move.itemId() != null) {
                 amount = -Math.min(-amount, Math.max(0, held.getOrDefault(move.bucketId(), 0L)));
@@ -193,6 +206,62 @@ public final class BucketMoves {
             held.merge(move.bucketId(), amount, Long::sum);
         }
         return kept;
+    }
+
+    /** By day, an amount set last: it is what the bucket holds once everything else that day has happened. */
+    static final Comparator<Move> IN_ORDER = Comparator.comparing(Move::date).thenComparing(move -> move.kind() == Kind.SET);
+
+    /**
+     * Turns each amount set into the difference that brings its bucket to it at the end of its day, worked out from
+     * everything before it as it stands now, earlier amounts set included. So entering or moving something earlier
+     * never shifts a day whose amount was set: the difference changes instead. A difference of nothing is left out.
+     *
+     * @param moves earliest first, as {@link #IN_ORDER}
+     */
+    static List<Move> settle(List<Move> moves) {
+        Map<Long, Long> held = new HashMap<>();
+        List<Move> settled = new ArrayList<>();
+        for (Move move : moves) {
+            long before = held.getOrDefault(move.bucketId(), 0L);
+            if (move.kind() != Kind.SET) {
+                settled.add(move);
+                held.put(move.bucketId(), before + move.amountCents());
+                continue;
+            }
+            long difference = move.amountCents() - before;
+            if (difference != 0) {
+                settled.add(new Move(move.bucketId(), move.date(), difference, Kind.SET, move.label(), null));
+            }
+            held.put(move.bucketId(), move.amountCents());
+        }
+        return settled;
+    }
+
+    /**
+     * {@link #settle}d moves with the interest each bucket earned since its last amount set taken back out of the
+     * next one's difference. Interest is shared out after everything else, so without this a bucket earning
+     * interest would end the day above the amount set by what it earned in between.
+     */
+    static List<Move> absorbInterest(List<Move> settled, List<Move> shares) {
+        if (shares.isEmpty() || settled.stream().noneMatch(move -> move.kind() == Kind.SET)) {
+            return settled;
+        }
+        Map<Long, LocalDate> previousSet = new HashMap<>();
+        List<Move> absorbed = new ArrayList<>();
+        for (Move move : settled) {
+            if (move.kind() != Kind.SET) {
+                absorbed.add(move);
+                continue;
+            }
+            LocalDate after = previousSet.getOrDefault(move.bucketId(), LocalDate.MIN);
+            long earned = shares.stream()
+                    .filter(share -> share.bucketId() == move.bucketId() && share.date().isAfter(after) && !share.date().isAfter(move.date()))
+                    .mapToLong(Move::amountCents)
+                    .sum();
+            absorbed.add(new Move(move.bucketId(), move.date(), move.amountCents() - earned, Kind.SET, move.label(), null));
+            previousSet.put(move.bucketId(), move.date());
+        }
+        return absorbed;
     }
 
     /** One recurring move, as an occurrence and the move derived from it both know it. */
@@ -222,6 +291,11 @@ public final class BucketMoves {
         Map<MoveKey, Long> changed = new HashMap<>();
         List<Move> kept = new ArrayList<>();
         for (Move move : moves) {
+            if (move.kind() == Kind.SET) {
+                held.put(move.bucketId(), move.amountCents());
+                kept.add(move);
+                continue;
+            }
             Long goal = goals.get(move.bucketId());
             long amount = move.amountCents();
             if (goal != null && move.kind() == Kind.BUCKET_MOVE && amount > 0) {

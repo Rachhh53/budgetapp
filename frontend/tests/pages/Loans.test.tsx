@@ -78,7 +78,7 @@ const MORTGAGE_BILL: Item = {
   perOccurrenceCents: 198000,
   perYearCents: 2376000,
   next: { scheduledDate: "2026-11-01", dueDate: "2026-11-01", periodStart: "2026-10-15", early: false },
-  history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 198000, perYearCents: 2376000 }],
+  history: [{ versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 198000, perYearCents: 2376000 }],
   paused: false,
   pausedUntil: null,
   fromBucketId: null,

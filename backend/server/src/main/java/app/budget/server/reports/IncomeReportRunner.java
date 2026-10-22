@@ -17,7 +17,7 @@ import app.budget.server.entries.EntriesRepository.Entry;
 import app.budget.server.entries.EntryKind;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRepository.Deduction;
-import app.budget.server.income.IncomeRepository.Pay;
+import app.budget.server.stubs.PayStubsRepository.Applied;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.income.PayCalendar.Contribution;
@@ -169,7 +169,6 @@ public final class IncomeReportRunner {
         LocalDate today = pay.today();
         Dates dates = definition.dates(today);
         Set<IncomeInclude> include = Set.copyOf(definition.incomeInclude());
-        Map<Long, Source> sourceById = sources.stream().collect(Collectors.toMap(Source::id, source -> source));
 
         List<Row> rows = new ArrayList<>();
         if (include.contains(IncomeInclude.PAYCHECKS) || include.contains(IncomeInclude.MATCH)) {
@@ -178,13 +177,13 @@ public final class IncomeReportRunner {
             for (Paycheck paycheck : paychecks) {
                 boolean estimate = paycheck.estimate() || paycheck.payDate().isAfter(today);
                 if (include.contains(IncomeInclude.PAYCHECKS)) {
-                    rows.add(paycheckRow(paycheck, sourceById.get(paycheck.incomeSourceId()), stubOf.get(paycheck), estimate));
+                    rows.add(paycheckRow(paycheck, stubOf.get(paycheck), estimate));
                 }
                 if (include.contains(IncomeInclude.MATCH)) {
                     for (Contribution contribution : paycheck.contributions()) {
                         if (PayCalendar.EMPLOYER_MATCH.equals(contribution.kind())) {
                             rows.add(new Row(
-                                    "match", paycheck.payDate(), "Employer match · " + paycheck.sourceName(), paycheck.incomeSourceId(),
+                                    "match", paycheck.payDate(), "Employer match · " + paycheck.label(), paycheck.incomeSourceId(),
                                     contribution.toAccountId(), contribution.amountCents(), null, null, null, false,
                                     paycheck.payDate().isAfter(today)));
                         }
@@ -209,10 +208,10 @@ public final class IncomeReportRunner {
                 }
                 for (Ledger.Transaction transaction : ledger.transactions(account, dates.from(), dates.to())) {
                     if (INTEREST_KIND.equals(transaction.kind()) && transaction.amountCents() > 0) {
-                        // Interest is worked out from the balance and the rate; the bank's own figure replaces it when a balance is entered.
+                        // Interest is worked out from the balance and the rate, an estimate, unless the amount was typed over.
                         rows.add(new Row(
                                 "interest", transaction.date(), "Interest · " + account.name(), null, account.id(),
-                                transaction.amountCents(), null, null, null, false, true));
+                                transaction.amountCents(), null, null, null, false, transaction.estimatedCents() == null));
                     }
                 }
             }
@@ -249,9 +248,12 @@ public final class IncomeReportRunner {
                 result.paychecksWithoutGross());
     }
 
-    /** A paycheck with what was earned and what came out: the stub's figures when it has one, the source's own otherwise. */
-    private static Row paycheckRow(Paycheck paycheck, Source source, Stub stub, boolean estimate) {
-        String description = paycheck.sourceName() + " paycheck";
+    /**
+     * A paycheck with what was earned and what came out: the stub's figures when it has one, its
+     * own otherwise (the source's in force that day, or a one-off paycheck's own).
+     */
+    private static Row paycheckRow(Paycheck paycheck, Stub stub, boolean estimate) {
+        String description = paycheck.scheduled() ? paycheck.sourceName() + " paycheck" : paycheck.label();
         if (stub != null) {
             Totals totals = Totals.of(stub.lines().stream().map(StubLine::line).toList());
             boolean hasEarnings = stub.lines().stream().anyMatch(line -> line.line().section() == PayStub.Section.EARNINGS);
@@ -263,14 +265,13 @@ public final class IncomeReportRunner {
                     hasEarnings ? (Long) totals.preTax().plus(totals.afterTax()).cents() : null,
                     true, estimate);
         }
-        Pay terms = source == null ? null : source.termsOn(paycheck.scheduledDate()).pay();
-        Long gross = terms == null ? null : terms.grossCents();
+        Long gross = paycheck.grossCents();
         if (gross == null) {
             return new Row(
                     "paycheck", paycheck.payDate(), description, paycheck.incomeSourceId(), paycheck.depositAccountId(),
                     paycheck.netCents(), null, null, null, false, estimate);
         }
-        long deductions = terms.deductions().stream().mapToLong(Deduction::amountCents).sum();
+        long deductions = paycheck.deductions().stream().mapToLong(Deduction::amountCents).sum();
         // Whatever is not take-home and not a deduction went to taxes; never less than nothing, when the figures do not agree.
         long taxes = Math.max(0, gross - deductions - paycheck.netCents());
         return new Row(
@@ -278,16 +279,22 @@ public final class IncomeReportRunner {
                 paycheck.netCents(), gross, taxes, deductions, false, estimate);
     }
 
-    /** The saved stub each paycheck has, if any: the one dated nearest it, within a few days. */
+    /**
+     * The saved stub each regular paycheck has, if any: the one dated nearest it, within a few days.
+     * A stub saved as a one-off paycheck (a bonus) is that paycheck's, whose figures came from it, so
+     * it is never taken for the regular paycheck beside it; and a one-off has its own figures.
+     */
     private Map<Paycheck, Stub> stubsFor(List<Paycheck> paychecks, List<Source> sources) {
         Map<Paycheck, Stub> found = new HashMap<>();
         for (Source source : sources) {
-            List<Paycheck> own = paychecks.stream().filter(paycheck -> paycheck.incomeSourceId() == source.id()).toList();
+            List<Paycheck> own = paychecks.stream()
+                    .filter(paycheck -> paycheck.incomeSourceId() == source.id() && paycheck.scheduled())
+                    .toList();
             if (own.isEmpty()) {
                 continue;
             }
             for (Stub stub : stubs.ofSource(source.id())) {
-                if (stub.status() != Status.SAVED || stub.payDate() == null) {
+                if (stub.status() != Status.SAVED || stub.payDate() == null || stub.applied() == Applied.ONE_OFF) {
                     continue;
                 }
                 own.stream()

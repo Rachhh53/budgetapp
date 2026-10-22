@@ -1,9 +1,9 @@
 import { Wallet } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import { type Account, useSaveBalance } from "../../api/accounts";
+import { type Account, useDeleteBalance, useSaveBalance } from "../../api/accounts";
 import { todayIso } from "../../lib/dates";
 import { useDefaultDate } from "../../api/settings";
-import { parseDollars } from "../../lib/money";
+import { centsToInput, parseDollars } from "../../lib/money";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { DefaultDateHint } from "../settings/DefaultDateHint";
@@ -12,14 +12,26 @@ import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 /**
  * "The real number is X": records the balance an account actually had on a day.
  * Entering the same day again replaces what was there, which is how a typo is fixed.
+ *
+ * @param editing a balance already entered, to change: moved to another day, the one on its old day goes
  */
-export function BalanceForm({ account, onClose }: { account: Account; onClose: () => void }) {
+export function BalanceForm({
+  account,
+  editing,
+  onClose,
+}: {
+  account: Account;
+  editing?: { entryId: number; date: string; amountCents: number; note: string | null };
+  onClose: () => void;
+}) {
   const id = useId();
   const save = useSaveBalance(account.id);
+  const remove = useDeleteBalance(account.id);
   const today = todayIso();
-  const [date, setDate] = useState(useDefaultDate().date);
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
+  const defaultDate = useDefaultDate().date;
+  const [date, setDate] = useState(editing?.date ?? defaultDate);
+  const [amount, setAmount] = useState(editing ? centsToInput(editing.amountCents) : "");
+  const [note, setNote] = useState(editing?.note ?? "");
   const [amountError, setAmountError] = useState<string>();
 
   const owed = account.type === "credit_card" || account.type === "loan";
@@ -32,11 +44,22 @@ export function BalanceForm({ account, onClose }: { account: Account; onClose: (
       return;
     }
     setAmountError(undefined);
-    save.mutate({ date, amountCents, note: note.trim() || null }, { onSuccess: onClose });
+    save.mutate(
+      { date, amountCents, note: note.trim() || null },
+      {
+        onSuccess: () => {
+          if (editing && editing.date !== date) {
+            remove.mutate(editing.entryId, { onSuccess: onClose });
+          } else {
+            onClose();
+          }
+        },
+      },
+    );
   };
 
   return (
-    <Modal title={`Update balance — ${account.name}`} icon={Wallet} tone={account.color} onClose={onClose}>
+    <Modal title={`${editing ? "Change balance" : "Update balance"} — ${account.name}`} icon={Wallet} tone={account.color} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <MoneyField
           label={owed ? "Amount owed" : "Balance"}
@@ -77,9 +100,9 @@ export function BalanceForm({ account, onClose }: { account: Account; onClose: (
           />
         </div>
 
-        {save.isError && (
+        {(save.error ?? remove.error) && (
           <p role="alert" className="text-danger">
-            {save.error.message}
+            {(save.error ?? remove.error)?.message}
           </p>
         )}
 

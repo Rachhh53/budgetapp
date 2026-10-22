@@ -9,11 +9,14 @@ import { Card } from "../components/Card";
 import { ItemForm } from "../components/items/ItemForm";
 import { describeItemSchedule, describeKind, describeLandsIn, KIND_PLURALS } from "../components/items/labels";
 import { BUTTON_PRIMARY, INPUT, PAGE_TITLE } from "../components/ui";
-import { formatDay } from "../lib/dates";
+import { formatDay, todayIso } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { HelpLink } from "../components/help/HelpLink";
 
-type Filter = "all" | ItemKind | "archived";
+type Filter = "all" | ItemKind | "ended" | "archived";
+
+/** Every kind but bucket moves, which live on their bucket's account. */
+const LISTED_KINDS = ITEM_KINDS.filter((kind) => kind !== "bucket_move");
 
 /** The columns the list can be put in order by, in the order they appear. */
 const SORTS = [
@@ -58,9 +61,16 @@ export function RecurringItemsPage() {
   // The same header again turns the order round; a different one starts from the top.
   const sortBy = (key: SortKey) => setSort((current) => ({ key, descending: current.key === key ? !current.descending : false }));
 
-  const all = items.data ?? [];
-  // Archived items are out of the way until asked for: they have their own chip, and count nowhere else.
-  const active = all.filter((item) => !item.archived);
+  // A bucket move is kept inside its account and changed only there (Rachel, 2026-10-19: "bucket maintenance does not
+  // belong in recurring items"). A transfer into a bucket stays: it moves money between accounts.
+  const all = (items.data ?? []).filter((item) => item.kind !== "bucket_move");
+  // Archived items are out of the way until asked for: they have their own chip, and count nowhere else. So are
+  // items whose last date has gone by (Rachel, 2026-10-20: "when it ends it should be archived - maybe we need a new
+  // filter for that"): they are under Ended, kept as they are, without having to be archived by hand.
+  const today = todayIso();
+  const hasEnded = (item: Item) => item.schedule.endDate != null && item.schedule.endDate < today;
+  const active = all.filter((item) => !item.archived && !hasEnded(item));
+  const ended = all.filter((item) => !item.archived && hasEnded(item));
   const archived = all.filter((item) => item.archived);
   const allAccounts = accounts.data ?? [];
   const allCategories = categories.data ?? [];
@@ -70,8 +80,8 @@ export function RecurringItemsPage() {
   const categoryName = (id: number | null) => allCategories.find((category) => category.id === id)?.name ?? "";
 
   const typed = search.trim().toLowerCase();
-  const shown = (filter === "archived" ? archived : active)
-    .filter((item) => filter === "all" || filter === "archived" || item.kind === filter)
+  const shown = (filter === "archived" ? archived : filter === "ended" ? ended : active)
+    .filter((item) => filter === "all" || filter === "archived" || filter === "ended" || item.kind === filter)
     .filter(
       (item) =>
         typed === "" ||
@@ -168,7 +178,7 @@ export function RecurringItemsPage() {
           <div className="mb-4 flex flex-col gap-3">
             <div role="group" aria-label="Show" className="flex flex-wrap gap-2">
               <FilterChip label="All" count={active.length} pressed={filter === "all"} onPress={() => setFilter("all")} />
-              {ITEM_KINDS.map((kind) => (
+              {LISTED_KINDS.map((kind) => (
                 <FilterChip
                   key={kind}
                   label={KIND_PLURALS[kind]}
@@ -178,6 +188,9 @@ export function RecurringItemsPage() {
                 />
               ))}
               {/* Only when there is something in it, or while it is the one chosen (the last one may just have been restored). */}
+              {(ended.length > 0 || filter === "ended") && (
+                <FilterChip label="Ended" count={ended.length} pressed={filter === "ended"} onPress={() => setFilter("ended")} />
+              )}
               {(archived.length > 0 || filter === "archived") && (
                 <FilterChip label="Archived" count={archived.length} pressed={filter === "archived"} onPress={() => setFilter("archived")} />
               )}
@@ -235,10 +248,17 @@ export function RecurringItemsPage() {
                   <p className="font-medium">Nothing is archived.</p>
                   <p className="mt-1 text-muted">Choose All to see your items.</p>
                 </>
+              ) : typed === "" && filter === "ended" ? (
+                <>
+                  <p className="font-medium">Nothing has ended.</p>
+                  <p className="mt-1 text-muted">An item whose last date has gone by shows here. Choose All to see your items.</p>
+                </>
               ) : typed === "" && filter === "all" ? (
                 <>
-                  <p className="font-medium">Everything here is archived.</p>
-                  <p className="mt-1 text-muted">Choose Archived to see those items, or add a new one.</p>
+                  <p className="font-medium">{ended.length > 0 ? "Everything here has ended or is archived." : "Everything here is archived."}</p>
+                  <p className="mt-1 text-muted">
+                    {ended.length > 0 ? "Choose Ended or Archived to see those items, or add a new one." : "Choose Archived to see those items, or add a new one."}
+                  </p>
                 </>
               ) : (
                 <>

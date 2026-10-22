@@ -1,4 +1,5 @@
-import { NavLink } from "react-router";
+import { NavLink, useLocation } from "react-router";
+import { returnTo, sectionOf } from "../lib/sectionMemory";
 import { NAV_ITEMS } from "../nav";
 import { LockNowButton } from "./security/LockNow";
 
@@ -6,6 +7,7 @@ export const PRIVACY_NOTE = "Data stored only on this PC";
 
 /** The desktop navigation: always-dark column on the left, shown from the `md` breakpoint up. */
 export function Sidebar() {
+  const { pathname } = useLocation();
   return (
     <aside className="hidden w-60 shrink-0 flex-col bg-sidebar text-sidebar-ink md:flex">
       <p className="px-6 pt-6 pb-4 text-xl font-bold text-white">Budget</p>
@@ -14,14 +16,13 @@ export function Sidebar() {
         <ul className="space-y-1">
           {NAV_ITEMS.map(({ path, label, icon: Icon }) => (
             <li key={path}>
+              {/* Back to where this screen was left a few minutes ago, if it was (lib/sectionMemory). */}
               <NavLink
-                to={path}
-                end={path === "/"}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2.5 text-[0.95rem] ${
-                    isActive ? "bg-sidebar-active font-semibold text-white" : "hover:bg-sidebar-active/60"
-                  }`
-                }
+                to={returnTo(path, pathname)}
+                aria-current={sectionOf(pathname) === path ? "page" : undefined}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-[0.95rem] ${
+                  sectionOf(pathname) === path ? "bg-sidebar-active font-semibold text-white" : "hover:bg-sidebar-active/60"
+                }`}
               >
                 <Icon aria-hidden className="size-4 shrink-0" />
                 {label}

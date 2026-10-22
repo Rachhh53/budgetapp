@@ -39,12 +39,16 @@ import app.budget.server.files.SavedCopies;
 import app.budget.server.files.StoredFiles;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRoutes;
+import app.budget.server.income.OneOffPaychecksRepository;
+import app.budget.server.income.OneOffPaychecksRoutes;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.items.ItemCalendar;
 import app.budget.server.items.InvoicesRepository;
 import app.budget.server.items.InvoicesRoutes;
 import app.budget.server.items.ItemsRepository;
 import app.budget.server.items.ItemsRoutes;
+import app.budget.server.items.PaidAheadRoutes;
+import app.budget.server.items.PrepaymentsRepository;
 import app.budget.server.ledger.Ledger;
 import app.budget.server.ledger.LedgerRoutes;
 import app.budget.server.loans.LoansRepository;
@@ -62,6 +66,9 @@ import app.budget.server.plans.PlansRoutes;
 import app.budget.server.planner.PlannerRepository;
 import app.budget.server.planner.PlannerRoutes;
 import app.budget.server.planner.PlannerService;
+import app.budget.server.retirement.RetirementRepository;
+import app.budget.server.retirement.RetirementRoutes;
+import app.budget.server.retirement.RetirementService;
 import app.budget.server.search.SearchRoutes;
 import app.budget.server.reports.AnnualCostsRoutes;
 import app.budget.server.reports.AnnualCostsRunner;
@@ -164,7 +171,8 @@ public final class BudgetServer {
         AccountsRepository accounts = new AccountsRepository(database.jdbi(), clock);
         HolidaysRepository holidays = new HolidaysRepository(database.jdbi());
         IncomeRepository income = new IncomeRepository(database.jdbi(), clock);
-        PayCalendar payCalendar = new PayCalendar(income, holidays, settings, clock);
+        OneOffPaychecksRepository oneOffs = new OneOffPaychecksRepository(database.jdbi(), clock);
+        PayCalendar payCalendar = new PayCalendar(income, oneOffs, holidays, settings, clock);
         CategoriesRepository categories = new CategoriesRepository(database.jdbi(), clock);
         TagsRepository tags = new TagsRepository(database.jdbi(), clock);
         ItemsRepository items = new ItemsRepository(database.jdbi(), clock);
@@ -172,7 +180,8 @@ public final class BudgetServer {
         BucketsRepository buckets = new BucketsRepository(database.jdbi(), clock);
         InterestRepository interest = new InterestRepository(database.jdbi());
         InvoicesRepository invoices = new InvoicesRepository(database.jdbi(), clock);
-        ItemCalendar itemCalendar = new ItemCalendar(items, payCalendar, invoices);
+        PrepaymentsRepository prepayments = new PrepaymentsRepository(database.jdbi());
+        ItemCalendar itemCalendar = new ItemCalendar(items, payCalendar, invoices, prepayments);
         CardsRepository cards = new CardsRepository(database.jdbi());
         LoansRepository loans = new LoansRepository(database.jdbi());
         Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest, cards, loans);
@@ -192,11 +201,14 @@ public final class BudgetServer {
         plans = new PlanService(
                 database.jdbi(), new PlansRepository(database.jdbi(), clock), items, itemCalendar, payCalendar, income, accounts, settings);
         DashboardService dashboard = new DashboardService(
-                database.jdbi(), ledger, netWorth, payCalendar, accounts, categories, buckets, income, payStubs, settings, reportRunner,
+                database.jdbi(), ledger, netWorth, payCalendar, accounts, categories, tags, buckets, income, payStubs, settings, reportRunner,
                 annualCosts, plans);
         PlannerRepository plannerHidden = new PlannerRepository(database.jdbi());
         PlannerService planner = new PlannerService(
                 database.jdbi(), plannerHidden, accounts, interest, loans, cards, income, items, ledger, payCalendar);
+        RetirementRepository retirementPlans = new RetirementRepository(database.jdbi(), clock);
+        RetirementService retirement = new RetirementService(
+                database.jdbi(), retirementPlans, accounts, income, ledger, payCalendar);
         changes = new ChangeRoutes(new ChangeLog(database.jdbi(), clock), SettingKey.thisPcOnlyKeys());
 
         app = Javalin.create(javalin -> {
@@ -230,21 +242,23 @@ public final class BudgetServer {
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
             new SettingsRoutes(settings, clock).register(routes);
             new AccountsRoutes(accounts, interest, buckets, ledger, clock).register(routes);
-            new BucketsRoutes(buckets, accounts, ledger, clock).register(routes);
+            new BucketsRoutes(buckets, accounts, ledger, clock, categories, tags, entries).register(routes);
             new HolidaysRoutes(holidays, clock).register(routes);
             new IncomeRoutes(income, accounts, payCalendar, clock).register(routes);
+            new OneOffPaychecksRoutes(income, oneOffs, accounts).register(routes);
             new CategoriesRoutes(categories, tags, items, itemCalendar, payCalendar).register(routes);
             new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags, buckets, ledger, cards).register(routes);
             new InvoicesRoutes(invoices, items, itemCalendar, accounts, payCalendar).register(routes);
+            new PaidAheadRoutes(items, itemCalendar, entries, prepayments, accounts, payCalendar).register(routes);
             new EntriesRoutes(entries, accounts, categories, tags, buckets, ledger, clock).register(routes);
-            new LedgerRoutes(ledger, payCalendar, accounts).register(routes);
+            new LedgerRoutes(ledger, payCalendar, accounts, interest, cards).register(routes);
             new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);
             new LoansRoutes(loans, accounts, interest, ledger, payCalendar, items).register(routes);
             SavedCopies savedCopies = new SavedCopies(config.downloadsDir());
             StoredFiles storedFiles = new StoredFiles(fileStore, savedCopies);
             new AttachmentsRoutes(attachments, storedFiles, entries, items, itemCalendar, cards, accounts, clock).register(routes);
-            new PayStubsRoutes(payStubs, storedFiles, income, payCalendar, accounts, clock)
+            new PayStubsRoutes(payStubs, storedFiles, income, oneOffs, payCalendar, accounts, clock)
                     .register(routes);
             new ReportsRoutes(reports, reportRunner, incomeReportRunner, projectedRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
                     .register(routes);
@@ -252,6 +266,7 @@ public final class BudgetServer {
             new DashboardRoutes(dashboard).register(routes);
             new PlansRoutes(plans, items).register(routes);
             new PlannerRoutes(planner, plannerHidden, accounts).register(routes);
+            new RetirementRoutes(retirement, retirementPlans, accounts, payCalendar).register(routes);
             new SearchRoutes(entries, items, itemCalendar, payCalendar).register(routes);
             // Erasing or restoring never leaves the app open to the network: phone access is turned
             // off afterwards, even when the restored backup had it on, and has to be turned on again here.

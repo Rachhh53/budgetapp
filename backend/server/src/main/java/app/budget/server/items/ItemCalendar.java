@@ -3,9 +3,11 @@ package app.budget.server.items;
 import app.budget.engine.Money;
 import app.budget.engine.items.AnnualAmount;
 import app.budget.engine.items.OccurrencePlanner;
+import app.budget.engine.items.PaidAhead;
 import app.budget.engine.items.OccurrencePlanner.Planned;
 import app.budget.engine.items.PeriodAssigner;
 import app.budget.engine.items.Placement;
+import app.budget.engine.items.UsageBill;
 import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.server.income.PayCalendar;
@@ -15,13 +17,19 @@ import app.budget.server.items.ItemsRepository.Override;
 import app.budget.server.items.ItemsRepository.Pause;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.items.ItemsRepository.Version;
+import java.math.BigInteger;
 import java.time.LocalDate;
+import java.time.Month;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -44,11 +52,13 @@ public final class ItemCalendar {
     private final ItemsRepository items;
     private final PayCalendar pay;
     private final InvoicesRepository invoices;
+    private final PrepaymentsRepository prepayments;
 
-    public ItemCalendar(ItemsRepository items, PayCalendar pay, InvoicesRepository invoices) {
+    public ItemCalendar(ItemsRepository items, PayCalendar pay, InvoicesRepository invoices, PrepaymentsRepository prepayments) {
         this.items = items;
         this.pay = pay;
         this.invoices = invoices;
+        this.prepayments = prepayments;
     }
 
     /**
@@ -67,7 +77,10 @@ public final class ItemCalendar {
      * @param checkNumber    the check this one was paid with; {@code null} when none was written
      * @param invoiceId      an invoice for a billed-later item's visits, standing in for them as one bill to pay (spec §4.6);
      *                       {@code null} for anything its schedule names
-     * @param coversThrough  an invoice: the last visit it pays for; {@code null} otherwise
+     * @param coversThrough  an invoice: the last visit it pays for; a planned pack: the last session it would cover;
+     *                       {@code null} otherwise
+     * @param plannedPack    the next pack of something paid ahead as a pack, planned by Budget on the first session
+     *                       nothing paid covers (spec §4.6). It is paid by recording the payment, never edited.
      */
     public record Occurrence(
             long itemId,
@@ -96,7 +109,53 @@ public final class ItemCalendar {
             Long fromBucketId,
             String checkNumber,
             Long invoiceId,
-            LocalDate coversThrough) {
+            LocalDate coversThrough,
+            boolean plannedPack) {
+
+        /** Anything but a planned pack. */
+        public Occurrence(
+                long itemId,
+                String name,
+                ItemKind kind,
+                LocalDate scheduledDate,
+                LocalDate dueDate,
+                LocalDate periodStart,
+                boolean early,
+                LocalDate payBy,
+                long amountCents,
+                boolean estimate,
+                Long projectedCents,
+                boolean autopay,
+                Placement placement,
+                Long categoryId,
+                long payFromAccountId,
+                Long payToAccountId,
+                boolean paid,
+                LocalDate paidDate,
+                String confirmationCode,
+                String note,
+                boolean skipped,
+                Long bucketId,
+                Long saveUpBucketId,
+                Long fromBucketId,
+                String checkNumber,
+                Long invoiceId,
+                LocalDate coversThrough) {
+            this(itemId, name, kind, scheduledDate, dueDate, periodStart, early, payBy, amountCents, estimate, projectedCents,
+                    autopay, placement, categoryId, payFromAccountId, payToAccountId, paid, paidDate, confirmationCode, note,
+                    skipped, bucketId, saveUpBucketId, fromBucketId, checkNumber, invoiceId, coversThrough, false);
+        }
+
+        /**
+         * A session as the next pack, due on it: the pack's price, untouched by anything typed over the
+         * session, through the last session it would cover.
+         */
+        Occurrence asPack(long priceCents, LocalDate lastCovered) {
+            return new Occurrence(
+                    itemId, name, ItemKind.BILL, scheduledDate, dueDate, periodStart, early, payBy, priceCents, false, null,
+                    false, placement, categoryId, payFromAccountId, null, false, null, null, null, false, null, null, fromBucketId,
+                    null, null, lastCovered, true);
+        }
 
         /** This occurrence at another amount: for a bucket move that only has room for part of itself. */
         public Occurrence withAmount(long cents) {
@@ -129,10 +188,13 @@ public final class ItemCalendar {
     /**
      * Occurrences together with the pay periods they were placed in.
      *
-     * @param visits what billed-later items' schedules name (spec §4.6): they move no money, and are
-     *               not among {@code occurrences}, where their invoices are instead
+     * @param visits   what billed-later items' schedules name (spec §4.6): they move no money, and are
+     *                 not among {@code occurrences}, where their invoices are instead
+     * @param sessions what paid-ahead items' schedules name (spec §4.6): they move no money either, but
+     *                 use up what was paid ahead, which was a one-off entry
      */
-    public record Expansion(List<PayPeriod> periods, List<Occurrence> occurrences, List<Occurrence> visits) {}
+    public record Expansion(
+            List<PayPeriod> periods, List<Occurrence> occurrences, List<Occurrence> visits, List<Occurrence> sessions) {}
 
     /**
      * What one occurrence of this version costs and what that adds up to over a year.
@@ -151,12 +213,15 @@ public final class ItemCalendar {
 
     /**
      * The occurrence of {@code item} that its schedule names on {@code scheduledDate}, if there is one:
-     * a visit, for something billed later. An invoice is not among them; it is changed as an invoice.
+     * a visit, for something billed later, or a session, for something paid ahead. An invoice is not
+     * among them; it is changed as an invoice.
      */
     public Optional<Occurrence> find(Item item, LocalDate scheduledDate) {
         Expansion expansion = expand(List.of(item), scheduledDate, scheduledDate);
-        return Stream.concat(expansion.occurrences().stream(), expansion.visits().stream())
-                .filter(occurrence -> occurrence.invoiceId() == null && occurrence.scheduledDate().equals(scheduledDate))
+        return Stream.of(expansion.occurrences(), expansion.visits(), expansion.sessions())
+                .flatMap(List::stream)
+                // A planned pack shares its first session's date, but is paid by recording the payment, never edited.
+                .filter(occurrence -> occurrence.invoiceId() == null && !occurrence.plannedPack() && occurrence.scheduledDate().equals(scheduledDate))
                 .findFirst();
     }
 
@@ -166,7 +231,7 @@ public final class ItemCalendar {
      */
     public Optional<Occurrence> findPaid(Item item, LocalDate scheduledDate) {
         return expand(List.of(item), scheduledDate, scheduledDate).occurrences().stream()
-                .filter(occurrence -> occurrence.scheduledDate().equals(scheduledDate))
+                .filter(occurrence -> !occurrence.plannedPack() && occurrence.scheduledDate().equals(scheduledDate))
                 .findFirst();
     }
 
@@ -183,6 +248,20 @@ public final class ItemCalendar {
         return next;
     }
 
+    /**
+     * {@code item}'s next {@code count} dates from today on, within the coming year, skipped ones included so
+     * they can be put back (Rachel, 2026-10-20: "allow me to change upcoming amounts in the recurring screen").
+     * What its schedule names that moves no money (a visit billed later, a session paid ahead) isn't among them.
+     */
+    public List<Occurrence> upcoming(Item item, int count) {
+        LocalDate today = pay.today();
+        return expand(List.of(item), today, today.plusMonths(NEXT_WITHIN_MONTHS)).occurrences().stream()
+                .filter(occurrence -> occurrence.itemId() == item.id() && !occurrence.dueDate().isBefore(today))
+                .sorted(Comparator.comparing(Occurrence::dueDate))
+                .limit(count)
+                .toList();
+    }
+
     public Amounts amounts(Terms terms) {
         return amounts(terms, pay.payRule().orElse(null));
     }
@@ -190,6 +269,20 @@ public final class ItemCalendar {
     private Amounts amounts(Terms terms, ScheduleRule payRule) {
         AnnualAmount.PerYear perYear = AnnualAmount.perYear(terms.schedule(), payRule, pay.today().getYear());
         Money amount = Money.ofCents(terms.amountCents());
+        if (terms.billedByUse()) {
+            // Billed by use: a whole month of uses, and that for each month it can happen in.
+            int year = pay.today().getYear();
+            int months = (int) Arrays.stream(Month.values()).filter(month -> terms.schedule().runsIn(LocalDate.of(year, month, 1))).count();
+            return new Amounts(
+                    UsageBill.typicalMonth(amount, terms.usage()).cents(),
+                    UsageBill.yearly(amount, terms.usage(), months).cents());
+        }
+        Optional<PaidAhead.Pack> pack = terms.pack();
+        if (pack.isPresent()) {
+            // A session of a pack costs its share of the price: $1,275 for 20 is $63.75 a session.
+            Money session = AnnualAmount.perOccurrence(amount, new AnnualAmount.PerYear(pack.get().sessions(), 1));
+            return new Amounts(session.cents(), AnnualAmount.yearly(session, perYear).cents());
+        }
         return terms.amountMode() == AmountMode.ANNUAL
                 ? new Amounts(AnnualAmount.perOccurrence(amount, perYear).cents(), amount.cents())
                 : new Amounts(amount.cents(), AnnualAmount.yearly(amount, perYear).cents());
@@ -197,6 +290,176 @@ public final class ItemCalendar {
 
     /** As {@link #expand(LocalDate, LocalDate)}, for just these items (archived ones included, if given). */
     public Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
+        Expansion plain = expandSchedules(chosen, from, to);
+        List<Item> packs = chosen.stream().filter(item -> item.versions().stream().anyMatch(version -> version.terms().pack().isPresent())).toList();
+        if (packs.isEmpty()) {
+            return plain;
+        }
+        // The next packs of anything paid ahead as a pack are bills like any other, in the range asked for.
+        LocalDate lo = from.minusMonths(MARGIN_MONTHS);
+        LocalDate hi = to.plusMonths(MARGIN_MONTHS);
+        List<Occurrence> occurrences = new ArrayList<>(plain.occurrences());
+        for (Item item : packs) {
+            plannedPacks(item).stream()
+                    .filter(pack -> !pack.dueDate().isBefore(lo) && !pack.dueDate().isAfter(hi))
+                    .forEach(occurrences::add);
+        }
+        occurrences.sort(Comparator.comparing(Occurrence::payBy).thenComparing(Occurrence::name));
+        return new Expansion(plain.periods(), occurrences, plain.visits(), plain.sessions());
+    }
+
+    /**
+     * A pack still to be bought.
+     *
+     * @param planned     the day Budget plans it on, which is also what a move of it is kept under
+     * @param lastCovered the last session it would cover; {@code null} on a pack schedule, where it isn't worked out
+     */
+    private record PackDue(LocalDate planned, LocalDate lastCovered, long priceCents) {}
+
+    /**
+     * The packs still to be bought for {@code item}, paid ahead as a pack (spec §4.6), as bills placed in
+     * their pay periods, each on the day it was moved to if it was (Rachel, 2026-10-20: "the option to just
+     * change the date"). As far ahead as the look-ahead goes.
+     */
+    public List<Occurrence> plannedPacks(Item item) {
+        List<PackDue> due = packsDue(item);
+        if (due.isEmpty()) {
+            return List.of();
+        }
+        Map<LocalDate, LocalDate> moves = items.packMoves(item.id());
+        List<LocalDate> days = due.stream().map(pack -> moves.getOrDefault(pack.planned(), pack.planned())).toList();
+        LocalDate lo = Collections.min(days).minusMonths(MARGIN_MONTHS);
+        LocalDate hi = Collections.max(days).plusMonths(MARGIN_MONTHS);
+        PeriodAssigner assigner = new PeriodAssigner(pay.payPeriods(lo, hi));
+        ScheduleRule payRule = pay.payRule().orElse(null);
+        List<Occurrence> planned = new ArrayList<>();
+        for (int i = 0; i < due.size(); i++) {
+            PackDue pack = due.get(i);
+            Planned<Terms> on = new Planned<>(pack.planned(), days.get(i), null, planned(item.versionOn(pack.planned())));
+            planned.add(occurrence(item, on, Override.untouched(item.id(), pack.planned()), assigner, payRule, null, null)
+                    .asPack(pack.priceCents(), pack.lastCovered()));
+        }
+        planned.sort(Comparator.comparing(Occurrence::dueDate));
+        return planned;
+    }
+
+    /** When the packs are due: on the pack's own schedule when it has one today, otherwise as the sessions use them up. */
+    private List<PackDue> packsDue(Item item) {
+        LocalDate today = pay.today();
+        Terms terms = item.versionOn(today).terms();
+        return terms.pack().isPresent() && terms.packSchedule() != null ? scheduledPacks(item, terms) : packsAsUsed(item);
+    }
+
+    /**
+     * Each pack due on the first session that what was paid so far, and the packs before it, do not cover,
+     * at the price in force that day (Rachel, 2026-10-19: "I pay 1275 for a 20 session pack… Yes, plan it").
+     * Skipped sessions use nothing, so they push the next pack later.
+     */
+    private List<PackDue> packsAsUsed(Item item) {
+        List<PackDue> planned = new ArrayList<>();
+        Money paid = paidFor(item);
+        List<Occurrence> remaining = activeSessions(item);
+        // The price and size can change from a version on, so each pack is worked out from the one in force on its day.
+        while (!remaining.isEmpty()) {
+            Optional<PaidAhead.Pack> pack = item.versionOn(remaining.getFirst().scheduledDate()).terms().pack();
+            if (pack.isEmpty()) {
+                break;
+            }
+            List<LocalDate> days = remaining.stream().map(Occurrence::dueDate).toList();
+            List<LocalDate> due = PaidAhead.nextPacks(paid, days, pack.get());
+            if (due.isEmpty()) {
+                break;
+            }
+            int at = days.indexOf(due.getFirst());
+            int last = Math.min(at + pack.get().sessions(), remaining.size()) - 1;
+            planned.add(new PackDue(remaining.get(at).dueDate(), remaining.get(last).dueDate(), pack.get().price().cents()));
+            remaining = remaining.subList(last + 1, remaining.size());
+            paid = Money.ZERO;
+        }
+        return planned;
+    }
+
+    /**
+     * Each pack due on the pack's own schedule (Rachel, 2026-10-20: every 10 weeks, say). The schedule
+     * counts from when it was set: each payment recorded since then pays the next date on it, early or late,
+     * so what is left planned are the dates after those.
+     */
+    private List<PackDue> scheduledPacks(Item item, Terms terms) {
+        LocalDate setOn = packScheduleSetOn(item, terms.packSchedule());
+        ScheduleRule rule = terms.packSchedule();
+        LocalDate from = rule.startDate().isAfter(setOn) ? rule.startDate() : setOn;
+        LocalDate to = pay.horizonEnd();
+        if (from.isAfter(to)) {
+            return List.of();
+        }
+        long paidSince = prepayments.forItem(item.id()).stream().filter(payment -> !payment.date().isBefore(setOn)).count();
+        long price = terms.pack().orElseThrow().price().cents();
+        return pay.scheduleFor(from, to).occurrences(rule, from, to).stream()
+                .skip(paidSince)
+                .map(date -> new PackDue(date.date(), null, price))
+                .toList();
+    }
+
+    /** The day the pack schedule in force today was set: where the versions carrying it unchanged begin. */
+    private static LocalDate packScheduleSetOn(Item item, ScheduleRule rule) {
+        LocalDate setOn = null;
+        for (Version version : item.versions()) {
+            if (rule.equals(version.terms().packSchedule())) {
+                setOn = setOn == null ? version.effectiveFrom() : setOn;
+            } else {
+                setOn = null;
+            }
+        }
+        return setOn == null ? item.versions().getLast().effectiveFrom() : setOn;
+    }
+
+    /**
+     * On a pack schedule, the first session the payments so far and the packs planned by its day don't cover:
+     * a pack due too late for it (spec §4.6). Empty when every session is covered in time, and for anything
+     * else, which is warned about from its own standing or has its next pack planned when the last one runs out.
+     */
+    public Optional<LocalDate> shortBeforeNextPack(Item item) {
+        Terms terms = item.versionOn(pay.today()).terms();
+        if (terms.pack().isEmpty() || terms.packSchedule() == null) {
+            return Optional.empty();
+        }
+        PaidAhead.Pack pack = terms.pack().get();
+        List<Map.Entry<LocalDate, Long>> money = new ArrayList<>();
+        prepayments.forItem(item.id()).forEach(payment -> money.add(Map.entry(payment.date(), payment.amountCents())));
+        plannedPacks(item).forEach(next -> money.add(Map.entry(next.dueDate(), next.amountCents())));
+        int used = 0;
+        LocalDate horizon = pay.horizonEnd();
+        for (Occurrence session : activeSessions(item)) {
+            // Packs are planned only as far as the look-ahead; past it, a session would look unpaid when it isn't.
+            if (session.dueDate().isAfter(horizon)) {
+                break;
+            }
+            used++;
+            long paidBy = money.stream().filter(paid -> !paid.getKey().isAfter(session.dueDate())).mapToLong(Map.Entry::getValue).sum();
+            // Whole sessions only, as everywhere: what was paid by then covers ⌊paid × sessions ÷ price⌋ of them.
+            long covered = BigInteger.valueOf(paidBy).multiply(BigInteger.valueOf(pack.sessions()))
+                    .divide(BigInteger.valueOf(pack.price().cents())).longValueExact();
+            if (used > covered) {
+                return Optional.of(session.dueDate());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Everything paid ahead for {@code item}. */
+    private Money paidFor(Item item) {
+        return Money.ofCents(prepayments.forItem(item.id()).stream().mapToLong(PrepaymentsRepository.Prepayment::amountCents).sum());
+    }
+
+    /** {@code item}'s sessions over its whole life to the look-ahead's end, skipped ones left out, oldest first. */
+    private List<Occurrence> activeSessions(Item item) {
+        return expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(), pay.horizonEnd()).sessions().stream()
+                .filter(session -> !session.skipped())
+                .toList();
+    }
+
+    /** {@link #expand(List, LocalDate, LocalDate)} without the planned packs: what the schedules themselves name. */
+    private Expansion expandSchedules(List<Item> chosen, LocalDate from, LocalDate to) {
         LocalDate lo = from.minusMonths(MARGIN_MONTHS);
         LocalDate hi = to.plusMonths(MARGIN_MONTHS);
         List<PayPeriod> periods = pay.payPeriods(lo, hi);
@@ -214,6 +477,7 @@ public final class ItemCalendar {
         Map<Long, List<Invoice>> invoiced = invoices.byItem();
         List<Occurrence> occurrences = new ArrayList<>();
         List<Occurrence> visits = new ArrayList<>();
+        List<Occurrence> sessions = new ArrayList<>();
         for (Item item : chosen) {
             List<Pause> paused = pauses.getOrDefault(item.id(), List.of());
             List<OccurrencePlanner.Version<Terms>> versions = item.versions().stream()
@@ -227,8 +491,14 @@ public final class ItemCalendar {
                 }
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
                 Occurrence occurrence = occurrence(item, planned, edit, assigner, payRule, null, null);
-                // A visit of something billed later moves no money: its invoice does, when it comes.
-                (planned.version().details().billedLater() ? visits : occurrences).add(occurrence);
+                // Billed by use: no bill comes when the days since the last one had no months it can happen in.
+                if (planned.version().details().billedByUse() && edit.amountCents() == null && occurrence.amountCents() == 0) {
+                    continue;
+                }
+                // A visit of something billed later moves no money: its invoice does, when it comes. Nor
+                // does a session of something paid ahead: the payment made ahead, a one-off, already did.
+                Terms terms = planned.version().details();
+                (terms.billedLater() ? visits : terms.paidAhead() ? sessions : occurrences).add(occurrence);
             }
             for (Invoice invoice : invoiced.getOrDefault(item.id(), List.of())) {
                 if (!invoice.dueDate().isBefore(lo) && !invoice.dueDate().isAfter(hi)) {
@@ -238,7 +508,8 @@ public final class ItemCalendar {
         }
         occurrences.sort(Comparator.comparing(Occurrence::payBy).thenComparing(Occurrence::name));
         visits.sort(Comparator.comparing(Occurrence::dueDate).thenComparing(Occurrence::name));
-        return new Expansion(periods, occurrences, visits);
+        sessions.sort(Comparator.comparing(Occurrence::dueDate).thenComparing(Occurrence::name));
+        return new Expansion(periods, occurrences, visits, sessions);
     }
 
     /**
@@ -252,7 +523,7 @@ public final class ItemCalendar {
         Override edit = new Override(
                 item.id(), invoice.dueDate(), invoice.amountCents(), null, null, invoice.paid(), invoice.paidDate(),
                 invoice.confirmationCode(), invoice.note(), false,
-                invoice.projectedCents() == invoice.amountCents() ? null : invoice.projectedCents(), invoice.checkNumber());
+                invoice.projectedCents() == invoice.amountCents() ? null : invoice.projectedCents(), invoice.checkNumber(), null);
         return occurrence(item, planned, edit, assigner, payRule, invoice.id(), invoice.coversThrough());
     }
 
@@ -273,6 +544,49 @@ public final class ItemCalendar {
                     return covered == null || visit.dueDate().isAfter(covered);
                 })
                 .toList();
+    }
+
+    /**
+     * What the paid-ahead items among {@code chosen} cost within {@code from}–{@code to} (spec §4.6),
+     * for annual costs: each payment made ahead, paid on its day, and each session that nothing paid
+     * covers, as still to come. A session paid for is not counted again; its payment already was.
+     * Each is filed and named as the item's first session is.
+     */
+    public List<Occurrence> paidAheadCosts(LocalDate from, LocalDate to) {
+        return paidAheadCosts(items.all().stream().filter(item -> !item.archived()).toList(), from, to);
+    }
+
+    /** {@link #paidAheadCosts(LocalDate, LocalDate)} for {@code chosen} only. */
+    public List<Occurrence> paidAheadCosts(List<Item> chosen, LocalDate from, LocalDate to) {
+        List<Occurrence> costs = new ArrayList<>();
+        // Bought as a pack, what is still to come is its planned packs, which are bills like any other.
+        Set<Long> inPacks = chosen.stream()
+                .filter(item -> item.versionOn(pay.today()).terms().pack().isPresent())
+                .map(Item::id)
+                .collect(Collectors.toSet());
+        standings(chosen, pay.today()).values().forEach(standing -> {
+            if (standing.sessions().isEmpty()) {
+                return;
+            }
+            Occurrence first = standing.sessions().getFirst();
+            standing.payments().stream()
+                    .filter(payment -> !payment.date().isBefore(from) && !payment.date().isAfter(to))
+                    .map(payment -> new Occurrence(
+                            first.itemId(), first.name(), first.kind(), payment.date(), payment.date(), null, false, null,
+                            payment.amountCents(), false, null, false, first.placement(), first.categoryId(),
+                            payment.accountId(), null, true, payment.date(), null, null, false, null, null, null, null, null, null))
+                    .forEach(costs::add);
+            if (inPacks.contains(first.itemId())) {
+                return;
+            }
+            LocalDate coversThrough = standing.result().coversThrough();
+            standing.sessions().stream()
+                    .filter(session -> !session.skipped())
+                    .filter(session -> coversThrough == null || session.dueDate().isAfter(coversThrough))
+                    .filter(session -> !session.dueDate().isBefore(from) && !session.dueDate().isAfter(to))
+                    .forEach(costs::add);
+        });
+        return costs;
     }
 
     /**
@@ -305,6 +619,51 @@ public final class ItemCalendar {
                 .anyMatch(visit -> visit.scheduledDate().equals(scheduledDate) && !visit.dueDate().isAfter(covered.get()));
     }
 
+    /**
+     * Where a paid-ahead item stands (spec §4.6): everything paid ahead for it, against its sessions
+     * from the first to the look-ahead's end, skipped ones using nothing.
+     *
+     * @param sessions every session up to the look-ahead's end, skipped ones included, oldest first
+     */
+    public record Standing(PaidAhead.Result result, List<Occurrence> sessions, List<PrepaymentsRepository.Prepayment> payments) {}
+
+    /** {@link Standing} for one item, as of {@code today}. */
+    public Standing standing(Item item, LocalDate today) {
+        return standing(item, today, prepayments.forItem(item.id()), expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(),
+                pay.horizonEnd()).sessions());
+    }
+
+    /**
+     * {@link Standing} for every item among {@code chosen} that is, or was, paid ahead. Each is worked
+     * out over its whole life, since its first session uses the first money paid ahead.
+     */
+    public Map<Long, Standing> standings(List<Item> chosen, LocalDate today) {
+        Map<Long, List<PrepaymentsRepository.Prepayment>> paid = prepayments.byItem();
+        Map<Long, Standing> standings = new HashMap<>();
+        for (Item item : chosen) {
+            if (item.versions().stream().anyMatch(version -> version.terms().paidAhead())) {
+                List<Occurrence> sessions =
+                        expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(), pay.horizonEnd()).sessions();
+                standings.put(item.id(), standing(item, today, paid.getOrDefault(item.id(), List.of()), sessions));
+            }
+        }
+        return standings;
+    }
+
+    private static Standing standing(
+            Item item, LocalDate today, List<PrepaymentsRepository.Prepayment> payments, List<Occurrence> sessions) {
+        Money paid = Money.ofCents(payments.stream().mapToLong(PrepaymentsRepository.Prepayment::amountCents).sum());
+        List<Occurrence> used = sessions.stream().filter(session -> !session.skipped()).toList();
+        // A pack is counted in whole sessions against its price (today's), never in rounded cents.
+        Optional<PaidAhead.Pack> pack = item.versionOn(today).terms().pack();
+        PaidAhead.Result result = pack.isPresent()
+                ? PaidAhead.drawDown(paid, used.stream().map(Occurrence::dueDate).toList(), today, pack.get())
+                : PaidAhead.drawDown(paid, used.stream()
+                        .map(session -> new PaidAhead.Session(session.dueDate(), Money.ofCents(session.amountCents())))
+                        .toList(), today);
+        return new Standing(result, sessions, payments);
+    }
+
     /** The last visit day the item's invoices cover, if it has any. */
     private Optional<LocalDate> coveredThrough(Item item) {
         return invoices.forItem(item.id()).stream().map(Invoice::coversThrough).max(Comparator.naturalOrder());
@@ -328,7 +687,7 @@ public final class ItemCalendar {
             // "Every pay period" belongs to the period it was made for, wherever in it it is dated.
             period = Optional.of(planned.ownPeriod());
         } else {
-            period = assigner.assign(due, terms.placement(), terms.autopay());
+            period = assigner.assign(due, terms.placement());
         }
 
         // The period's figures have to add up to what it lists, so an occurrence always counts
@@ -339,7 +698,11 @@ public final class ItemCalendar {
                 && assigner.containing(due).filter(dueIn -> dueIn.start().isAfter(periodStart)).isPresent();
 
         boolean typedOver = edit.amountCents() != null;
-        long amount = typedOver ? edit.amountCents() : amounts(terms, payRule).perOccurrenceCents();
+        long amount = typedOver ? edit.amountCents() : terms.billedByUse() ? usageBill(terms, planned.scheduled()) : amounts(terms, payRule).perOccurrenceCents();
+        // Paid from another account just this once (Rachel, 2026-10-20): a bucket belongs to the item's own account,
+        // so this one comes out of money not in a bucket there.
+        boolean otherAccount = edit.payFromAccountId() != null && edit.payFromAccountId() != terms.payFromAccountId();
+        long payFrom = otherAccount ? edit.payFromAccountId() : terms.payFromAccountId();
         return new Occurrence(
                 item.id(),
                 item.name(),
@@ -356,16 +719,16 @@ public final class ItemCalendar {
                 terms.autopay(),
                 terms.placement(),
                 terms.categoryId(),
-                terms.payFromAccountId(),
+                payFrom,
                 terms.payToAccountId(),
                 edit.paid(),
                 edit.paidDate(),
                 edit.confirmationCode(),
                 edit.note(),
                 edit.skipped(),
-                terms.bucketId(),
-                terms.saveUpBucketId(),
-                terms.fromBucketId(),
+                otherAccount ? null : terms.bucketId(),
+                otherAccount ? null : terms.saveUpBucketId(),
+                otherAccount ? null : terms.fromBucketId(),
                 edit.checkNumber(),
                 invoiceId,
                 coversThrough);
@@ -373,7 +736,15 @@ public final class ItemCalendar {
 
     private static OccurrencePlanner.Version<Terms> planned(Version version) {
         Terms terms = version.terms();
-        return new OccurrencePlanner.Version<>(version.effectiveFrom(), terms.schedule(), terms.daysAfterPayday(), terms);
+        // Billed by use: its months are when it can be used, and a bill for the last of them still comes after.
+        ScheduleRule rule = terms.billedByUse() ? terms.schedule().inMonths(null) : terms.schedule();
+        return new OccurrencePlanner.Version<>(version.effectiveFrom(), rule, terms.daysAfterPayday(), terms);
+    }
+
+    /** The estimated bill on {@code scheduled}, billed by use: every use since the bill before it (spec §4.6). */
+    private static long usageBill(Terms terms, LocalDate scheduled) {
+        ScheduleRule rule = terms.schedule();
+        return UsageBill.between(Money.ofCents(terms.amountCents()), terms.usage(), rule, UsageBill.coversAfter(rule, scheduled), scheduled).cents();
     }
 
     private static LocalDate clamp(LocalDate date, PayPeriod period) {

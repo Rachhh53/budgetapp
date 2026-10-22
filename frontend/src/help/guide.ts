@@ -123,8 +123,20 @@ export const TOPICS: readonly Topic[] = [
           "A session that didn't happen can be skipped on the item's own page, under Billed later.",
         ],
       },
+      {
+        heading: "Skipping one",
+        body: [
+          "Not happening this time? Open the row and press Skip this one. It leaves the lists and figures, and shows under Skipped this pay period, where Put back brings it back. The item and its other dates stay as they are.",
+        ],
+      },
+      {
+        heading: "Into buckets",
+        body: [
+          "Money in, or a transfer, to an account with buckets says where it goes beside the accounts: Goes into shows the amount, all of it into money not in a bucket or into one bucket. Add another bucket splits it; the first line keeps the rest.",
+        ],
+      },
     ],
-    terms: ["payPeriod", "endingByPeriod", "startingBalance", "comingIn", "goingOut", "projectedEnding", "available", "payManually", "autopay", "budgets", "oneOff", "estimate", "billedLater"],
+    terms: ["payPeriod", "endingByPeriod", "startingBalance", "comingIn", "goingOut", "projectedEnding", "available", "payManually", "autopay", "budgets", "oneOff", "estimate", "billedLater", "paidAhead", "billedByUse"],
   },
   {
     id: "dashboard",
@@ -158,19 +170,20 @@ export const TOPICS: readonly Topic[] = [
     id: "recurring",
     title: "Recurring items",
     path: "/recurring",
-    summary: "Everything that repeats: bills, budgets, transfers, bucket moves and card payments.",
+    summary: "Everything that repeats: bills, budgets, transfers and card payments.",
     sections: [
       {
         heading: "Adding one",
         body: [
-          "+ Add item, then choose the type: Bill, Budget, Transfer, Bucket move or Card payment. A few short steps ask what it is, the amount, where it's paid from, and the schedule.",
+          "+ Add item, then choose the type: Bill, Budget, Transfer or Card payment. A few short steps ask what it is, the amount, where it's paid from, and the schedule. To put money in a bucket, choose Transfer and pick the bucket it goes into.",
           "Not sure of the amount? Tick Estimate. For something yearly, enter the year's total and Budget shares it out; Save up for it in a bucket sets money aside each paycheck so it's there when due.",
+          "Only in some months, like snowplowing in winter? On its Schedule, choose Only some months and pick them. Nothing happens in the other months, and a yearly total is shared over the dates in the months you picked.",
         ],
       },
       {
         heading: "Which paycheck pays it",
         body: [
-          "A bill due on a payday is paid from the paycheck before, unless it's on autopay. Choose One period early to always pay it from the paycheck before.",
+          "A bill is paid from the pay period it's due in, a payday included. Tick Pay a period early to pay it from the paycheck before.",
         ],
       },
       {
@@ -178,10 +191,12 @@ export const TOPICS: readonly Topic[] = [
         body: [
           "Open an item to see its page, then Edit on any card. A change can apply from a date on, so the past stays as it was.",
           "A bill billed later (visits invoiced afterwards) has a Billed later card listing the visits waiting, the next few to come, and every invoice. Skip a visit that didn't (or won't) happen; Put back undoes it.",
+          "To stop one on a date, choose its Last date on the Schedule card. Nothing is planned after it, and once it has gone by the item is listed under Ended, out of the way like an archived one.",
+          "Billed by use is for something used an uncertain number of times, like snowplowing: enter what each time costs and about how many times a week or a month, choose Monthly and the day it's due, and tick the months it can happen in. Each bill is an estimate for the days since the last one; type the real bill over it when it comes.",
         ],
       },
     ],
-    terms: ["recurringItem", "estimate", "saveUp", "billedLater", "bucket"],
+    terms: ["recurringItem", "estimate", "saveUp", "billedLater", "paidAhead", "billedByUse", "bucket"],
   },
   {
     id: "accounts",
@@ -240,9 +255,15 @@ export const TOPICS: readonly Topic[] = [
         ],
       },
       {
+        heading: "A bonus",
+        body: [
+          "A bonus, or any pay that comes once on its own day, is a one-off paycheck: + Add on the source's One-off paychecks card. Its deductions start as a copy of the regular paycheck's, and the employer match follows the source's rule unless you switch it off.",
+        ],
+      },
+      {
         heading: "Pay stubs",
         body: [
-          "+ Add item › Upload a pay stub or receipt… reads a PDF pay stub. Check the lines it read, then save it to correct your amounts, record a pay change, or set just that paycheck.",
+          "+ Add item › Upload a pay stub or receipt… reads a PDF pay stub. Check the lines it read, then save it to correct your amounts, record a pay change, set just that paycheck, or add it as a one-off paycheck (a bonus).",
         ],
       },
     ],
@@ -257,7 +278,7 @@ export const TOPICS: readonly Topic[] = [
       {
         heading: "Adding",
         body: [
-          "+ Add item › Money out adds a one-off expense; Money in adds a refund, gift or bonus. Either can go on any account, a credit card included.",
+          "+ Add item › Money out adds a one-off expense; Money in adds a refund or gift. Either can go on any account, a credit card included. A bonus from work is a one-off paycheck instead, on its income source.",
         ],
       },
       {
@@ -269,7 +290,7 @@ export const TOPICS: readonly Topic[] = [
       {
         heading: "Reimbursements",
         body: [
-          "On an expense's page, Reimbursement tracks money owed back: to submit, submitted, or reimbursed. When the money arrives, add it as money in that pays back the expense.",
+          "On an expense's page, Reimbursement tracks money owed back: to submit, submitted, or reimbursed. When the money arrives, add it as money in that pays back the expense. Paying yourself back from a bucket? Use + Pay back from a bucket on the same card.",
         ],
       },
     ],
@@ -319,6 +340,69 @@ export const TOPICS: readonly Topic[] = [
       },
     ],
     terms: ["extraEachMonth", "payoffOrder"],
+  },
+  {
+    id: "retirement",
+    title: "Retirement",
+    path: "/retirement",
+    summary: "See the age your savings would be enough to retire, or how much more to save for an age you choose, across scenarios.",
+    sections: [
+      {
+        heading: "Getting started",
+        body: [
+          "Enter your birth date, then under Accounts counted choose how each investment or savings account's money is taxed: Traditional (pre-tax, like a traditional IRA or 401(k)), Roth, or Taxable or savings. Accounts left as Not counted aren't part of it.",
+          "Each account gets what your budget puts into it over the coming year (paycheck contributions, the match, recurring transfers and one-offs, less what comes out), shown as Goes in a year. Every year after, that rises by the scenario's raise.",
+        ],
+      },
+      {
+        heading: "Scenarios",
+        body: [
+          "A scenario is one way retirement could go: the salary you'd like a year, an age to retire, taxes and health insurance, growth, extra saved, other income like Social Security, and one-off amounts like selling a house.",
+          "Copy one to try a change without losing it, and tick Show side by side on up to three to compare them at the top.",
+          "Everything is in today's dollars, and it's an estimate for comparing, not advice.",
+        ],
+      },
+      {
+        heading: "Growth and raises",
+        body: [
+          "Under Growth & saving, each scenario has an expected growth (6% to start) with a lower (4%) and a higher (8%) beside it. Every counted account grows at them, compounding monthly. Change any of the three.",
+          "You can retire at, Projected then and the By age chart show all three, so you see a range instead of one number.",
+          "Projected then is in today's dollars, with the same amount in that year's dollars beneath it: $100,000 at 6% for 30 years is about $574,000 then, which buys what about $237,000 buys today at 3% inflation.",
+          "Raise a year makes what goes in grow each year, like a raise with your contribution kept as a share of pay. Leave it at 0.00 to keep it the same.",
+        ],
+      },
+      {
+        heading: "Salary, withdrawal rate and health",
+        body: [
+          "You need both a salary and a withdrawal rate: the salary is what you'll spend a year, the rate is how much of your savings you take out a year. What you need saved is the salary divided by the rate, so $40,000 at 4% is $1,000,000.",
+          "Health insurance before 65 and health costs from 65 are dollar amounts a year, added to what each year needs. Health costs rise is how fast those amounts grow, not a share of anything.",
+        ],
+      },
+    ],
+    terms: [
+      "retirementSalary",
+      "retireAt",
+      "withdrawalRate",
+      "retirementInflation",
+      "todaysDollars",
+      "earliestRetirement",
+      "neededThen",
+      "forAge",
+      "byAgeChart",
+      "projectedSavings",
+      "growthRange",
+      "yearlyRaise",
+      "extraSaved",
+      "goesInAYear",
+      "retirementTaxType",
+      "retirementTax",
+      "retirementHealth",
+      "healthBefore65",
+      "healthFrom65",
+      "otherIncome",
+      "retirementOneOff",
+      "beforeSixty",
+    ],
   },
   {
     id: "categories",
@@ -390,23 +474,29 @@ export const TOPICS: readonly Topic[] = [
 export const TASKS: readonly Task[] = [
   { question: "How do I mark a bill as paid?", answer: "On Pay periods, tick its box under Pay manually & one-offs. The day you tick it is kept as the day it was paid.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "tick check paid done pay bill checkbox" },
   { question: "How do I add a one-off expense?", answer: "Press + Add item (or Ctrl+N) and choose Money out.", to: "/", button: "Go to Pay periods", topic: "expenses", keywords: "expense spend purchase vet gift once one-off add new money out" },
-  { question: "How do I add money that came in once?", answer: "Press + Add item and choose Money in: a refund, gift, bonus or side cash.", to: "/", button: "Go to Pay periods", topic: "expenses", keywords: "refund bonus gift income money in once" },
+  { question: "How do I add money that came in once?", answer: "Press + Add item and choose Money in: a refund, gift or side cash.", to: "/", button: "Go to Pay periods", topic: "expenses", keywords: "refund gift income money in once side cash" },
   { question: "How do I add a bill that repeats?", answer: "On Recurring items, + Add item and choose Bill.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "bill rent utility subscription repeat monthly weekly new" },
   { question: "How do I set a spending budget?", answer: "On Recurring items, + Add item and choose Budget, like groceries every paycheck.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "budget groceries gas spending limit" },
   { question: "How do I change a bill's amount just this once?", answer: "On its pay period, click the amount and type the real one, then choose Just this one.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "change amount once this time edit different" },
   { question: "How do I change a bill for good?", answer: "Open it on Recurring items and press Edit on the card to change, or click its amount on the pay period and choose This and all future.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "edit change amount schedule future permanent" },
   { question: "How do I find a bill or expense?", answer: "On Pay periods, use Find a bill or one-off (Ctrl+K). It shows when each was last paid and is next planned.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "search find look where when last paid planned" },
   { question: "How do I keep a receipt?", answer: "For a one-off, open it on Expenses & receipts and add the file under Receipts & documents. For a bill, open its row on the pay period and choose Add a receipt.", to: "/expenses", button: "Go to Expenses & receipts", topic: "expenses", keywords: "receipt photo pdf document invoice attach file upload" },
-  { question: "How do I track money I'm owed back?", answer: "Open the expense and use its Reimbursement card. When the money arrives, add it as money in that pays back the expense.", to: "/expenses", button: "Go to Expenses & receipts", topic: "expenses", keywords: "reimburse reimbursement owed back work hsa claim submit" },
+  { question: "How do I track money I'm owed back?", answer: "Open the expense and use its Reimbursement card. When the money arrives, add it as money in that pays back the expense. To pay yourself back out of a bucket, choose + Pay back from a bucket there, or Out of a bucket from + Add item and pick the expense under Pays back.", to: "/expenses", button: "Go to Expenses & receipts", topic: "expenses", keywords: "reimburse reimbursement owed back work hsa claim submit bucket yourself" },
   { question: "How do I enter my real balance?", answer: "On Accounts, Update balances, or Update balance on one account's page. Use the number your bank shows.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "balance real actual bank correct fix wrong update" },
-  { question: "How do I set money aside for something?", answer: "On a checking or savings account's page, Add bucket. Give it a goal if you like.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "bucket save aside goal sinking fund envelope" },
+  { question: "How do I set money aside for something?", answer: "On a checking or savings account's page, Add bucket. Give it a goal if you like. To fill it, add a recurring transfer into that account and pick the bucket.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "bucket save aside goal sinking fund envelope" },
   { question: "How do I save up for a yearly bill?", answer: "Edit the bill and choose Save up for it in a bucket: a share is set aside each paycheck so it's there when due.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "save up yearly annual insurance registration bucket" },
   { question: "How do I get warned when money runs low?", answer: "Edit the account and set Warn me when the balance dips below. Pay periods that go lower are flagged.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "low balance warning alert threshold overdraft" },
   { question: "How do I add a credit card statement?", answer: "Open the card on Accounts and use its Statements card.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "credit card statement minimum due" },
+  { question: "My statement or balance doesn't match. How do I find out why?", answer: "Under a statement on the card's page, or under Balance adjusted in a pay period's Accounts & buckets, Budget says what your records came to. Choose See what went in for everything since they last matched: open one to change or delete it, or add what's missing.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "reconcile match statement balance discrepancy difference missing charge" },
   { question: "How do I track a 0% promo rate?", answer: "Open the card on Accounts, then Add promo rate. Budget warns you before it ends, and the Payoff helper works out what to pay.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "promo promotion 0% balance transfer deferred interest" },
   { question: "How do I record a raise?", answer: "On Income, open the source and press Record a pay change, from the date it starts.", to: "/income", button: "Go to Income", topic: "income", keywords: "raise pay change salary deductions new job" },
+  { question: "How do I record a bonus?", answer: "On Income, open the source and press + Add on One-off paychecks: its deductions and match work like a paycheck's. A bonus stub can be saved as one too.", to: "/income", button: "Go to Income", topic: "income", keywords: "bonus one-off extra paycheck commission award stub" },
   { question: "How do I read a pay stub?", answer: "Press + Add item, then Upload a pay stub or receipt…, and drop the PDF.", to: "/income", button: "Go to Income", topic: "income", keywords: "pay stub paystub pdf upload payslip" },
   { question: "How do I handle a bill that's invoiced later?", answer: "Edit the bill and tick Billed later. Visits add up on the pay period until you press Mark as invoiced.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "billed later invoice visits therapy appointment accumulate quarterly" },
+  { question: "How do I make a recurring payment stop on a date?", answer: "Open the item, press Edit on its Schedule card and choose a Last date. Nothing is planned after it. Once that day has gone by, the item moves from All to Ended on Recurring items.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "end stop last date finish cancel until ends ended archive" },
+  { question: "How do I skip a bill just this once?", answer: "On the pay period, open its row and press Skip this one. It shows under Skipped this pay period, where Put back undoes it.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "skip delete remove this month once not happening" },
+  { question: "How do I put a transfer into a bucket?", answer: "Add the transfer from the pay period. Beside From and To, Goes into lists the To account's buckets; choose one for the whole amount, or Add another bucket to split it.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "transfer bucket set aside split into" },
+  { question: "How do I budget for snowplowing or anything billed by how often it's used?", answer: "Add a bill, and under How it's charged choose By use: what each time costs, about how many times a week or a month, the bill day each month, and the months it can happen in.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "snow plow plowing usage per use estimate monthly season winter" },
   { question: "How do I skip a session that didn't happen?", answer: "Open the item on Recurring items. Under Billed later, press Skip beside the visit. Put back undoes it.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "skip session visit cancel missed appointment" },
   { question: "How do I undo something?", answer: "Press Undo on the message that appears after a change, or Ctrl+Z. It goes back one change at a time.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "undo mistake oops back revert" },
   { question: "How do I hide my numbers?", answer: "Press Hide amounts at the top of Pay periods. Start with amounts hidden, in Settings under Security, hides them each time Budget opens.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "hide blur privacy amounts screen" },

@@ -8,6 +8,7 @@ import app.budget.engine.schedule.PayPeriod;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -72,21 +73,38 @@ public final class BalanceProjector {
                 // seeming not to exist. Its date (after this period) tells the caller which case this is.
                 Map.Entry<LocalDate, Money> first = entered.firstEntry();
                 result.add(new PeriodBalance(
-                        period, first.getValue(), first.getKey(), false, Money.ZERO, Money.ZERO,
+                        period, first.getValue(), first.getKey(), false, Money.ZERO, Money.ZERO, Money.ZERO, List.of(),
                         first.getValue(), first.getValue(), first.getKey()));
                 continue;
             }
-            boolean enteredDuring = !latest.getKey().isBefore(period.start());
-            Money starting = enteredDuring ? latest.getValue() : balanceAtStartOf(period.start(), entered, applied);
-            // From an entered balance only that day onwards counts; otherwise the whole period does.
-            LocalDate startingOn = enteredDuring ? latest.getKey() : period.start();
+            // Only the first balance ever entered starts a period, since nothing came before it. Any later one,
+            // on the first day or part way through, is where the account turned out to be: the period still starts
+            // with what the one before ended on, and the difference shows as adjusted (Rachel, 2026-10-21).
+            Map.Entry<LocalDate, Money> first = entered.firstEntry();
+            boolean startsAtFirst = !first.getKey().isBefore(period.start());
+            // What the period before ended on: a balance entered on the first day is not the start, but an adjustment to it.
+            Money starting = startsAtFirst ? first.getValue() : rolledForward(entered.lowerEntry(period.start()), period.start(), applied);
+            LocalDate startingOn = startsAtFirst ? first.getKey() : period.start();
             Money in = Money.ZERO;
             Money out = Money.ZERO;
+            Money adjusted = Money.ZERO;
+            List<PeriodBalance.Adjustment> adjustments = new ArrayList<>();
             Money running = starting;
             Money lowest = starting;
             LocalDate lowestOn = startingOn;
-            for (Map.Entry<LocalDate, List<Money>> day : applied.subMap(startingOn, true, period.end(), true).entrySet()) {
-                for (Money amount : day.getValue()) {
+            TreeMap<LocalDate, Boolean> days = new TreeMap<>();
+            applied.subMap(startingOn, true, period.end(), true).keySet().forEach(day -> days.put(day, true));
+            entered.subMap(startingOn, !startsAtFirst, period.end(), true).keySet().forEach(day -> days.put(day, true));
+            for (LocalDate day : days.keySet()) {
+                // A balance entered is what the day began with.
+                Money typed = startsAtFirst && day.equals(startingOn) ? null : entered.get(day);
+                if (typed != null) {
+                    Money difference = typed.minus(running);
+                    adjusted = adjusted.plus(difference);
+                    adjustments.add(new PeriodBalance.Adjustment(day, typed, difference));
+                    running = typed;
+                }
+                for (Money amount : applied.getOrDefault(day, List.of())) {
                     if (amount.isNegative()) {
                         out = out.minus(amount);
                     } else {
@@ -97,10 +115,10 @@ public final class BalanceProjector {
                 // Judged at the end of each day: a paycheck and a bill on the same day net out.
                 if (running.compareTo(lowest) < 0) {
                     lowest = running;
-                    lowestOn = day.getKey();
+                    lowestOn = day;
                 }
             }
-            result.add(new PeriodBalance(period, starting, startingOn, enteredDuring, in, out, running, lowest, lowestOn));
+            result.add(new PeriodBalance(period, starting, startingOn, startsAtFirst, in, out, adjusted, adjustments, running, lowest, lowestOn));
         }
         return new Projection(result, credits);
     }
@@ -130,14 +148,16 @@ public final class BalanceProjector {
                 continue;
             }
             Money balance = rolledForward(anchor, day, applied);
-            Money amount = SavingsInterest.forMonth(balance, apy.get());
-            if (amount.isZero()) {
+            // An amount typed over the estimate simply becomes the amount, zero included, so it stays listed to change back.
+            Optional<Money> typed = terms.typedOn(day);
+            Money amount = typed.orElseGet(() -> SavingsInterest.forMonth(balance, apy.get()));
+            if (amount.isZero() && typed.isEmpty()) {
                 continue;
             }
             if (!inEnteredBalance) {
                 applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
             }
-            credits.add(new InterestCredit(day, amount, balance, apy.get(), inEnteredBalance));
+            credits.add(new InterestCredit(day, amount, balance, apy.get(), inEnteredBalance, typed.isPresent()));
         }
         return credits;
     }
@@ -154,6 +174,11 @@ public final class BalanceProjector {
      *
      * <p>A balance the user entered already holds whatever the account really did up to that
      * day, so nothing is added on that day, and what was being carried is dropped.
+     *
+     * <p>A month whose growth was typed over grows by exactly that: nothing a day, and the whole
+     * amount on its last day (Rachel, 2026-10-19: a month is one line in the account's
+     * transactions, so a month is what is typed over). A balance entered on that last day
+     * already holds it.
      */
     private static List<InterestCredit> growDaily(
             InterestTerms terms, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied, LocalDate through) {
@@ -163,7 +188,21 @@ public final class BalanceProjector {
         BigDecimal carriedCents = BigDecimal.ZERO;
         for (LocalDate day = entered.firstKey(); !day.isAfter(through); day = day.plusDays(1)) {
             Money anchored = entered.get(day);
-            if (anchored != null) {
+            Optional<Money> typedMonth = terms.typedFor(YearMonth.from(day));
+            if (typedMonth.isPresent()) {
+                if (anchored != null) {
+                    running = anchored;
+                }
+                carriedCents = BigDecimal.ZERO;
+                if (day.equals(YearMonth.from(day).atEndOfMonth())) {
+                    Money amount = typedMonth.get();
+                    if (anchored == null) {
+                        applied.computeIfAbsent(day, key -> new ArrayList<>()).add(amount);
+                    }
+                    credits.add(new InterestCredit(
+                            day, amount, running, terms.rateOn(day).orElse(BasisPoints.of(0)), anchored != null, true));
+                }
+            } else if (anchored != null) {
                 running = anchored;
                 carriedCents = BigDecimal.ZERO;
             } else {
@@ -201,11 +240,6 @@ public final class BalanceProjector {
                         .computeIfAbsent(movement.countsOn(newestEntered), key -> new ArrayList<>())
                         .add(movement.amount()));
         return byDay;
-    }
-
-    /** The balance {@code date} starts with: the latest one entered on or before it, plus everything applied since. */
-    private static Money balanceAtStartOf(LocalDate date, TreeMap<LocalDate, Money> entered, TreeMap<LocalDate, List<Money>> applied) {
-        return rolledForward(entered.floorEntry(date), date, applied);
     }
 
     /** An entered balance with everything applied from its day up to, but not on, {@code date}. */

@@ -9,6 +9,7 @@ import {
   Repeat,
   Scale,
   Settings,
+  Sunset,
   Tags,
   Wallet,
 } from "lucide-react";
@@ -34,6 +35,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: "/expenses", label: "Expenses & receipts", icon: Receipt },
   { path: "/plan", label: "Plan next year", icon: NotebookPen },
   { path: "/planner", label: "Debt & decisions", icon: Scale },
+  { path: "/retirement", label: "Retirement", icon: Sunset },
   { path: "/categories", label: "Categories & tags", icon: Tags },
   { path: "/settings", label: "Settings", icon: Settings },
   { path: "/help", label: "Help", icon: CircleHelp },

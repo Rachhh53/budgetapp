@@ -13,6 +13,7 @@ import app.budget.engine.projection.BalanceAnchor;
 import app.budget.engine.projection.Movement;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /** A loan at 6%, paid on the 1st, with $400.00 of each month's payment going to escrow. */
@@ -53,6 +54,24 @@ class LoanProjectorTest {
                 new Derived(date("2026-11-01"), Kind.INTEREST, cents(50000)),
                 new Derived(date("2026-11-01"), Kind.ESCROW, cents(40000)),
                 new Derived(date("2026-12-01"), Kind.INTEREST, cents(49700)),
+                new Derived(date("2026-12-01"), Kind.ESCROW, cents(40000)));
+    }
+
+    @Test
+    void aMonthsInterestTypedOverIsWhatIsAddedAndLaterMonthsFollowIt() {
+        Terms typed = new Terms(1, Money.ofCents(40000), SIX_PERCENT.withTyped(Map.of(date("2026-11-01"), cents(45000))));
+        List<Derived> derived = LoanProjector.project(
+                owed("2026-10-15", 10000000),
+                List.of(payment("2026-11-01", 100000), payment("2026-12-01", 100000)),
+                List.of(payment("2026-11-10", 50000)),
+                typed,
+                date("2026-12-31"));
+
+        // Nov 1 is 450.00 as typed, leaving 99,350.00 after the payments; Dec 1 is 99,350.00 × 6% ÷ 12 = 496.75.
+        assertThat(derived).containsExactly(
+                new Derived(date("2026-11-01"), Kind.INTEREST, cents(45000)),
+                new Derived(date("2026-11-01"), Kind.ESCROW, cents(40000)),
+                new Derived(date("2026-12-01"), Kind.INTEREST, cents(49675)),
                 new Derived(date("2026-12-01"), Kind.ESCROW, cents(40000)));
     }
 

@@ -10,6 +10,7 @@ import app.budget.server.buckets.BucketsRepository;
 import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.CategoriesRepository.Category;
+import app.budget.server.categories.TagsRepository;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.income.PayCalendar;
@@ -62,6 +63,7 @@ public final class DashboardService {
     private final PayCalendar pay;
     private final AccountsRepository accounts;
     private final CategoriesRepository categories;
+    private final TagsRepository tags;
     private final BucketsRepository buckets;
     private final IncomeRepository income;
     private final PayStubsRepository stubs;
@@ -77,6 +79,7 @@ public final class DashboardService {
             PayCalendar pay,
             AccountsRepository accounts,
             CategoriesRepository categories,
+            TagsRepository tags,
             BucketsRepository buckets,
             IncomeRepository income,
             PayStubsRepository stubs,
@@ -91,6 +94,7 @@ public final class DashboardService {
         this.pay = pay;
         this.accounts = accounts;
         this.categories = categories;
+        this.tags = tags;
         this.buckets = buckets;
         this.income = income;
         this.stubs = stubs;
@@ -134,8 +138,22 @@ public final class DashboardService {
 
     public record Debt(long totalCents, long cardsCents, long loansCents) {}
 
-    /** @param categoryId {@code null} for spending with no category */
-    public record CategorySpending(Long categoryId, String name, String color, long totalCents) {}
+    /**
+     * A top-level category, and what it is made of for drilling into from the chart (Rachel, 2026-10-20:
+     * "looks like you can drill down into it but clicking … doesn't drill down to tags or payees").
+     *
+     * @param categoryId    {@code null} for spending with no category
+     * @param subcategories by the category under it each amount was given; empty when none was used. Money
+     *                      given the top-level category itself is "Not in a subcategory".
+     * @param payees        by who was paid: the payee, or the item's or one-off's name without one
+     * @param tags          by tag; an amount with two tags counts under each, so these can add up to more than
+     *                      the total. Untagged money is "No tag"; empty when nothing here has a tag.
+     */
+    public record CategorySpending(
+            Long categoryId, String name, String color, long totalCents, List<Part> subcategories, List<Part> payees, List<Part> tags) {}
+
+    /** One slice of a category: a subcategory, a payee or a tag. @param id {@code null} for "none" and for a payee */
+    public record Part(Long id, String name, String color, long totalCents) {}
 
     /** @param categories top-level categories, largest first; a sub-category counts under the one above it */
     public record Spending(LocalDate from, LocalDate to, long totalCents, List<CategorySpending> categories) {}
@@ -328,20 +346,75 @@ public final class DashboardService {
 
         Map<Long, Category> byId = new HashMap<>();
         categories.all().forEach(category -> byId.put(category.id(), category));
-        Map<Long, Long> totals = new LinkedHashMap<>();
+        Map<Long, TagsRepository.Tag> tagsById = new HashMap<>();
+        tags.all().forEach(tag -> tagsById.put(tag.id(), tag));
+        Map<Long, List<ReportRunner.Row>> byTop = new LinkedHashMap<>();
         for (ReportRunner.Row row : report.rows()) {
             Category category = row.categoryId() == null ? null : byId.get(row.categoryId());
             Long top = category == null ? null : category.parentId() == null ? (Long) category.id() : category.parentId();
-            totals.merge(top, row.amountCents(), Long::sum);
+            byTop.computeIfAbsent(top, key -> new ArrayList<>()).add(row);
         }
         List<CategorySpending> spent = new ArrayList<>();
-        totals.forEach((id, cents) -> {
+        byTop.forEach((id, rows) -> {
             Category category = id == null ? null : byId.get(id);
-            spent.add(new CategorySpending(
-                    id, category == null ? "No category" : category.name(), category == null ? null : category.color(), cents));
+            long cents = rows.stream().mapToLong(ReportRunner.Row::amountCents).sum();
+            spent.add(new CategorySpending(id, category == null ? "No category" : category.name(), category == null ? null : category.color(),
+                    cents, subcategories(id, rows, byId), payees(rows), tagged(rows, tagsById)));
         });
         spent.sort(Comparator.comparingLong(CategorySpending::totalCents).reversed().thenComparing(CategorySpending::name));
         return new Spending(from, to, report.totalCents(), spent);
+    }
+
+    /** Under a top-level category: each subcategory used, and what was given the category itself. Empty when none was used. */
+    private static List<Part> subcategories(Long top, List<ReportRunner.Row> rows, Map<Long, Category> byId) {
+        if (top == null || rows.stream().allMatch(row -> top.equals(row.categoryId()))) {
+            return List.of();
+        }
+        Map<Long, Long> totals = new LinkedHashMap<>();
+        rows.forEach(row -> totals.merge(top.equals(row.categoryId()) ? null : row.categoryId(), row.amountCents(), Long::sum));
+        List<Part> parts = new ArrayList<>();
+        totals.forEach((id, cents) -> {
+            Category category = id == null ? null : byId.get(id);
+            parts.add(new Part(id, category == null ? "Not in a subcategory" : category.name(), category == null ? null : category.color(), cents));
+        });
+        return largestFirst(parts);
+    }
+
+    /** By who was paid: the payee where one is entered, else what the item or one-off is called. */
+    private static List<Part> payees(List<ReportRunner.Row> rows) {
+        Map<String, Long> totals = new LinkedHashMap<>();
+        for (ReportRunner.Row row : rows) {
+            String payee = row.payee() == null || row.payee().isBlank() ? row.description() : row.payee();
+            totals.merge(payee, row.amountCents(), Long::sum);
+        }
+        List<Part> parts = new ArrayList<>();
+        totals.forEach((name, cents) -> parts.add(new Part(null, name, null, cents)));
+        return largestFirst(parts);
+    }
+
+    /** By tag, each amount under every tag it has; untagged as "No tag". Empty when nothing has a tag. */
+    private static List<Part> tagged(List<ReportRunner.Row> rows, Map<Long, TagsRepository.Tag> tagsById) {
+        if (rows.stream().allMatch(row -> row.tagIds().isEmpty())) {
+            return List.of();
+        }
+        Map<Long, Long> totals = new LinkedHashMap<>();
+        for (ReportRunner.Row row : rows) {
+            if (row.tagIds().isEmpty()) {
+                totals.merge(null, row.amountCents(), Long::sum);
+            }
+            row.tagIds().forEach(tagId -> totals.merge(tagId, row.amountCents(), Long::sum));
+        }
+        List<Part> parts = new ArrayList<>();
+        totals.forEach((id, cents) -> {
+            TagsRepository.Tag tag = id == null ? null : tagsById.get(id);
+            parts.add(new Part(id, tag == null ? "No tag" : tag.name(), tag == null ? null : tag.color(), cents));
+        });
+        return largestFirst(parts);
+    }
+
+    private static List<Part> largestFirst(List<Part> parts) {
+        parts.sort(Comparator.comparingLong(Part::totalCents).reversed().thenComparing(Part::name));
+        return List.copyOf(parts);
     }
 
     /** Most pressing first: what is late, what is about to go wrong, what is due, then what could do with a look. */

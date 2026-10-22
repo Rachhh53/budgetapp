@@ -5,7 +5,7 @@ import type { Account } from "../../src/api/accounts";
 import type { Bucket } from "../../src/api/buckets";
 import type { Category } from "../../src/api/categories";
 import type { Entry } from "../../src/api/entries";
-import type { PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
+import type { IncomeSource, OneOffPaycheck, PayPeriod, PayPeriods, Paycheck } from "../../src/api/income";
 import type { Item } from "../../src/api/items";
 import type { Occurrence, PeriodDetail } from "../../src/api/periods";
 import { addDays, todayIso } from "../../src/lib/dates";
@@ -37,6 +37,10 @@ const PAYCHECK: Paycheck = {
   estimate: false,
   projectedCents: null,
   contributions: [],
+  grossCents: null,
+  deductions: [],
+  oneOffId: null,
+  name: null,
 };
 
 const ELECTRIC: Occurrence = {
@@ -196,7 +200,7 @@ const ELECTRIC_ITEM: Item = {
   perOccurrenceCents: 14000,
   perYearCents: 168000,
   next: { scheduledDate: "2026-10-16", dueDate: "2026-10-16", periodStart: "2026-10-01", early: true },
-  history: [{ effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000 }],
+  history: [{ versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000 }],
   paused: false,
   pausedUntil: null,
   fromBucketId: null,
@@ -216,8 +220,8 @@ const OCTOBER: PeriodDetail = {
   buckets: [],
   bucketMoves: [],
   accounts: [
-    { accountId: 1, startingCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08", bucketsCents: 0, availableCents: 309610, lowBalance: false, builtFromZero: false },
-    { accountId: 3, startingCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13", bucketsCents: 0, availableCents: 0, lowBalance: false, builtFromZero: false },
+    { accountId: 1, startingCents: 121438, startingBucketsCents: 0, startingAvailableCents: 121438, startingOn: "2026-10-01", entered: true, inCents: 398620, outCents: 210448, adjustedCents: 0, adjustments: [], endingCents: 309610, lowestCents: 31390, lowestOn: "2026-10-08", bucketsCents: 0, availableCents: 309610, lowBalance: false, builtFromZero: false },
+    { accountId: 3, startingCents: 61248, startingBucketsCents: 0, startingAvailableCents: 61248, startingOn: "2026-10-01", entered: true, inCents: 0, outCents: 61248, adjustedCents: 0, adjustments: [], endingCents: 0, lowestCents: 0, lowestOn: "2026-10-13", bucketsCents: 0, availableCents: 0, lowBalance: false, builtFromZero: false },
   ],
 };
 
@@ -267,10 +271,10 @@ describe("pay period screen: investments", () => {
         ],
       },
     ],
-    interest: [{ accountId: 4, date: "2026-10-14", amountCents: 22871, rateBp: 700 }],
+    interest: [{ accountId: 4, date: "2026-10-14", amountCents: 22871, rateBp: 700, estimate: true }],
     accounts: [
       ...OCTOBER.accounts,
-      { accountId: 4, startingCents: 4000000, startingOn: "2026-10-01", entered: true, inCents: 45371, outCents: 0, endingCents: 4045371, lowestCents: 4000000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 4045371, lowBalance: false, builtFromZero: false },
+      { accountId: 4, startingCents: 4000000, startingBucketsCents: 0, startingAvailableCents: 4000000, startingOn: "2026-10-01", entered: true, inCents: 45371, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 4045371, lowestCents: 4000000, lowestOn: "2026-10-01", bucketsCents: 0, availableCents: 4045371, lowBalance: false, builtFromZero: false },
     ],
   };
 
@@ -333,8 +337,8 @@ describe("pay period screen", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" })).toBeInTheDocument();
     expect(screen.getByText("Current")).toBeInTheDocument();
     const figures = screen.getByText("Projected ending").closest("dl")!;
-    expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("$1,214.38");
-    expect(within(figures).getByText("Starting balance").closest("div")).toHaveTextContent("Everyday Checking · Oct 1 · set by you");
+    expect(within(figures).getByText("Starting available").closest("div")).toHaveTextContent("$1,214.38");
+    expect(within(figures).getByText("Starting available").closest("div")).toHaveTextContent("Oct 1 · set by you · Everyday Checking $1,214.38");
     expect(within(figures).getByText("Coming in").closest("div")).toHaveTextContent("+$3,986.20");
     // What it is made of is behind its ⓘ, like every other tip: nothing shows until that is pressed.
     expect(within(figures).queryByRole("group", { name: "What is coming in" })).not.toBeInTheDocument();
@@ -398,6 +402,40 @@ describe("pay period screen", () => {
     expect(within(manual).getByText("1 of 3 paid")).toBeInTheDocument();
   });
 
+  it("shows a balance entered during the period as an adjustment, to change or delete", async () => {
+    const adjusted: PeriodDetail = {
+      ...OCTOBER,
+      accounts: [
+        {
+          ...OCTOBER.accounts[0]!,
+          entered: false,
+          adjustedCents: -12500,
+          adjustments: [{ entryId: 44, date: "2026-10-06", balanceCents: 250000, differenceCents: -12500, note: null, since: null }],
+          endingCents: 297110,
+        },
+        OCTOBER.accounts[1]!,
+      ],
+    };
+    const fetchMock = withPeriod(adjusted, {
+      "DELETE /api/accounts/1/balances/44": () => ({ status: 200, data: {}, changed: true }),
+    });
+    renderApp();
+
+    // Part of the sum, so the period still starts where the last one ended.
+    expect(await screen.findByText("1,214.38 + 3,986.20 − 2,104.48 − 125.00 balance adjusted")).toBeInTheDocument();
+    const accounts = await panel("Accounts & buckets");
+    expect(within(accounts).getByText("Balance adjusted").parentElement).toHaveTextContent("−$125.00");
+    expect(within(accounts).getByText("Oct 6 · you entered $2,500.00")).toBeInTheDocument();
+
+    await userEvent.click(within(accounts).getByRole("button", { name: "Edit the balance entered Oct 6" }));
+    const dialog = await screen.findByRole("dialog", { name: /Change balance/ });
+    expect(within(dialog).getByRole("textbox", { name: "Balance" })).toHaveValue("2500.00");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await userEvent.click(within(accounts).getByRole("button", { name: "Delete the balance entered Oct 6" }));
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/accounts/1/balances/44"));
+  });
+
   it("keeps the account chosen in Accounts & buckets when moving to another pay period", async () => {
     withPeriod();
     renderApp();
@@ -423,6 +461,41 @@ describe("pay period screen", () => {
     // Its own row says so too, in words.
     const manual = await panel("Pay manually & one-offs");
     expect(within(manual).getByText("Past due")).toBeInTheDocument();
+  });
+
+  it("folds the past-due warning to one line, and keeps it folded", async () => {
+    const rent: Occurrence = { ...ELECTRIC, itemId: 7, name: "Rent", scheduledDate: "2020-10-01", dueDate: "2020-10-01", periodStart: "2020-09-15", payBy: "2020-09-30", estimate: false };
+    withPeriod({ ...OCTOBER, carriedOver: [rent] });
+    const { unmount } = renderApp();
+
+    const warning = await screen.findByRole("alert", { name: "Past due" });
+    await userEvent.click(within(warning).getByRole("button", { name: "Hide" }));
+
+    expect(warning).toHaveTextContent("1 bill is past due · $140.00");
+    expect(warning).not.toHaveTextContent("was due Oct 1, 2020");
+    unmount();
+    renderApp();
+    const again = await screen.findByRole("alert", { name: "Past due" });
+    expect(within(again).getByRole("button", { name: "Show" })).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(within(again).getByRole("button", { name: "Show" }));
+    expect(again).toHaveTextContent("Rent · $140.00 · was due Oct 1, 2020");
+  });
+
+  it("dismisses the past-due warning until another bill is past due, the row still saying so", async () => {
+    const rent: Occurrence = { ...ELECTRIC, itemId: 7, name: "Rent", scheduledDate: "2020-10-01", dueDate: "2020-10-01", periodStart: "2020-09-15", payBy: "2020-09-30", estimate: false };
+    withPeriod({ ...OCTOBER, carriedOver: [rent] });
+    const { unmount } = renderApp();
+
+    const warning = await screen.findByRole("alert", { name: "Past due" });
+    await userEvent.click(within(warning).getByRole("button", { name: "Dismiss until another bill is past due" }));
+
+    expect(screen.queryByRole("alert", { name: "Past due" })).not.toBeInTheDocument();
+    expect(within(await panel("Pay manually & one-offs")).getByText("Past due")).toBeInTheDocument();
+    unmount();
+    // A second bill past due brings it back.
+    withPeriod({ ...OCTOBER, carriedOver: [rent, { ...rent, itemId: 8, name: "Water" }] });
+    renderApp();
+    expect(await screen.findByRole("alert", { name: "Past due" })).toHaveTextContent("2 bills are past due");
   });
 
   it("has no past-due warning for a bill that is paid, on autopay, or not due yet", async () => {
@@ -461,6 +534,37 @@ describe("pay period screen", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" })).toBeInTheDocument();
   });
 
+  it("goes straight to the pay period a chosen day falls in", async () => {
+    withPeriod();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Go to a date" }));
+    const dialog = await screen.findByRole("dialog", { name: "Go to a date" });
+    const day = within(dialog).getByLabelText("Day");
+    expect(day).toHaveValue("2026-10-01");
+    await userEvent.clear(day);
+    await userEvent.type(day, "2026-10-20");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Go" }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Oct 15 – Oct 31, 2026" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Go to a date" })).not.toBeInTheDocument();
+  });
+
+  it("says so when no pay period holds the day chosen", async () => {
+    withPeriod(OCTOBER, {
+      "GET /api/pay-periods?from=2020-01-01&to=2020-01-01": () => ({ status: 200, data: { ...PERIODS, periods: [] } }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Go to a date" }));
+    const dialog = await screen.findByRole("dialog", { name: "Go to a date" });
+    await userEvent.clear(within(dialog).getByLabelText("Day"));
+    await userEvent.type(within(dialog).getByLabelText("Day"), "2020-01-01");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Go" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("There's no pay period on Jan 1, 2020.");
+  });
+
   it("shows each account on its own tab, in a card's own words", async () => {
     withPeriod();
     renderApp();
@@ -481,7 +585,7 @@ describe("pay period screen", () => {
     expect(within(accounts).getByText("Paid off").closest("div")).toHaveTextContent("−$612.48");
   });
 
-  it("says how each goal is going, and stops saving into a bucket that has reached its goal", async () => {
+  it("says how each goal is going, and points to the account to stop saving into a bucket that reached it", async () => {
     const fund = {
       ...ELECTRIC_ITEM,
       id: 8,
@@ -509,7 +613,6 @@ describe("pay period screen", () => {
       {
         "GET /api/buckets": () => ({ status: 200, data: [GIFTS, short] }),
         "GET /api/items": () => ({ status: 200, data: [ELECTRIC_ITEM, fund] }),
-        "PUT /api/items/8": () => ({ status: 200, data: fund, changed: true }),
       },
     );
     renderApp();
@@ -517,21 +620,14 @@ describe("pay period screen", () => {
     const buckets = within(await panel("Accounts & buckets")).getByRole("region", { name: "Buckets in Everyday Checking" });
     const bike = within(buckets).getByText("New bike").closest("li")!;
     expect(bike).toHaveTextContent("Short $50.00 a paycheck for Dec 1, 2099");
-    expect(within(bike).queryByRole("button", { name: /Stop saving/ })).not.toBeInTheDocument();
+    expect(within(bike).queryByRole("link", { name: /stop on its account/ })).not.toBeInTheDocument();
 
+    // A bucket is changed only on its account: the pay period says so and links there, and changes nothing itself.
     const gifts = within(buckets).getByText("Holiday gifts").closest("li")!;
     expect(gifts).toHaveTextContent("Goal reached");
-    await userEvent.click(within(gifts).getByRole("button", { name: "Stop saving into Holiday gifts" }));
-
-    // The move into it ends with this pay period; nothing else about it changes.
-    await waitFor(() =>
-      expect(bodiesSentTo(fetchMock, "PUT /api/items/8")[0]).toMatchObject({
-        name: "Gift fund",
-        kind: "bucket_move",
-        bucketId: 7,
-        schedule: { frequency: "every_pay_period", endDate: "2099-10-14" },
-      }),
-    );
+    expect(within(gifts).getByRole("link", { name: "Still saving into it: stop on its account" })).toHaveAttribute("href", "/accounts/1");
+    expect(within(gifts).queryByRole("button")).not.toBeInTheDocument();
+    expect(calls(fetchMock).some((call) => call.startsWith("PUT"))).toBe(false);
   });
 
   it("still shows an account in a pay period that ends before its first balance was entered", async () => {
@@ -539,7 +635,7 @@ describe("pay period screen", () => {
       ...OCTOBER,
       accounts: [
         OCTOBER.accounts[0]!,
-        { ...OCTOBER.accounts[1]!, startingCents: 61248, startingOn: "2026-10-20", entered: false, inCents: 0, outCents: 0, endingCents: 61248 },
+        { ...OCTOBER.accounts[1]!, startingCents: 61248, startingOn: "2026-10-20", entered: false, inCents: 0, outCents: 0, adjustedCents: 0, adjustments: [], endingCents: 61248 },
       ],
     });
     renderApp();
@@ -595,14 +691,25 @@ describe("pay period screen", () => {
     const withBuckets: PeriodDetail = {
       ...OCTOBER,
       occurrences: [...OCTOBER.occurrences, GIFT_FUND],
-      accounts: [{ ...OCTOBER.accounts[0]!, bucketsCents: 20000, availableCents: 289610 }, OCTOBER.accounts[1]!],
+      accounts: [
+        { ...OCTOBER.accounts[0]!, bucketsCents: 20000, availableCents: 289610, startingBucketsCents: 15000, startingAvailableCents: 106438 },
+        OCTOBER.accounts[1]!,
+      ],
       buckets: [{ bucketId: 7, accountId: 1, startingCents: 15000, endingCents: 20000 }],
       bucketMoves: [{ bucketId: 7, date: "2026-10-01", amountCents: 5000, kind: "bucket_move", label: "Gift fund", itemId: 8 }],
     };
-    withPeriod(withBuckets, { "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }) });
+    const fund = { ...ELECTRIC_ITEM, id: 8, name: "Gift fund", kind: "bucket_move" as const, bucketId: 7, payFromAccountId: 1 };
+    withPeriod(withBuckets, {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "GET /api/items": () => ({ status: 200, data: [ELECTRIC_ITEM, fund] }),
+    });
     renderApp();
 
     const figures = (await screen.findByText("Projected ending")).closest("dl")!;
+    // The period starts with what is not in a bucket (Rachel, 2026-10-20).
+    const starting = within(figures).getByText("Starting available").closest("div");
+    expect(starting).toHaveTextContent("$1,064.38");
+    expect(starting).toHaveTextContent("Everyday Checking $1,214.38 − $150.00 in buckets");
     const available = within(figures).getByText("Available after buckets").closest("div");
     expect(available).toHaveTextContent("$2,896.10");
     expect(available).toHaveTextContent("$200.00 in buckets");
@@ -618,6 +725,9 @@ describe("pay period screen", () => {
     // Setting money aside happens by itself, and says which bucket it goes into.
     const auto = await panel("Auto-pay & transfers");
     expect(within(auto).getByText("Oct 1 · Everyday Checking → Holiday gifts bucket")).toBeInTheDocument();
+    // A bucket is changed only on its account, so its move's name goes there instead of opening a form.
+    expect(within(auto).getByRole("link", { name: "Gift fund" })).toHaveAttribute("href", "/accounts/1");
+    expect(within(auto).queryByRole("button", { name: /Gift fund/ })).not.toBeInTheDocument();
   });
 
   it("flags a low balance in words, on the figures, the strip and the account", async () => {
@@ -641,7 +751,7 @@ describe("pay period screen", () => {
   });
 
   it("lists estimated interest with the income, in an estimate box", async () => {
-    withPeriod({ ...OCTOBER, interest: [{ accountId: 2, date: "2026-10-10", amountCents: 1677, rateBp: 410 }] });
+    withPeriod({ ...OCTOBER, interest: [{ accountId: 2, date: "2026-10-10", amountCents: 1677, rateBp: 410, estimate: true }] });
     renderApp();
 
     const income = await panel("Income");
@@ -820,6 +930,49 @@ describe("pay period screen", () => {
     ]);
   });
 
+  it("pays one time from another account, leaving the item as it is", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, payFromAccountId: 2 }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Electric" });
+    const from = within(dialog).getByLabelText("Paid from, this one");
+    await waitFor(() => expect(within(from).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Everyday Checking",
+      "Rainy Day Savings",
+      "Visa",
+    ]));
+    expect(from).toHaveValue(String(ELECTRIC.payFromAccountId));
+    await userEvent.selectOptions(from, "2");
+    // A check is only for a checking account, so its field goes.
+    expect(within(dialog).queryByLabelText("Check number")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([{ payFromAccountId: 2 }]));
+  });
+
+  it("skips one time, and puts a skipped one back", async () => {
+    const skippedRent = { ...ELECTRIC, itemId: 3, name: "Rent", scheduledDate: "2026-10-01", dueDate: "2026-10-01", skipped: true };
+    const fetchMock = withPeriod({ ...OCTOBER, occurrences: [...OCTOBER.occurrences, skippedRent] }, {
+      "PUT /api/items/2/occurrences/2026-10-16": () => ({ status: 200, data: { ...ELECTRIC, skipped: true }, changed: true }),
+      "PUT /api/items/3/occurrences/2026-10-01": () => ({ status: 200, data: { ...skippedRent, skipped: false }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Electric" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Edit Electric" })).getByRole("button", { name: "Skip this one" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/2/occurrences/2026-10-16")).toEqual([{ skipped: true }]));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // A skipped one is out of the lists, and only under Skipped, with Put back.
+    const skipped = screen.getByRole("region", { name: "Skipped this pay period" });
+    expect(screen.queryByRole("button", { name: "Edit Rent" })).not.toBeInTheDocument();
+    await userEvent.click(within(skipped).getByRole("button", { name: "Put back Rent, Oct 1" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/3/occurrences/2026-10-01")).toEqual([{ skipped: false }]));
+  });
+
   it("asks for an amount that reads as one in that form, and sends nothing when nothing changed", async () => {
     const fetchMock = withPeriod();
     renderApp();
@@ -857,7 +1010,7 @@ describe("pay period screen", () => {
 });
 
 describe("+ Add item", () => {
-  it("offers the four kinds from its menu, with the keyboard", async () => {
+  it("offers the four kinds and a move out of a bucket from its menu, with the keyboard", async () => {
     withPeriod();
     renderApp();
 
@@ -870,6 +1023,7 @@ describe("+ Add item", () => {
       expect.stringContaining("Money in"),
       expect.stringContaining("Transfer"),
       expect.stringContaining("Recurring item"),
+      expect.stringContaining("Out of a bucket"),
       expect.stringContaining("Upload a pay stub or receipt…"),
     ]);
     expect(items[0]).toHaveFocus();
@@ -932,7 +1086,7 @@ describe("+ Add item", () => {
     ]);
   });
 
-  it("sets part of money coming in aside in a bucket of the account it lands in", async () => {
+  it("puts part of money coming in into a bucket, beside the accounts", async () => {
     const fetchMock = withPeriod(OCTOBER, {
       "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
       "POST /api/entries": () => ({ status: 201, data: BONUS, changed: true }),
@@ -946,21 +1100,23 @@ describe("+ Add item", () => {
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "1,500");
     await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Q3 bonus");
     await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
-    // Setting aside is the last of the screens behind "More options".
-    await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
-    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Set some aside in a bucket" }));
-    const gifts = within(dialog).getByRole("textbox", { name: "Holiday gifts" });
+    // Where it goes is beside the accounts, the whole amount shown (Rachel, 2026-10-20).
+    expect(within(dialog).getByRole("combobox", { name: "Goes into" })).toHaveDisplayValue("Money that is not in a bucket");
+    expect(within(dialog).getByText("$1,500.00")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add another bucket" }));
+    expect(within(dialog).getByRole("combobox", { name: "Bucket 2" })).toHaveDisplayValue("Holiday gifts (holds $200.00 today)");
+    const gifts = within(dialog).getByRole("textbox", { name: "Amount into bucket 2" });
 
-    // More than the bonus itself cannot be set aside; nothing is sent.
+    // More than the bonus itself cannot go into buckets; nothing is sent.
     await userEvent.type(gifts, "2000");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("That sets aside more than the amount itself.");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("The buckets add up to more than the amount itself.");
     expect(calls(fetchMock)).not.toContain("POST /api/entries");
 
     await userEvent.clear(gifts);
     await userEvent.type(gifts, "500");
+    // The first line keeps the rest.
+    expect(within(dialog).getByText("$1,000.00")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
@@ -1000,9 +1156,8 @@ describe("+ Add item", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
     const from = await within(dialog).findByRole("combobox", { name: "Comes out of" });
 
-    // Nothing is assumed: it has to be said, and nothing is sent until it is.
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
-    expect(calls(fetchMock)).not.toContain("POST /api/entries");
+    // It starts on money in no bucket (Rachel, 2026-10-20), and a bucket can be chosen instead.
+    expect(from).toHaveDisplayValue("Money that is not in a bucket");
 
     await userEvent.selectOptions(from, "Holiday gifts (holds $200.00 today)");
     expect(within(dialog).getByText("The bucket and the account both go down by this amount.")).toBeInTheDocument();
@@ -1013,6 +1168,56 @@ describe("+ Add item", () => {
       amountCents: 8500,
       bucketSplits: [{ bucketId: 7, amountCents: 8500 }],
     });
+  });
+
+  it("moves money out of a bucket back to spending money, with its labels", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "POST /api/buckets/7/moves-out": () => ({ status: 201, data: { id: 31 }, changed: true }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Out of a bucket/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Move money out of a bucket" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move it" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the bucket the money comes out of.");
+
+    await userEvent.selectOptions(within(dialog).getByLabelText("Out of"), "Everyday Checking · Holiday gifts (holds $200.00 today)");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "120");
+    await userEvent.type(within(dialog).getByLabelText("What is it"), "Back to spending");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move it" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/moves-out")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/moves-out")[0]).toEqual({
+      date: "2026-10-01",
+      amountCents: 12000,
+      note: "Back to spending",
+      categoryId: null,
+      tagIds: [],
+      reimbursesEntryId: null,
+    });
+  });
+
+  it("lists money moved out of a bucket under Income, and opens it to change", async () => {
+    const moved = { id: 31, bucketId: 7, accountId: 1, date: "2026-10-03", amountCents: 12000, note: "Back to spending", categoryId: null, tagIds: [], reimbursesEntryId: null };
+    const fetchMock = withPeriod({ ...OCTOBER, movesOut: [moved] }, {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "PUT /api/buckets/7/moves-out/31": () => ({ status: 200, data: { id: 31 }, changed: true }),
+    });
+    renderApp();
+
+    const income = await panel("Income");
+    expect(income).toHaveTextContent("Back to spendingOut of Holiday gifts · Oct 3 · Everyday Checking$120.00");
+    await userEvent.click(within(income).getByRole("button", { name: "Edit Back to spending" }));
+    const dialog = await screen.findByRole("dialog", { name: "Money out of a bucket" });
+    expect(within(dialog).getByLabelText("Out of")).toBeDisabled();
+    await userEvent.clear(within(dialog).getByRole("textbox", { name: "Amount" }));
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "150");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7/moves-out/31")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/buckets/7/moves-out/31")[0]).toMatchObject({ amountCents: 15000, date: "2026-10-03" });
   });
 
   it("takes nothing out of a bucket when the money is not in one", async () => {
@@ -1075,6 +1280,41 @@ describe("+ Add item", () => {
       estimate: true,
       accountId: 1,
       toAccountId: 2,
+    });
+  });
+
+  it("puts a transfer into a bucket of the account it goes to, chosen beside To", async () => {
+    const fetchMock = withPeriod(OCTOBER, {
+      "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
+      "POST /api/entries": () => ({ status: 201, data: VET, changed: true }),
+    });
+    renderApp();
+
+    await screen.findByRole("heading", { level: 1, name: "Oct 1 – Oct 14, 2026" });
+    await userEvent.keyboard("{Control>}i{/Control}");
+    const dialog = await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Transfer" }));
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount" }), "150");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "What is it" }), "Gift money");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    const from = within(dialog).getByRole("combobox", { name: "From" });
+    await userEvent.clear(from);
+    await userEvent.type(from, "Rainy{Enter}");
+    // Nothing to choose until the account it goes to has buckets.
+    expect(within(dialog).queryByRole("combobox", { name: "Goes into" })).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByRole("combobox", { name: "To" }), "Everyday{Enter}");
+    const into = await within(dialog).findByRole("combobox", { name: "Goes into" });
+    expect(into).toHaveDisplayValue("Money that is not in a bucket");
+    await userEvent.selectOptions(into, "Holiday gifts (holds $200.00 today)");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({
+      kind: "transfer",
+      amountCents: 15000,
+      accountId: 2,
+      toAccountId: 1,
+      bucketSplits: [{ bucketId: 7, amountCents: 15000 }],
     });
   });
 
@@ -1310,6 +1550,56 @@ describe("pay period screen: a paycheck and its stub", () => {
     expect(calls(fetchMock).some((call) => call.startsWith("PUT "))).toBe(false);
   });
 
+  it("lists a one-off paycheck by its name, and opens its own form from it", async () => {
+    const SOURCE: IncomeSource = {
+      payHistory: [],
+      id: 1,
+      name: "Northwind Health",
+      depositAccountId: 1,
+      grossCents: null,
+      netCents: 248620,
+      netIsEstimate: false,
+      primary: true,
+      schedule: { frequency: "semi_monthly", day1: 1, day2: 15, startDate: "2026-01-01", endDate: null, weekendRule: "none", manualDates: [] },
+      deductions: [],
+      match: null,
+      matchFigures: null,
+    };
+    const BONUS: OneOffPaycheck = {
+      id: 4,
+      incomeSourceId: 1,
+      payDate: "2026-10-01",
+      name: "Q3 bonus",
+      grossCents: null,
+      netCents: 131200,
+      deductions: [],
+      matched: false,
+      matchCents: null,
+      payStubId: 9,
+    };
+    // On the same day as the regular paycheck, from the same source: each is still its own row.
+    const bonusPaycheck: Paycheck = { ...PAYCHECK, netCents: 131200, oneOffId: 4, name: "Q3 bonus" };
+    withPeriod(
+      { ...OCTOBER, paychecks: [PAYCHECK, bonusPaycheck] },
+      {
+        "GET /api/income-sources": () => ({ status: 200, data: [SOURCE] }),
+        "GET /api/income-sources/1/one-off-paychecks": () => ({ status: 200, data: [BONUS] }),
+      },
+    );
+    renderApp();
+
+    const income = await panel("Income");
+    expect(within(income).getByRole("button", { name: "Edit Northwind Health paycheck" })).toBeInTheDocument();
+    // Its amount is its own, changed on its form, not typed over on the row.
+    expect(within(income).getByRole("button", { name: /^Northwind Health paycheck: \$2,486\.20/ })).toBeInTheDocument();
+    expect(within(income).queryByRole("button", { name: /^Q3 bonus · Northwind Health:/ })).not.toBeInTheDocument();
+    await userEvent.click(within(income).getByRole("button", { name: "Edit Q3 bonus · Northwind Health" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit Q3 bonus" });
+    expect(dialog).toHaveTextContent("Saved from a pay stub.");
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Q3 bonus");
+  });
+
   it("adds a paycheck's stub from its row, to be saved as just that paycheck", async () => {
     const fetchMock = withPaycheck({
       "POST /api/income-sources/1/pay-stubs": () => ({ status: 201, data: STUB, changed: true }),
@@ -1482,13 +1772,14 @@ describe("pay period screen: billed later", () => {
     const dialog = await screen.findByRole("dialog", { name: "Mark Therapy as invoiced" });
     expect(within(dialog).getByRole("textbox", { name: "Amount billed" })).toHaveValue("600.00");
     expect(within(dialog).getByLabelText("Covers visits through")).toHaveValue("2026-09-29");
-    fireEvent.change(within(dialog).getByLabelText("Due on"), { target: { value: "2026-10-20" } });
+    // Due a fortnight after today, the day it is marked invoiced on: never before it, whenever this runs.
+    fireEvent.change(within(dialog).getByLabelText("Due on"), { target: { value: addDays(todayIso(), 14) } });
     await userEvent.click(within(dialog).getByRole("button", { name: "Save invoice" }));
 
     // Left at what the visits came to, the amount is not sent: the backend adds up the visits the dates cover.
     await waitFor(() =>
       expect(bodiesSentTo(fetchMock, "POST /api/items/7/invoices")).toEqual([
-        { invoiceDate: todayIso(), dueDate: "2026-10-20", coversThrough: "2026-09-29" },
+        { invoiceDate: todayIso(), dueDate: addDays(todayIso(), 14), coversThrough: "2026-09-29" },
       ]),
     );
   });
@@ -1505,5 +1796,97 @@ describe("pay period screen: billed later", () => {
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/7/invoices/3")).toEqual([{ paid: true, paidDate: todayIso() }]));
     expect(calls(fetchMock).some((call) => call.includes("/occurrences/"))).toBe(false);
+  });
+});
+
+describe("pay period screen: paid ahead", () => {
+  const RUNNING_OUT: PeriodDetail = {
+    ...OCTOBER,
+    paidAheadRunningOut: [
+      { itemId: 11, name: "Pottery course", leftCents: 2500, coversThrough: "2026-10-05", firstUncovered: "2026-10-12", payFromAccountId: 1 },
+    ],
+  };
+
+  it("warns when what was paid ahead runs out, and records another payment", async () => {
+    const fetchMock = withPeriod(RUNNING_OUT, {
+      "POST /api/items/11/paid-ahead/payments": () => ({ status: 201, data: {}, changed: true }),
+    });
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(manual).toHaveTextContent("Runs out · the session on Oct 12 isn't covered · Everyday Checking");
+    expect(within(manual).getByRole("link", { name: "Pottery course" })).toHaveAttribute("href", "/recurring/11");
+    await userEvent.click(within(manual).getByRole("button", { name: "Record a payment" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Record a payment for Pottery course" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Amount paid" }), "100");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save payment" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "POST /api/items/11/paid-ahead/payments")).toEqual([{ date: todayIso(), amountCents: 10000, accountId: 1 }]),
+    );
+  });
+
+  it("says how much went unpaid once it already ran out", async () => {
+    withPeriod({ ...RUNNING_OUT, paidAheadRunningOut: [{ ...RUNNING_OUT.paidAheadRunningOut![0]!, leftCents: -5000 }] });
+    renderApp();
+
+    expect(await panel("Pay manually & one-offs")).toHaveTextContent("Ran out · $50.00 of sessions not paid for");
+  });
+
+  // Rachel, 2026-10-19: "I pay 1275 for a 20 session pack… Yes, plan it".
+  const NEXT_PACK: Occurrence = {
+    ...ELECTRIC,
+    itemId: 12,
+    name: "Climbing classes",
+    scheduledDate: "2026-10-12",
+    dueDate: "2026-10-12",
+    payBy: "2026-10-12",
+    early: false,
+    amountCents: 127500,
+    estimate: false,
+    coversThrough: "2026-12-17",
+    plannedPack: true,
+  };
+
+  it("plans the next pack as a row paid by recording the payment, with the pack's price filled in", async () => {
+    const fetchMock = withPeriod(
+      { ...OCTOBER, occurrences: [NEXT_PACK] },
+      { "POST /api/items/12/paid-ahead/payments": () => ({ status: 201, data: {}, changed: true }) },
+    );
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    expect(manual).toHaveTextContent(/Next pack · (was due|due) Oct 12 · covers sessions through Dec 17 · Everyday Checking/);
+    expect(within(manual).getByRole("link", { name: "Climbing classes" })).toHaveAttribute("href", "/recurring/12");
+    // Never ticked: paying it records the payment, which plans the pack after.
+    expect(within(manual).queryByRole("checkbox", { name: "Climbing classes paid" })).not.toBeInTheDocument();
+    await userEvent.click(within(manual).getByRole("button", { name: "Record a payment" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Record a payment for Climbing classes" });
+    expect(within(dialog).getByRole("textbox", { name: "Amount paid" })).toHaveValue("1275.00");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save payment" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "POST /api/items/12/paid-ahead/payments")).toEqual([{ date: todayIso(), amountCents: 127500, accountId: 1 }]),
+    );
+  });
+
+  // Rachel, 2026-10-20: "I also want the option to just change the date."
+  it("moves the next pack to another day, naming it by the day it was planned for", async () => {
+    const fetchMock = withPeriod(
+      { ...OCTOBER, occurrences: [NEXT_PACK] },
+      { "PUT /api/items/12/paid-ahead/packs/2026-10-12": () => ({ status: 200, data: {}, changed: true }) },
+    );
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    await userEvent.click(within(manual).getByRole("button", { name: "Change date" }));
+    const dialog = await screen.findByRole("dialog", { name: "Next Climbing classes pack" });
+    expect(within(dialog).getByLabelText("Due on")).toHaveValue("2026-10-12");
+    fireEvent.change(within(dialog).getByLabelText("Due on"), { target: { value: "2026-10-16" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/12/paid-ahead/packs/2026-10-12")).toEqual([{ date: "2026-10-16" }]));
   });
 });

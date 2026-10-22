@@ -1,9 +1,8 @@
-import { Banknote, ChevronLeft, ChevronRight, FileText, Trash2 } from "lucide-react";
-import { type FormEvent, type ReactNode, useId, useState } from "react";
+import { Banknote, FileText, Trash2 } from "lucide-react";
+import { type FormEvent, useId, useState } from "react";
 import { useNavigate } from "react-router";
 import type { Account } from "../../api/accounts";
 import {
-  type DeductionInput,
   type IncomeSource,
   type IncomeSourceInput,
   type MatchMode,
@@ -18,19 +17,18 @@ import {
 import { formatDate, todayIso } from "../../lib/dates";
 import { ACCEPTED_STUBS, problemWithStub, type StubRead, useReadStub, useUploadStub } from "../../api/payStubs";
 import { useDefaultDate } from "../../api/settings";
-import { centsToInput, formatCents, parseDollars } from "../../lib/money";
+import { centsToInput, parseDollars } from "../../lib/money";
 import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
 import { type FormGroup, type PartProblem, useFormParts } from "../FormParts";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
-import { Picker, TextPicker } from "../Picker";
+import { Picker } from "../Picker";
 import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_LINK, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
+import { type DeductionRow, DeductionsEditor, deductionRows, Pager, parseDeductions, Screen } from "./Deductions";
 import { FREQUENCY_LABELS, WEEKEND_LABELS } from "./schedule";
-
-const DEDUCTION_SUGGESTIONS = ["401(k)", "Roth 401(k)", "403(b)", "HSA", "FSA", "Pension"] as const;
 
 /** Whether the employer adds anything, and how it is worked out. */
 type MatchChoice = "none" | MatchMode;
@@ -42,12 +40,6 @@ const MATCH_OPTIONS: readonly { value: MatchChoice; label: string }[] = [
   { value: "fixed", label: "The same dollar amount every paycheck" },
 ];
 
-/** How a deduction is given: dollars a paycheck, or a share of gross pay. */
-type DeductionUnit = "dollars" | "percent";
-
-const GROSS_NEEDED_FOR_PERCENT =
-  "A deduction given as a percent of your pay needs the gross amount per paycheck. Please fill that in as well.";
-
 /** The most that can be matched, as the backend takes it: 1,000% of a contribution, up to all of gross pay. */
 const MAX_MATCH_BP = 100_000;
 const MAX_CAP_BP = 10_000;
@@ -55,20 +47,8 @@ const MAX_CAP_BP = 10_000;
 /** How many hand-picked paydays are shown at once: the form never scrolls, however many there are. */
 const PAYDAYS_SHOWN = 3;
 
-interface DeductionRow {
-  /** Stable key for React; never sent to the backend. */
-  key: number;
-  name: string;
-  unit: DeductionUnit;
-  /** The dollars typed, when `unit` is dollars. */
-  amount: string;
-  /** The percent of gross pay typed, when `unit` is percent. */
-  percent: string;
-  toAccountId: string | null;
-}
-
 /** The screens of the form: who pays and where, when, how much, what comes out, what the employer adds, and deleting. */
-type IncomePart = "who" | "when" | "pay" | "deductions" | "match" | "delete";
+export type IncomePart = "who" | "when" | "pay" | "deductions" | "match" | "delete";
 
 /** Something still to put right: the screen it is on and, for a deduction, which one. */
 type Trouble = PartProblem<IncomePart> & { deduction?: number };
@@ -95,6 +75,8 @@ interface IncomeSourceFormProps {
   terms?: PayTerms;
   /** Recording a raise: the amounts apply from a date, and the paychecks before it keep theirs. */
   startAsPayChange?: boolean;
+  /** When changing: the screen to open on, for a form reached from that card's own Edit. */
+  startAt?: IncomePart;
   /** Whether any income source exists yet. The first one always sets the pay periods. */
   isFirst: boolean;
   accounts: readonly Account[];
@@ -118,6 +100,7 @@ export function IncomeSourceForm({
   source,
   terms,
   startAsPayChange = false,
+  startAt,
   isFirst,
   accounts,
   onClose,
@@ -153,6 +136,7 @@ export function IncomeSourceForm({
     // Everyone is asked up to the pay itself; deductions and a match are for those who have them.
     required: groups.indexOf(GROUPS.pay) + 1,
     moreLabel: "Deductions and match",
+    startAt,
   });
 
   const [name, setName] = useState(source?.name ?? "");
@@ -175,20 +159,9 @@ export function IncomeSourceForm({
   // The first source, and the current primary, must stay primary: something has to set the pay periods.
   const primaryLocked = isFirst || source?.primary === true;
   const [primary, setPrimary] = useState(primaryLocked);
-  const [deductions, setDeductions] = useState<DeductionRow[]>(
-    (pay?.deductions ?? []).map((deduction, index) => ({
-      key: index,
-      name: deduction.name,
-      unit: deduction.percentBp === null ? "dollars" : "percent",
-      amount: deduction.percentBp === null ? centsToInput(deduction.amountCents) : "",
-      percent: deduction.percentBp === null ? "" : rateToInput(deduction.percentBp),
-      toAccountId: deduction.toAccountId === null ? null : String(deduction.toAccountId),
-    })),
-  );
+  const [deductions, setDeductions] = useState<DeductionRow[]>(deductionRows(pay?.deductions ?? []));
   // Deductions are shown one at a time; this is the one in view.
   const [chosenDeduction, setChosenDeduction] = useState(0);
-  const deductionAt = Math.min(chosenDeduction, deductions.length - 1);
-  const deduction = deductions[deductionAt];
   const match = pay?.match ?? null;
   const [matchChoice, setMatchChoice] = useState<MatchChoice>(match?.mode ?? "none");
   const [matchAccountId, setMatchAccountId] = useState<string | null>(match ? String(match.toAccountId) : null);
@@ -207,17 +180,6 @@ export function IncomeSourceForm({
   const investmentOptions = offered
     .filter((account) => account.type === "investment")
     .map((account) => ({ id: String(account.id), label: account.name, color: account.color }));
-
-  const updateDeduction = (key: number, change: Partial<DeductionRow>) =>
-    setDeductions((rows) => rows.map((row) => (row.key === key ? { ...row, ...change } : row)));
-
-  const addDeduction = () => {
-    setDeductions((rows) => [
-      ...rows,
-      { key: Math.max(-1, ...rows.map((row) => row.key)) + 1, name: "", unit: "dollars", amount: "", percent: "", toAccountId: null },
-    ]);
-    setChosenDeduction(deductions.length);
-  };
 
   /** Turns the form into a request, or says what still needs attention and where. */
   const toInput = (): IncomeSourceInput | Trouble => {
@@ -240,26 +202,9 @@ export function IncomeSourceForm({
     if (netCents === null || (gross.trim() !== "" && grossCents === null)) {
       return { part: "pay", problem: AMOUNT_HELP };
     }
-    const parsedDeductions: DeductionInput[] = [];
-    for (const [at, row] of deductions.entries()) {
-      const trouble = (problem: string): Trouble => ({ part: "deductions", problem, deduction: at });
-      const toAccountId = row.toAccountId === null ? null : Number(row.toAccountId);
-      if (row.unit === "percent") {
-        const percentBp = parseRate(row.percent);
-        if (row.name.trim() === "" || percentBp === null || percentBp > MAX_CAP_BP) {
-          return trouble("Each deduction needs a name and a percent of your pay like 6.");
-        }
-        if (grossCents === null) {
-          return trouble(GROSS_NEEDED_FOR_PERCENT);
-        }
-        parsedDeductions.push({ name: row.name, percentBp, toAccountId });
-        continue;
-      }
-      const amountCents = parseDollars(row.amount);
-      if (row.name.trim() === "" || amountCents === null) {
-        return trouble("Each deduction needs a name and an amount like 150.00.");
-      }
-      parsedDeductions.push({ name: row.name, amountCents, toAccountId });
+    const parsed = parseDeductions(deductions, grossCents);
+    if ("problem" in parsed) {
+      return { part: "deductions", problem: parsed.problem, deduction: parsed.at };
     }
     let matchInput: IncomeSourceInput["match"] = null;
     if (matchChoice !== "none") {
@@ -325,7 +270,7 @@ export function IncomeSourceForm({
         weekendRule,
         manualDates: frequency === "manual_dates" ? pickedDates : [],
       },
-      deductions: parsedDeductions,
+      deductions: parsed.deductions,
       match: matchInput,
     };
   };
@@ -721,96 +666,15 @@ export function IncomeSourceForm({
 
         {parts.shows("deductions") && (
           <Screen title="Deductions" named={stepping}>
-            {deduction === undefined ? (
-              <>
-                <p className="text-muted">
-                  Money taken out of each paycheck before it reaches you, like a 401(k) or HSA contribution. There are none yet.
-                </p>
-                <button type="button" onClick={addDeduction} className={BUTTON_SECONDARY}>
-                  + Add a deduction
-                </button>
-              </>
-            ) : (
-              // One at a time: each asks four things, and the form never scrolls however many there are.
-              <div key={deduction.key} className="space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-semibold">
-                    Deduction {deductionAt + 1} of {deductions.length}
-                  </p>
-                  {deductions.length > 1 && (
-                    <Pager
-                      label="deduction"
-                      onPrevious={deductionAt === 0 ? undefined : () => setChosenDeduction(deductionAt - 1)}
-                      onNext={deductionAt === deductions.length - 1 ? undefined : () => setChosenDeduction(deductionAt + 1)}
-                    />
-                  )}
-                </div>
-                <div className="grid grid-cols-[minmax(0,1fr)_7.5rem] gap-3">
-                  <TextPicker
-                    label="Name"
-                    noun="deduction"
-                    placeholder="e.g. 401(k)"
-                    suggestions={DEDUCTION_SUGGESTIONS}
-                    value={deduction.name}
-                    onChange={(text) => updateDeduction(deduction.key, { name: text })}
-                  />
-                  <div>
-                    <label htmlFor={`${id}-deduction-unit`} className={LABEL}>
-                      Given as
-                    </label>
-                    <select
-                      id={`${id}-deduction-unit`}
-                      value={deduction.unit}
-                      onChange={(event) => updateDeduction(deduction.key, { unit: event.target.value as DeductionUnit })}
-                      className={INPUT}
-                    >
-                      <option value="dollars">Dollars</option>
-                      <option value="percent">Percent</option>
-                    </select>
-                  </div>
-                </div>
-                {deduction.unit === "dollars" ? (
-                  <MoneyField label="Amount" value={deduction.amount} onChange={(text) => updateDeduction(deduction.key, { amount: text })} />
-                ) : (
-                  <div>
-                    <label htmlFor={`${id}-deduction-percent`} className={LABEL}>
-                      Percent of gross pay
-                    </label>
-                    <input
-                      id={`${id}-deduction-percent`}
-                      value={deduction.percent}
-                      onChange={(event) => updateDeduction(deduction.key, { percent: event.target.value })}
-                      inputMode="decimal"
-                      autoComplete="off"
-                      placeholder="e.g. 6"
-                      className={`${INPUT} tabular-nums`}
-                    />
-                    <p className={HINT}>{percentHint(deduction.percent, grossTyped)}</p>
-                  </div>
-                )}
-                <Picker
-                  label="Goes into (optional)"
-                  noun="account"
-                  placeholder="Not one of my accounts"
-                  options={accountOptions}
-                  value={deduction.toAccountId}
-                  onChange={(accountId) => updateDeduction(deduction.key, { toAccountId: accountId })}
-                  clearable
-                />
-                <div className="-mx-2 flex flex-wrap justify-between gap-x-2">
-                  <button
-                    type="button"
-                    onClick={() => setDeductions((rows) => rows.filter((row) => row.key !== deduction.key))}
-                    className={BUTTON_LINK}
-                  >
-                    Remove this deduction
-                  </button>
-                  <button type="button" onClick={addDeduction} className={BUTTON_LINK}>
-                    + Add another
-                  </button>
-                </div>
-              </div>
-            )}
+            <DeductionsEditor
+              rows={deductions}
+              onRowsChange={setDeductions}
+              at={chosenDeduction}
+              onAtChange={setChosenDeduction}
+              accountOptions={accountOptions}
+              grossCents={grossTyped}
+              emptyText="Money taken out of each paycheck before it reaches you, like a 401(k) or HSA contribution. There are none yet."
+            />
           </Screen>
         )}
 
@@ -938,39 +802,6 @@ export function IncomeSourceForm({
   );
 }
 
-/**
- * One screen of the form. While stepping through, it says what it asks; when it was chosen by
- * name at the top of the form, that name is enough, and is kept for screen readers only.
- */
-function Screen({ title, named, children }: { title: string; named: boolean; children: ReactNode }) {
-  return (
-    <fieldset className="min-w-0">
-      <legend className={named ? "float-left mb-3 w-full text-lg font-semibold" : "sr-only"}>{title}</legend>
-      <div className="clear-both space-y-4">{children}</div>
-    </fieldset>
-  );
-}
-
-/** Steps through a list shown a few at a time: the one before, and the one after. */
-function Pager({ label, status, onPrevious, onNext }: { label: string; status?: string; onPrevious?: () => void; onNext?: () => void }) {
-  const arrow = "flex size-11 shrink-0 items-center justify-center rounded-lg border border-line disabled:opacity-40";
-  return (
-    <div className="flex items-center gap-2">
-      {status && (
-        <p role="status" className="text-sm text-muted tabular-nums">
-          {status}
-        </p>
-      )}
-      <button type="button" onClick={onPrevious} disabled={!onPrevious} aria-label={`Previous ${label}`} className={arrow}>
-        <ChevronLeft aria-hidden className="size-5" />
-      </button>
-      <button type="button" onClick={onNext} disabled={!onNext} aria-label={`Next ${label}`} className={arrow}>
-        <ChevronRight aria-hidden className="size-5" />
-      </button>
-    </div>
-  );
-}
-
 function isTrouble(input: IncomeSourceInput | Trouble): input is Trouble {
   return "problem" in input;
 }
@@ -984,19 +815,6 @@ function correctingHint(source: IncomeSource): string {
   return source.payHistory.length > 1
     ? "Saving corrects every paycheck up to your next pay change."
     : "Saving corrects every paycheck, past and future.";
-}
-
-/** Under a percent deduction: what it comes to a paycheck, or what is still needed to say. */
-function percentHint(percent: string, grossCents: number | null): string {
-  if (grossCents === null) {
-    return "Fill in the gross amount per paycheck too, so this can be worked out.";
-  }
-  const percentBp = parseRate(percent);
-  if (percentBp === null) {
-    return "Of the gross amount per paycheck.";
-  }
-  // The backend's figure is the one that counts; this is the same sum, shown while typing.
-  return `About ${formatCents(Math.round((grossCents * percentBp) / 10_000))} a paycheck.`;
 }
 
 function DeleteSource({ source, onDeleted }: { source: IncomeSource; onDeleted: () => void }) {

@@ -140,7 +140,7 @@ const nothingProjected: Handler = () => ({ status: 200, data: [] });
 
 /** Any account's year so far and balance-by-balance changes: nothing to say until a test gives some. */
 const NO_PERFORMANCE = /^GET \/api\/accounts\/\d+\/performance$/;
-const nothingToCompare: Handler = () => ({ status: 200, data: { thisYear: null, balances: [] } });
+const nothingToCompare: Handler = () => ({ status: 200, data: { thisYear: null, balances: [], actualGrowth: null } });
 
 /** Any income source's year: nothing has arrived until a test says so. */
 const NO_YEAR = /^GET \/api\/income-sources\/\d+\/this-year$/;
@@ -149,8 +149,8 @@ const nothingThisYear: Handler = () => ({
   data: { year: 2026, soFarCents: 0, paychecksSoFar: 0, wholeYearCents: 0, paychecksInYear: 0, estimate: false, grossSoFarCents: 0, grossPaychecksSoFar: 0, grossWholeYearCents: 0, grossPaychecksInYear: 0 },
 });
 
-/** Any income source before a pay stub is added. */
-const NO_STUBS = /^GET \/api\/income-sources\/\d+\/pay-stubs$/;
+/** Any income source before a pay stub, or a one-off paycheck, is added. */
+const NO_STUBS = /^GET \/api\/income-sources\/\d+\/(pay-stubs|one-off-paychecks)$/;
 const noStubs: Handler = () => ({ status: 200, data: [] });
 
 /** Any bill's or budget's year before anything falls in it. */

@@ -31,7 +31,8 @@ export function Segmented<T extends string>({ legend, options, value, onChange, 
         className={`grid gap-1 rounded-lg bg-bg p-1 ${
           withIcons
             ? "auto-cols-fr grid-flow-col"
-            : `${dense ? "grid-cols-3" : "grid-cols-2"} sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none`
+            : // Dense choices share one row on a phone: four in fours, otherwise threes.
+              `${dense ? (options.length === 4 ? "grid-cols-4" : "grid-cols-3") : "grid-cols-2"} sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none`
         }`}
       >
         {options.map((option) => (

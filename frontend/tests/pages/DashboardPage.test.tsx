@@ -36,9 +36,34 @@ const DASHBOARD: Dashboard = {
     to: "2026-10-09",
     totalCents: 656_000,
     categories: [
-      { categoryId: 1, name: "Housing", color: "#0f766e", totalCents: 465_000 },
-      { categoryId: 2, name: "Food", color: "#15803d", totalCents: 191_000 },
-      { categoryId: null, name: "No category", color: null, totalCents: 0 },
+      {
+        categoryId: 1,
+        name: "Housing",
+        color: "#0f766e",
+        totalCents: 465_000,
+        subcategories: [],
+        payees: [{ id: null, name: "Rent", color: null, totalCents: 465_000 }],
+        tags: [],
+      },
+      {
+        categoryId: 2,
+        name: "Food",
+        color: "#15803d",
+        totalCents: 191_000,
+        subcategories: [
+          { id: 5, name: "Groceries", color: "#166534", totalCents: 150_000 },
+          { id: null, name: "Not in a subcategory", color: null, totalCents: 41_000 },
+        ],
+        payees: [
+          { id: null, name: "Northside Market", color: null, totalCents: 150_000 },
+          { id: null, name: "Corner Bakery", color: null, totalCents: 41_000 },
+        ],
+        tags: [
+          { id: null, name: "No tag", color: null, totalCents: 150_000 },
+          { id: 9, name: "Weekly shop", color: "#475569", totalCents: 41_000 },
+        ],
+      },
+      { categoryId: null, name: "No category", color: null, totalCents: 0, subcategories: [], payees: [], tags: [] },
     ],
   },
   netWorthOverTime: [
@@ -112,6 +137,37 @@ describe("Dashboard", () => {
     expect(rows.map((row) => row.textContent)).toEqual(["Housing71%$4,650.00", "Food29%$1,910.00", "No category0%$0.00"]);
     expect(within(card).getByText("Total $6,560.00")).toBeInTheDocument();
     expect(within(card).getByText(/Jul 10, 2026 – Oct 9, 2026/)).toBeInTheDocument();
+  });
+
+  it("opens a category into its subcategories, payees and tags, and goes back", async () => {
+    withDashboard();
+    renderApp("/dashboard");
+
+    const card = await screen.findByRole("region", { name: "Spending by category" });
+    await userEvent.click(within(card).getByRole("button", { name: "Open Food: $1,910.00" }));
+
+    expect(card).toHaveTextContent("Food$1,910.00 · 29% of all spending");
+    const rows = () => within(card).getAllByRole("listitem").map((row) => row.textContent);
+    expect(rows()).toEqual(["Groceries79%$1,500.00", "Not in a subcategory21%$410.00"]);
+    await userEvent.click(within(card).getByRole("radio", { name: "Payee" }));
+    expect(rows()).toEqual(["Northside Market79%$1,500.00", "Corner Bakery21%$410.00"]);
+    await userEvent.click(within(card).getByRole("radio", { name: "Tag" }));
+    expect(rows()).toEqual(["No tag79%$1,500.00", "Weekly shop21%$410.00"]);
+    expect(card).toHaveTextContent("Money with two tags counts under each");
+
+    await userEvent.click(within(card).getByRole("button", { name: "All categories" }));
+    expect(rows()).toEqual(["Housing71%$4,650.00", "Food29%$1,910.00", "No category0%$0.00"]);
+  });
+
+  it("opens a category with only payees straight into them", async () => {
+    withDashboard();
+    renderApp("/dashboard");
+
+    const card = await screen.findByRole("region", { name: "Spending by category" });
+    await userEvent.click(within(card).getByRole("button", { name: "Open Housing: $4,650.00" }));
+
+    expect(within(card).queryByRole("radio", { name: "Payee" })).not.toBeInTheDocument();
+    expect(within(card).getAllByRole("listitem").map((row) => row.textContent)).toEqual(["Rent100%$4,650.00"]);
   });
 
   it("asks again when the dates are changed, and says what a pay period covers", async () => {

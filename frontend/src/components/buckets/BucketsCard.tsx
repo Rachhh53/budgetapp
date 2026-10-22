@@ -1,4 +1,4 @@
-import { PartyPopper } from "lucide-react";
+import { History, PartyPopper } from "lucide-react";
 import { useId, useState } from "react";
 import type { Account } from "../../api/accounts";
 import { type Bucket, useBuckets, useMoveMoneyInto } from "../../api/buckets";
@@ -11,7 +11,7 @@ import { EditButton } from "../EditButton";
 import { describeItemSchedule } from "../items/labels";
 import { clickRowToEdit, ROW_OPENS } from "../rowEdit";
 import { BUTTON_SECONDARY, INPUT, LABEL } from "../ui";
-import { BucketForm } from "./BucketForm";
+import { BucketForm, type BucketPart } from "./BucketForm";
 
 /**
  * The buckets of one checking or savings account (design/account-detail.png): what each holds
@@ -20,8 +20,13 @@ import { BucketForm } from "./BucketForm";
 export function BucketsCard({ account }: { account: Account }) {
   const buckets = useBuckets();
   const [adding, setAdding] = useState(false);
-  // Kept as ids, so an open form always shows the bucket as it is now.
+  // Kept as ids, so an open form always shows the bucket as it is now; with the screen it opens on.
   const [editingId, setEditingId] = useState<number>();
+  const [opensOn, setOpensOn] = useState<BucketPart>();
+  const openForm = (bucketId: number, part?: BucketPart) => {
+    setOpensOn(part);
+    setEditingId(bucketId);
+  };
   const items = useItems().data ?? [];
 
   const all = buckets.data ?? [];
@@ -59,7 +64,8 @@ export function BucketsCard({ account }: { account: Account }) {
                 bucket={bucket}
                 feeding={items.filter((item) => !item.archived && (item.bucketId === bucket.id || item.saveUpBucketId === bucket.id))}
                 paying={items.filter((item) => !item.archived && item.fromBucketId === bucket.id)}
-                onEdit={() => setEditingId(bucket.id)}
+                onEdit={() => openForm(bucket.id)}
+                onHistory={() => openForm(bucket.id, "history")}
               />
             ))}
           </ul>
@@ -96,7 +102,9 @@ export function BucketsCard({ account }: { account: Account }) {
       </button>
 
       {adding && <BucketForm account={account} buckets={all} onClose={() => setAdding(false)} />}
-      {editing && <BucketForm account={account} bucket={editing} buckets={all} onClose={() => setEditingId(undefined)} />}
+      {editing && (
+        <BucketForm account={account} bucket={editing} buckets={all} startAt={opensOn} onClose={() => setEditingId(undefined)} />
+      )}
     </Card>
   );
 }
@@ -106,6 +114,7 @@ function BucketLine({
   feeding,
   paying,
   onEdit,
+  onHistory,
 }: {
   bucket: Bucket;
   /** The recurring items that put money in this bucket. */
@@ -113,6 +122,8 @@ function BucketLine({
   /** The recurring items that are paid out of this bucket. */
   paying: readonly Item[];
   onEdit: () => void;
+  /** Opens its history: what was done to it by hand, and the amounts set for a day. */
+  onHistory: () => void;
 }) {
   const goal = bucket.goalCents;
   // Shown as at most full: a bucket can hold more than its goal.
@@ -150,7 +161,17 @@ function BucketLine({
           </span>
         </div>
         {/* One way in: the amount, the goal and the rest are all changed in the same form. */}
-        <div className="flex shrink-0 sm:justify-end">
+        <div className="flex shrink-0 items-center gap-1 sm:justify-end">
+          <button
+            type="button"
+            data-edit
+            onClick={onHistory}
+            aria-label={`History of ${bucket.name}`}
+            className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-accent-ink hover:bg-bg"
+          >
+            <History aria-hidden className="size-4" />
+            History
+          </button>
           <EditButton name={bucket.name} onClick={onEdit} />
         </div>
       </div>

@@ -1,8 +1,12 @@
-import { type BalanceChange, type BalanceEntry, useDeleteBalance } from "../../api/accounts";
+import { useState } from "react";
+import { type Account, type BalanceChange, type BalanceEntry, useDeleteBalance } from "../../api/accounts";
 import { formatDate } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Amount } from "../Amount";
+import { EditButton } from "../EditButton";
 import { BUTTON_LINK } from "../ui";
+import { BalanceForm } from "./BalanceForm";
+import { dayBefore, Reconcile } from "./Reconcile";
 
 /* One row of "Balances you entered": stacked on a phone, columns from `md` up. */
 const ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[8rem_8rem_8rem_8rem_8rem_1fr_auto] md:items-center";
@@ -12,21 +16,26 @@ export function signed(cents: number | null): string {
   return cents === null ? "—" : `${cents > 0 ? "+" : ""}${formatCents(cents)}`;
 }
 
-/** Every balance the user entered for an account, newest first, each set against the one before it. */
+/**
+ * Every balance the user entered for an account, newest first, each set against the one before it. Each can be
+ * changed or removed, and one that differs from what the records came to says so, to reconcile (Rachel, 2026-10-21:
+ * "where's my recon and difference in accounts?").
+ */
 export function BalanceList({
-  accountId,
+  account,
   balances,
   changes,
   owed,
 }: {
-  accountId: number;
+  account: Account;
   balances: BalanceEntry[];
   /** Each balance set against the one before it; empty until that has loaded. */
   changes: readonly BalanceChange[];
   /** A card or loan: what moves it is charges and payments, so "put in" and "growth" do not apply. */
   owed: boolean;
 }) {
-  const remove = useDeleteBalance(accountId);
+  const remove = useDeleteBalance(account.id);
+  const [editing, setEditing] = useState<BalanceEntry>();
   return (
     <>
       <div aria-hidden className={`${ROW} hidden border-b border-line pt-0 text-sm font-semibold text-muted md:grid`}>
@@ -64,7 +73,8 @@ export function BalanceList({
                 {signed(split?.growthCents ?? null)}
               </span>
               <span className="col-span-2 min-w-0 text-muted md:col-span-1">{entry.note}</span>
-              <span className="col-span-2 text-right md:col-span-1">
+              <span className="col-span-2 flex items-center justify-end gap-1 md:col-span-1">
+                <EditButton name={`the balance from ${formatDate(entry.date)}`} onClick={() => setEditing(entry)} />
                 <button
                   type="button"
                   disabled={remove.isPending}
@@ -75,6 +85,17 @@ export function BalanceList({
                   Remove
                 </button>
               </span>
+              {previous && split?.recordsCents != null && (
+                <div className="col-span-full">
+                  <Reconcile
+                    account={account}
+                    from={previous.date}
+                    through={dayBefore(entry.date)}
+                    recordsCents={split.recordsCents}
+                    enteredCents={entry.amountCents}
+                  />
+                </div>
+              )}
             </li>
           );
         })}
@@ -83,6 +104,13 @@ export function BalanceList({
         <p role="alert" className="mt-3 text-danger">
           {remove.error.message}
         </p>
+      )}
+      {editing && (
+        <BalanceForm
+          account={account}
+          editing={{ entryId: editing.id, date: editing.date, amountCents: editing.amountCents, note: editing.note }}
+          onClose={() => setEditing(undefined)}
+        />
       )}
     </>
   );

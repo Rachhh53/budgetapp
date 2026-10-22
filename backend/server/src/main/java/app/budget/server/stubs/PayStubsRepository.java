@@ -50,6 +50,8 @@ public final class PayStubsRepository {
         PAY_CHANGE,
         /** Only the paycheck the stub is for. */
         PAYCHECK,
+        /** A one-off paycheck of its own, such as a bonus paid on its own day (2026-10-19). */
+        ONE_OFF,
         /** Nothing: the stub is only kept. */
         NONE
     }

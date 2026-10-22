@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ACCOUNTS_KEY } from "./accounts";
-import { BUCKETS_KEY } from "./buckets";
+import { BUCKETS_KEY, type MoveOut } from "./buckets";
 import { CATEGORIES_KEY, TAGS_KEY } from "./categories";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
@@ -84,6 +84,8 @@ export interface EntryDetail {
   paybacks: Entry[];
   /** Money coming in: the expense it pays back; `null` when it pays none back. */
   reimburses: Entry | null;
+  /** An expense: the money moved out of a bucket to pay it back, oldest first. */
+  movesOut: MoveOut[];
 }
 
 /** Names typed before, for the pickers that offer them again. */

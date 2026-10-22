@@ -1,7 +1,5 @@
 package app.budget.server.income;
 
-import app.budget.engine.BasisPoints;
-import app.budget.engine.Money;
 import app.budget.server.accounts.Account;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
@@ -19,7 +17,6 @@ import app.budget.server.schedule.ScheduleDto;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -29,7 +26,6 @@ import java.util.List;
 public final class IncomeRoutes {
 
     private static final int NAME_MAX = 80;
-    private static final int MAX_DEDUCTIONS = 30;
 
     /** 1,000%: beyond any real match, and a typo still fits so it can be shown and fixed. */
     private static final int MAX_MATCH_BP = 100_000;
@@ -41,12 +37,14 @@ public final class IncomeRoutes {
     private final AccountsRepository accounts;
     private final PayCalendar calendar;
     private final Clock clock;
+    private final DeductionInputs deductionInputs;
 
     public IncomeRoutes(IncomeRepository income, AccountsRepository accounts, PayCalendar calendar, Clock clock) {
         this.income = income;
         this.accounts = accounts;
         this.calendar = calendar;
         this.clock = clock;
+        this.deductionInputs = new DeductionInputs(accounts);
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -232,7 +230,7 @@ public final class IncomeRoutes {
 
     private void thisYear(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        IncomeRepository.Source source = income.find(id).orElseThrow(ApiException::notFound);
+        income.find(id).orElseThrow(ApiException::notFound);
         LocalDate today = LocalDate.now(clock);
         List<PayCalendar.Paycheck> inYear = calendar.paychecks(today.withDayOfYear(1), today.withDayOfYear(today.lengthOfYear())).stream()
                 .filter(paycheck -> paycheck.incomeSourceId() == id)
@@ -245,10 +243,10 @@ public final class IncomeRoutes {
                 inYear.stream().mapToLong(PayCalendar.Paycheck::netCents).sum(),
                 inYear.size(),
                 inYear.stream().anyMatch(paycheck -> paycheck.payDate().isAfter(today) && paycheck.estimate()),
-                gross(source, arrived).stream().mapToLong(Long::longValue).sum(),
-                gross(source, arrived).size(),
-                gross(source, inYear).stream().mapToLong(Long::longValue).sum(),
-                gross(source, inYear).size()));
+                gross(arrived).stream().mapToLong(Long::longValue).sum(),
+                gross(arrived).size(),
+                gross(inYear).stream().mapToLong(Long::longValue).sum(),
+                gross(inYear).size()));
     }
 
     /**
@@ -256,11 +254,9 @@ public final class IncomeRoutes {
      * day its schedule names (so a raise counts from its date). A paycheck from before a gross
      * amount was entered is left out rather than guessed at.
      */
-    private static List<Long> gross(IncomeRepository.Source source, List<PayCalendar.Paycheck> paychecks) {
-        return paychecks.stream()
-                .map(paycheck -> source.termsOn(paycheck.scheduledDate()).pay().grossCents())
-                .filter(java.util.Objects::nonNull)
-                .toList();
+    private static List<Long> gross(List<PayCalendar.Paycheck> paychecks) {
+        // A one-off paycheck (a bonus) carries its own gross; a regular one the amount in force on its day.
+        return paychecks.stream().map(PayCalendar.Paycheck::grossCents).filter(java.util.Objects::nonNull).toList();
     }
 
     /** "Pay periods follow" in Settings: hands the role to this source without touching anything else about it. */
@@ -369,33 +365,6 @@ public final class IncomeRoutes {
     }
 
     private List<Deduction> deductions(List<DeductionInput> inputs, Long grossCents) {
-        if (inputs == null) {
-            return List.of();
-        }
-        if (inputs.size() > MAX_DEDUCTIONS || inputs.contains(null)) {
-            throw ApiException.badRequest("Please keep to " + MAX_DEDUCTIONS + " paycheck deductions or fewer.");
-        }
-        List<Deduction> deductions = new ArrayList<>();
-        for (DeductionInput input : inputs) {
-            if (input.toAccountId() != null && !accounts.exists(input.toAccountId())) {
-                throw ApiException.badRequest("Please choose the account each deduction goes to from the list.");
-            }
-            String name = Inputs.text(input.name(), "a name for each deduction", NAME_MAX);
-            if (input.percentBp() == null) {
-                deductions.add(new Deduction(name, Inputs.amount(input.amountCents(), "A deduction amount"), input.toAccountId(), null));
-                continue;
-            }
-            if (input.percentBp() < 0 || input.percentBp() > MAX_CAP_BP) {
-                throw ApiException.badRequest("Please enter each deduction's share of your pay between 0% and 100%.");
-            }
-            if (grossCents == null) {
-                throw ApiException.badRequest(
-                        "A deduction given as a percent of your pay needs the gross amount of a paycheck. Please fill that in as well.");
-            }
-            // Kept in cents as well, so a paycheck is worked out the same way whichever way it was typed.
-            long amount = Money.ofCents(grossCents).times(BasisPoints.of(input.percentBp()).toFraction()).cents();
-            deductions.add(new Deduction(name, amount, input.toAccountId(), input.percentBp()));
-        }
-        return deductions;
+        return deductionInputs.read(inputs, grossCents);
     }
 }

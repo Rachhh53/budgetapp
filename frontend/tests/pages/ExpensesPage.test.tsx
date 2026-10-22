@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Account } from "../../src/api/accounts";
 import type { Attached } from "../../src/api/attachments";
+import type { Bucket } from "../../src/api/buckets";
 import type { Tag } from "../../src/api/categories";
 import type { Entry } from "../../src/api/entries";
 import { todayIso } from "../../src/lib/dates";
@@ -88,7 +89,7 @@ function withExpenses(overrides: Parameters<typeof fakeBackend>[0] = {}) {
     "GET /api/entries": () => ({ status: 200, data: [ROOF, PEDS, HSA_PAYOUT] }),
     "GET /api/expense-years": () => ({ status: 200, data: { years: [Number(YEAR), 2024] } }),
     "GET /api/payees": () => ({ status: 200, data: { payees: ["Valley Pediatrics"], reimbursers: ["HSA", "Work"] } }),
-    "GET /api/entries/9": () => ({ status: 200, data: { entry: PEDS, paybacks: [HSA_PAYOUT], reimburses: null } }),
+    "GET /api/entries/9": () => ({ status: 200, data: { entry: PEDS, paybacks: [HSA_PAYOUT], reimburses: null, movesOut: [] } }),
     "GET /api/entries/9/attachments": () => ({ status: 200, data: TWO_FILES }),
     ...overrides,
   });
@@ -160,6 +161,28 @@ describe("Expenses & receipts", () => {
 
     await userEvent.click(within(tagFilter).getByRole("button", { name: "All" }));
     expect(within(list).getByRole("link")).toHaveTextContent("Valley Pediatrics");
+  });
+
+  it("narrows by category, sub-categories included, and then offers only the tags left", async () => {
+    const HOUSING = { id: 20, name: "Housing", color: "#0f766e", parentId: null, itemCount: 0, perYearCents: 0 };
+    const REPAIRS = { ...HOUSING, id: 21, name: "Repairs", parentId: 20 };
+    const HEALTH = { ...HOUSING, id: 30, name: "Health" };
+    withExpenses({
+      "GET /api/categories": () => ({ status: 200, data: [HOUSING, REPAIRS, HEALTH] }),
+      "GET /api/entries": () => ({ status: 200, data: [{ ...ROOF, categoryId: 21 }, { ...PEDS, categoryId: 30 }, HSA_PAYOUT] }),
+    });
+    renderApp("/expenses");
+
+    const category = await screen.findByRole("combobox", { name: "Category" });
+    expect(within(category).getAllByRole("option").map((option) => option.textContent)).toEqual(["Any", "Health", "Housing", "Housing › Repairs"]);
+    await userEvent.selectOptions(category, "Housing");
+
+    const list = screen.getByRole("region", { name: `Expenses in ${YEAR}` });
+    expect(within(list).getAllByRole("link")).toHaveLength(1);
+    expect(within(list).getByRole("link")).toHaveTextContent("Patched the roof");
+    const tagFilter = screen.getByRole("group", { name: "Show expenses with tag" });
+    expect(within(tagFilter).queryByRole("button", { name: "Medical – out of pocket" })).not.toBeInTheDocument();
+    expect(within(tagFilter).getByRole("button", { name: "Home repair" })).toBeInTheDocument();
   });
 
   it("shows another year when one is chosen", async () => {
@@ -277,6 +300,58 @@ describe("One expense", () => {
     expect(within(receipts).getByRole("button", { name: "Save a copy of receipt.jpg" })).toBeInTheDocument();
   });
 
+  it("pays an expense back out of a bucket, and lists it with the money that came back", async () => {
+    const medical: Bucket = {
+      id: 7,
+      accountId: 1,
+      name: "Medical",
+      color: "#b45309",
+      goalCents: null,
+      note: null,
+      archived: false,
+      openedOn: "2026-01-01",
+      goalDate: null,
+      stopAtGoal: false,
+      goalProgress: null,
+      balanceCents: 30000,
+    };
+    const earlier = {
+      id: 31,
+      bucketId: 7,
+      accountId: 1,
+      date: `${YEAR}-01-05`,
+      amountCents: 1000,
+      note: "From the medical fund",
+      categoryId: null,
+      tagIds: [],
+      reimbursesEntryId: 9,
+    };
+    const fetchMock = withExpenses({
+      "GET /api/buckets": () => ({ status: 200, data: [medical] }),
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: PEDS, paybacks: [HSA_PAYOUT], reimburses: null, movesOut: [earlier] } }),
+      "POST /api/buckets/7/moves-out": () => ({ status: 201, data: { id: 32 }, changed: true }),
+    });
+    renderApp("/expenses/9");
+
+    const reimbursement = await screen.findByRole("region", { name: "Reimbursement" });
+    expect(within(reimbursement).getByRole("button", { name: "Edit From the medical fund" })).toHaveTextContent("Out of Medical");
+    await userEvent.click(within(reimbursement).getByRole("button", { name: "+ Pay back from a bucket" }));
+
+    // Opened from the expense: what is still owed, named for it, and paying it back.
+    const dialog = await screen.findByRole("dialog", { name: "Move money out of a bucket" });
+    expect(within(dialog).getByRole("textbox", { name: "Amount" })).toHaveValue("25.00");
+    expect(within(dialog).getByLabelText("What is it")).toHaveValue("Reimbursement: Valley Pediatrics");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Out of"), "Everyday Checking · Medical (holds $300.00 today)");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move it" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/moves-out")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/buckets/7/moves-out")[0]).toMatchObject({
+      amountCents: 2500,
+      note: "Reimbursement: Valley Pediatrics",
+      reimbursesEntryId: 9,
+    });
+  });
+
   it("saves a copy of a receipt and says where Budget put it", async () => {
     const fetchMock = withExpenses({
       "POST /api/attachments/6/copy": () => ({
@@ -336,6 +411,25 @@ describe("One expense", () => {
       submittedOn: `${YEAR}-09-29`,
       to: "HSA",
     });
+  });
+
+  it("saves the day it was sent in once the field is left, not while it is typed", async () => {
+    // Rachel, 2026-10-20: "when I choose day and type 16 it keeps setting to 06".
+    const fetchMock = withExpenses({ "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: PEDS, changed: true }) });
+    renderApp("/expenses/9");
+
+    const sentIn = await screen.findByLabelText("Sent in on (optional)");
+    fireEvent.change(sentIn, { target: { value: `${YEAR}-10-01` } });
+    fireEvent.change(sentIn, { target: { value: `${YEAR}-10-16` } });
+    expect(calls(fetchMock)).not.toContain("PUT /api/entries/9/reimbursement");
+    expect(sentIn).toHaveValue(`${YEAR}-10-16`);
+
+    fireEvent.blur(sentIn);
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toEqual([
+        { status: "submitted", submittedOn: `${YEAR}-10-16`, to: "HSA" },
+      ]),
+    );
   });
 
   it("links to the pay period the expense falls in", async () => {
@@ -430,7 +524,7 @@ describe("One expense", () => {
   it("offers to start tracking an expense nobody was expected to pay back", async () => {
     const untracked: Entry = { ...PEDS, reimbursement: { ...NOT_REPAID } };
     const fetchMock = withExpenses({
-      "GET /api/entries/9": () => ({ status: 200, data: { entry: untracked, paybacks: [], reimburses: null } }),
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: untracked, paybacks: [], reimburses: null, movesOut: [] } }),
       "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: untracked, changed: true }),
     });
     renderApp("/expenses/9");
@@ -446,7 +540,7 @@ describe("One expense", () => {
   it("marking something sent in with no day given means today", async () => {
     const waiting: Entry = { ...PEDS, reimbursement: { ...NOT_REPAID, status: "to_submit", owedCents: 8500 } };
     const fetchMock = withExpenses({
-      "GET /api/entries/9": () => ({ status: 200, data: { entry: waiting, paybacks: [], reimburses: null } }),
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: waiting, paybacks: [], reimburses: null, movesOut: [] } }),
       "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: waiting, changed: true }),
     });
     renderApp("/expenses/9");

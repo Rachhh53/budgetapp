@@ -1,6 +1,7 @@
 import { Ellipsis, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router";
+import { returnTo, sectionOf } from "../lib/sectionMemory";
 import { NAV_ITEMS } from "../nav";
 import { LockNowButton } from "./security/LockNow";
 import { PRIVACY_NOTE } from "./Sidebar";
@@ -18,7 +19,7 @@ const TAB = "flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 p
 export function PhoneNav() {
   const [moreOpen, setMoreOpen] = useState(false);
   const { pathname } = useLocation();
-  const onMoreScreen = MORE.some((item) => item.path === pathname);
+  const onMoreScreen = MORE.some((item) => item.path === sectionOf(pathname));
 
   // Choosing a screen from the sheet should also put the sheet away.
   useEffect(() => setMoreOpen(false), [pathname]);
@@ -36,12 +37,11 @@ export function PhoneNav() {
             {MORE.map(({ path, label, icon: Icon }) => (
               <li key={path}>
                 <NavLink
-                  to={path}
-                  className={({ isActive }) =>
-                    `flex min-h-11 items-center gap-3 rounded-lg px-3 text-base ${
-                      isActive ? "bg-bg font-semibold text-accent-ink" : "text-ink"
-                    }`
-                  }
+                  to={returnTo(path, pathname)}
+                  aria-current={sectionOf(pathname) === path ? "page" : undefined}
+                  className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-base ${
+                    sectionOf(pathname) === path ? "bg-bg font-semibold text-accent-ink" : "text-ink"
+                  }`}
                 >
                   <Icon aria-hidden className="size-5 shrink-0" />
                   {label}
@@ -64,11 +64,9 @@ export function PhoneNav() {
         {PRIMARY.map(({ path, label, icon: Icon }) => (
           <NavLink
             key={path}
-            to={path}
-            end={path === "/"}
-            className={({ isActive }) =>
-              `${TAB} ${isActive && !moreOpen ? "font-semibold text-accent-ink" : "text-muted"}`
-            }
+            to={returnTo(path, pathname)}
+            aria-current={sectionOf(pathname) === path ? "page" : undefined}
+            className={`${TAB} ${sectionOf(pathname) === path && !moreOpen ? "font-semibold text-accent-ink" : "text-muted"}`}
           >
             <Icon aria-hidden className="size-5" />
             {label}

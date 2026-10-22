@@ -13,6 +13,7 @@ import app.budget.engine.schedule.PayPeriod;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.engine.schedule.WeekendRule;
 import app.budget.server.accounts.Account;
+import app.budget.server.accounts.Account.BalanceEntry;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.accounts.InterestRepository;
@@ -43,6 +44,7 @@ import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +77,10 @@ public final class CardsRoutes {
 
     /** The whole balance: 100%, in basis points. */
     private static final int MAX_SHARE_BP = 10_000;
+    /** The most cash back a card is taken to give: 20%, as migration V33 allows. */
+    private static final int MAX_REWARDS_BP = 2_000;
+    /** The longest note on a redemption. */
+    private static final int NOTE_MAX = 80;
 
     private final CardsRepository cards;
     private final AccountsRepository accounts;
@@ -106,7 +112,12 @@ public final class CardsRoutes {
         routes.get("/api/cards/{id}", ctx -> ApiResponse.ok(ctx, detail(card(ctx))));
         routes.put("/api/cards/{id}/settings", this::saveSettings);
         routes.put("/api/cards/{id}/minimum", this::saveMinimum);
+        routes.put("/api/cards/{id}/rewards", this::saveRewards);
+        routes.post("/api/cards/{id}/rewards/redemptions", this::addRedemption);
+        routes.put("/api/cards/{id}/rewards/redemptions/{redemptionId}", this::updateRedemption);
+        routes.delete("/api/cards/{id}/rewards/redemptions/{redemptionId}", this::deleteRedemption);
         routes.post("/api/cards/{id}/statements", this::saveStatement);
+        routes.put("/api/cards/{id}/statements/{statementId}", this::updateStatement);
         routes.delete("/api/cards/{id}/statements/{statementId}", this::deleteStatement);
         routes.post("/api/cards/{id}/promos", this::createPromo);
         routes.put("/api/cards/{id}/promos/{promoId}", this::updatePromo);
@@ -131,6 +142,44 @@ public final class CardsRoutes {
      * @param plusInterest true when that month's interest is added to the share
      */
     public record MinimumInput(Integer shareBp, Long floorCents, Boolean plusInterest) {}
+
+    /**
+     * Request body for a card's rewards (spec §5.6).
+     *
+     * @param rateBp         the cash back on what is charged, in basis points (1.5% is 150), 1 to 2000; {@code null} for none
+     * @param buildUp        true to let them build up instead of coming off each statement
+     * @param yearlyMonth    built up: every year, all of it goes on at the statement closing in this month (1–12); {@code null} for no such rule
+     * @param thresholdCents built up: all of it goes on once at least this has built up; {@code null} for no such rule
+     * @param startCents     built up: what the card says has built up on {@code startDate}; {@code null} to start from nothing
+     */
+    public record RewardsInput(
+            Integer rateBp, Boolean buildUp, Integer yearlyMonth, Long thresholdCents, Long startCents, LocalDate startDate) {}
+
+    /**
+     * Request body for using built-up rewards as a statement credit.
+     *
+     * @param amountCents {@code null} for everything built up by then
+     */
+    public record RedemptionInput(LocalDate date, Long amountCents, String note) {}
+
+    /**
+     * A redemption as the API returns it.
+     *
+     * @param creditedCents what it comes to: never more than had built up by then; 0 when nothing had
+     */
+    public record RedemptionView(long id, LocalDate date, Long amountCents, String note, long creditedCents) {}
+
+    /**
+     * A card's rewards, as the API returns them.
+     *
+     * @param buildUp         false when they come off each statement
+     * @param builtUpCents    built up: what has built up as of today
+     * @param nextCreditDate  built up: when the next statement credit is, by a rule or a redemption; {@code null} for none in the year ahead
+     * @param nextCreditCents built up: what it comes to
+     */
+    public record RewardsView(
+            int rateBp, boolean buildUp, Integer yearlyMonth, Long thresholdCents, Long startCents, LocalDate startDate, long builtUpCents,
+            LocalDate nextCreditDate, Long nextCreditCents, List<RedemptionView> redemptions) {}
 
     /** How a card's minimum payment is estimated, as the API returns it. */
     public record MinimumView(int shareBp, long floorCents, boolean plusInterest) {}
@@ -201,6 +250,14 @@ public final class CardsRoutes {
      * @param paidCents what has been paid toward it since it closed
      * @param status    {@code planned}, {@code paid}, {@code part_paid} or {@code due}
      */
+    /**
+     * @param recordsCents  an entered statement: what the card's own records came to at the end of its closing day
+     *                      (Rachel, 2026-10-21: "when I enter a statement balance … and there is discrepancy … just
+     *                      make that visible"); {@code null} for the projected one
+     * @param reconcileFrom when they differ, the first day of what to look through: the day after the last entered
+     *                      statement that matched, or the last balance entered, whichever is later; {@code null} when
+     *                      they match
+     */
     public record StatementView(
             Long id,
             LocalDate closeDate,
@@ -209,7 +266,9 @@ public final class CardsRoutes {
             LocalDate dueDate,
             boolean entered,
             long paidCents,
-            String status) {}
+            String status,
+            Long recordsCents,
+            LocalDate reconcileFrom) {}
 
     /** The next payment into a card that is still to be made. */
     public record NextPayment(
@@ -234,10 +293,12 @@ public final class CardsRoutes {
      * @param rates         the regular APR over time, newest first
      * @param nextCloseDate when the statement being built closes; {@code null} without settings
      * @param minimum       how its minimum payment is estimated; the usual rule until it is changed
+     * @param rewardsBp     its cash back on what is charged, in basis points; {@code null} for none
+     * @param rewards       how its rewards are used; {@code null} for none
      */
     public record CardDetail(
             CardView card, List<PromoView> promos, List<StatementView> statements, List<Rate> rates, LocalDate nextCloseDate,
-            LocalDate nextDueDate, MinimumView minimum) {}
+            LocalDate nextDueDate, MinimumView minimum, Integer rewardsBp, RewardsView rewards) {}
 
     private List<CardView> list() {
         LocalDate today = pay.today();
@@ -270,7 +331,131 @@ public final class CardsRoutes {
                 interest.rates(account.id()).stream().filter(rate -> rate.kind() == RateKind.APR).toList(),
                 nextClose,
                 nextClose == null ? null : StatementCycle.dueDate(nextClose, cardSettings.dueDay()),
-                minimumView(cards.minimumRules().getOrDefault(account.id(), CardPayment.MinimumRule.USUAL)));
+                minimumView(cards.minimumRules().getOrDefault(account.id(), CardPayment.MinimumRule.USUAL)),
+                cards.rewardsRates().get(account.id()),
+                rewardsView(account, today));
+    }
+
+    /** How a card's rewards are used, with what has built up today and the next credit; {@code null} without rewards. */
+    private RewardsView rewardsView(Account account, LocalDate today) {
+        Integer rate = cards.rewardsRates().get(account.id());
+        if (rate == null) {
+            return null;
+        }
+        CardsRepository.BuildUp buildUp = cards.rewardsBuildUps().get(account.id());
+        if (buildUp == null) {
+            return new RewardsView(rate, false, null, null, null, null, 0, null, null, List.of());
+        }
+        CardProjector.Result followed = ledger.cardProjection(account, today, today.plusYears(1));
+        // What had built up by today: the last change on or before it, else the card's own starting figure if it has begun.
+        long builtUp = buildUp.startCents() != null && (buildUp.startDate() == null || !buildUp.startDate().isAfter(today))
+                ? buildUp.startCents() : 0;
+        for (CardProjector.RewardsPoint point : followed.rewards()) {
+            if (!point.date().isAfter(today)) {
+                builtUp = point.builtUp().cents();
+            }
+        }
+        Map<Integer, Long> credited = new HashMap<>();
+        CardProjector.Derived next = null;
+        for (CardProjector.Derived line : followed.derived()) {
+            if (line.kind() == CardProjector.Kind.REWARDS_REDEEMED) {
+                if (line.key() >= 0) {
+                    credited.put(line.key(), -line.amount().cents());
+                }
+                if (next == null && line.date().isAfter(today)) {
+                    next = line;
+                }
+            }
+        }
+        List<RedemptionView> redemptions = cards.allRedemptions().getOrDefault(account.id(), List.of()).stream()
+                .map(redemption -> new RedemptionView(redemption.id(), redemption.date(), redemption.amountCents(), redemption.note(),
+                        credited.getOrDefault(Math.toIntExact(redemption.id()), 0L)))
+                .toList();
+        return new RewardsView(rate, true, buildUp.yearlyMonth(), buildUp.thresholdCents(), buildUp.startCents(), buildUp.startDate(),
+                builtUp, next == null ? null : next.date(), next == null ? null : -next.amount().cents(), redemptions);
+    }
+
+    /**
+     * Sets or takes away a card's rewards, and how they are used: off each statement close, or left to build up and
+     * put on by a rule or a redemption (Rachel, 2026-10-20).
+     */
+    private void saveRewards(Context ctx) {
+        Account account = card(ctx);
+        RewardsInput input = Inputs.body(ctx, RewardsInput.class);
+        Integer rate = input.rateBp();
+        if (rate != null && (rate < 1 || rate > MAX_REWARDS_BP)) {
+            throw ApiException.badRequest("Please enter the cash back as a percentage from 0.01 to 20, like 1.50.");
+        }
+        CardsRepository.BuildUp buildUp = rate != null && Boolean.TRUE.equals(input.buildUp()) ? buildUp(input) : null;
+        // Rewards are earned at a statement close, so they mean nothing until the card's dates are in.
+        if (!cards.saveRewardsRate(account.id(), rate)) {
+            throw ApiException.conflict("Please enter this card's statement and due dates first.");
+        }
+        cards.saveRewardsBuildUp(account.id(), buildUp);
+        ApiResponse.ok(ctx, detail(account));
+    }
+
+    private CardsRepository.BuildUp buildUp(RewardsInput input) {
+        Integer month = input.yearlyMonth();
+        if (month != null && (month < 1 || month > 12)) {
+            throw ApiException.badRequest("Please choose the month they go on from the list.");
+        }
+        Long threshold = input.thresholdCents();
+        if (threshold != null && Inputs.amount(threshold, "The amount they go on at") == 0) {
+            throw ApiException.badRequest("Please enter the amount they go on at, more than $0.00, or leave it empty.");
+        }
+        Long start = input.startCents() == null ? null : Inputs.amount(input.startCents(), "What has built up");
+        if (start != null && input.startDate() == null) {
+            throw ApiException.badRequest("Please choose the day that amount is from.");
+        }
+        if (input.startDate() != null && input.startDate().isAfter(pay.today())) {
+            throw ApiException.badRequest("Please choose a day up to today for what has built up.");
+        }
+        return new CardsRepository.BuildUp(month, threshold, start, start == null ? null : input.startDate());
+    }
+
+    private void addRedemption(Context ctx) {
+        Account account = card(ctx);
+        RedemptionInput input = redemptionInput(ctx, account);
+        long id = cards.addRedemption(account.id(), input.date(), input.amountCents(), input.note());
+        ApiResponse.send(ctx, 201, new RedemptionCreated(id, detail(account)));
+    }
+
+    private void updateRedemption(Context ctx) {
+        Account account = card(ctx);
+        long id = Inputs.id(ctx, "redemptionId");
+        cards.findRedemption(account.id(), id).orElseThrow(ApiException::notFound);
+        RedemptionInput input = redemptionInput(ctx, account);
+        cards.updateRedemption(account.id(), id, input.date(), input.amountCents(), input.note());
+        ApiResponse.ok(ctx, detail(account));
+    }
+
+    private void deleteRedemption(Context ctx) {
+        Account account = card(ctx);
+        if (!cards.deleteRedemption(account.id(), Inputs.id(ctx, "redemptionId"))) {
+            throw ApiException.notFound();
+        }
+        ApiResponse.ok(ctx, detail(account));
+    }
+
+    public record RedemptionCreated(long id, CardDetail card) {}
+
+    /** A redemption as sent, checked; only a card whose rewards build up has anything to redeem. */
+    private RedemptionInput redemptionInput(Context ctx, Account account) {
+        if (!cards.rewardsBuildUps().containsKey(account.id())) {
+            throw ApiException.conflict(
+                    "This card's rewards come off each statement on their own, so nothing builds up to redeem. Choose Let them build up first.");
+        }
+        RedemptionInput input = Inputs.body(ctx, RedemptionInput.class);
+        if (input.date() == null) {
+            throw ApiException.badRequest("Please choose the day the credit goes on.");
+        }
+        Long amount = input.amountCents() == null ? null : Inputs.amount(input.amountCents(), "The amount to redeem");
+        if (amount != null && amount == 0) {
+            throw ApiException.badRequest("Please enter how much to redeem, more than $0.00, or choose everything built up.");
+        }
+        String note = Inputs.optionalText(input.note(), "the note", NOTE_MAX);
+        return new RedemptionInput(input.date(), amount, note);
     }
 
     private static MinimumView minimumView(CardPayment.MinimumRule rule) {
@@ -360,7 +545,8 @@ public final class CardsRoutes {
                             new ScheduleRule(
                                     rule.frequency(), rule.interval(), saved.dueDay(), rule.day2(), rule.month(), rule.startDate(),
                                     rule.endDate(), rule.weekendRule(), rule.manualDates()),
-                            terms.daysAfterPayday(), terms.bucketId(), terms.saveUpBucketId(), terms.fromBucketId(), terms.billedLater()),
+                            terms.daysAfterPayday(), terms.bucketId(), terms.saveUpBucketId(), terms.fromBucketId(), terms.billedLater(),
+                            terms.paidAhead()),
                     today);
         }
         return saved;
@@ -388,7 +574,29 @@ public final class CardsRoutes {
 
     private void saveStatement(Context ctx) {
         Account account = card(ctx);
-        StatementInput input = Inputs.body(ctx, StatementInput.class);
+        StatementFields fields = statementFields(account, Inputs.body(ctx, StatementInput.class));
+        cards.saveStatement(account.id(), fields.closeDate(), fields.balanceCents(), fields.minimumDueCents(), fields.dueDate());
+        ApiResponse.send(ctx, 201, detail(account));
+    }
+
+    /** Changes a statement in place: its numbers and dates. 404 for one the card doesn't have; 409 for a day taken. */
+    private void updateStatement(Context ctx) {
+        Account account = card(ctx);
+        long statementId = Inputs.id(ctx, "statementId");
+        StatementFields fields = statementFields(account, Inputs.body(ctx, StatementInput.class));
+        switch (cards.updateStatement(
+                account.id(), statementId, fields.closeDate(), fields.balanceCents(), fields.minimumDueCents(), fields.dueDate())) {
+            case NOT_FOUND -> throw ApiException.notFound();
+            case SAME_DAY -> throw ApiException.conflict(
+                    "There's already a statement that closed that day. Please change that one, or choose another date.");
+            case DONE -> ApiResponse.ok(ctx, detail(account));
+        }
+    }
+
+    private record StatementFields(LocalDate closeDate, long balanceCents, Long minimumDueCents, LocalDate dueDate) {}
+
+    /** Checks a statement's numbers and dates, filling in the due date from the card's usual day when left out. */
+    private StatementFields statementFields(Account account, StatementInput input) {
         LocalDate today = pay.today();
         if (input.closeDate() == null) {
             throw ApiException.badRequest("Please choose the date this statement closed.");
@@ -407,8 +615,7 @@ public final class CardsRoutes {
         if (!dueDate.isAfter(input.closeDate()) || !Inputs.inSupportedYears(dueDate)) {
             throw ApiException.badRequest("A statement is due after it closes. Please check the two dates.");
         }
-        cards.saveStatement(account.id(), input.closeDate(), balance, minimum, dueDate);
-        ApiResponse.send(ctx, 201, detail(account));
+        return new StatementFields(input.closeDate(), balance, minimum, dueDate);
     }
 
     private void deleteStatement(Context ctx) {
@@ -490,6 +697,7 @@ public final class CardsRoutes {
                 null,
                 null,
                 null,
+                false,
                 false);
         long itemId = items.create(
                 new Identity(shortened(account.name() + " · " + promo.label() + " payoff"), ItemKind.CARD_PAYMENT, null, false, List.of()),
@@ -548,7 +756,7 @@ public final class CardsRoutes {
                 CardProjector.Statement next = planned.get();
                 views.add(new StatementView(
                         null, next.closeDate(), next.balance().cents(), next.minimumDue() == null ? null : (Long) next.minimumDue().cents(),
-                        next.dueDate(), false, 0, STATUS_PLANNED));
+                        next.dueDate(), false, 0, STATUS_PLANNED, null, null));
             }
         }
         if (entered.isEmpty()) {
@@ -558,6 +766,8 @@ public final class CardsRoutes {
         LocalDate from = entered.getLast().closeDate().plusDays(1);
         LocalDate to = entered.stream().map(Statement::dueDate).max(LocalDate::compareTo).orElse(today);
         List<Transaction> lines = ledger.transactions(account, from, to.isBefore(from) ? from : to);
+        Map<LocalDate, Long> records = records(account, entered);
+        Map<LocalDate, LocalDate> reconcileFrom = reconcileFrom(account, entered, records);
         for (Statement statement : entered) {
             long paid = lines.stream()
                     .filter(line -> line.amountCents() < 0 && !line.unpaid()
@@ -570,9 +780,50 @@ public final class CardsRoutes {
                     : paid > 0 ? STATUS_PART_PAID : STATUS_DUE;
             views.add(new StatementView(
                     statement.id(), statement.closeDate(), statement.balanceCents(), statement.minimumDueCents(),
-                    statement.dueDate(), true, paid, status));
+                    statement.dueDate(), true, paid, status, records.get(statement.closeDate()),
+                    reconcileFrom.get(statement.closeDate())));
         }
         return views;
+    }
+
+    /** What the card's records came to at the end of each entered statement's closing day, worked out in one pass. */
+    private Map<LocalDate, Long> records(Account account, List<Statement> entered) {
+        List<LocalDate> closes = entered.stream().map(Statement::closeDate).distinct().sorted().toList();
+        Map<LocalDate, Long> records = new HashMap<>();
+        for (Ledger.DayBalances day : ledger.balancesOn(closes)) {
+            day.balances().stream()
+                    .filter(balance -> balance.accountId() == account.id())
+                    .findFirst()
+                    .ifPresent(balance -> records.put(day.date(), balance.balanceCents()));
+        }
+        return records;
+    }
+
+    /**
+     * For each entered statement the records don't match: where to start looking. A balance entered for the card
+     * puts the records right from its day, and a statement that matched says everything up to its close was right.
+     */
+    private Map<LocalDate, LocalDate> reconcileFrom(Account account, List<Statement> entered, Map<LocalDate, Long> records) {
+        List<LocalDate> balancesEntered = accounts.balances(account.id()).stream().map(BalanceEntry::date).sorted().toList();
+        List<Statement> oldestFirst = entered.stream().sorted(Comparator.comparing(Statement::closeDate)).toList();
+        Map<LocalDate, LocalDate> from = new HashMap<>();
+        LocalDate matched = null;
+        for (Statement statement : oldestFirst) {
+            Long counted = records.get(statement.closeDate());
+            if (counted == null || counted == statement.balanceCents()) {
+                matched = statement.closeDate().plusDays(1);
+                continue;
+            }
+            LocalDate balance = balancesEntered.stream().filter(date -> !date.isAfter(statement.closeDate()))
+                    .reduce((earlier, later) -> later).orElse(null);
+            // Never matched and no balance: the month the statement covers.
+            LocalDate start = matched != null ? matched : statement.closeDate().minusMonths(1).plusDays(1);
+            if (balance != null && balance.isAfter(start)) {
+                start = balance;
+            }
+            from.put(statement.closeDate(), start);
+        }
+        return from;
     }
 
     private Map<Long, Long> balances(LocalDate today) {

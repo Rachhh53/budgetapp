@@ -46,6 +46,21 @@ export interface CategorySpending {
   name: string;
   color: string | null;
   totalCents: number;
+  /** What it's made of, largest first, to drill into from the chart. Empty when there's nothing to split by. */
+  subcategories: SpendingPart[];
+  /** By who was paid: the payee, or the bill's or one-off's name without one. */
+  payees: SpendingPart[];
+  /** By tag; money with two tags counts under each. */
+  tags: SpendingPart[];
+}
+
+/** A subcategory, payee or tag within a category. */
+export interface SpendingPart {
+  /** `null` for a payee, and for "Not in a subcategory" and "No tag". */
+  id: number | null;
+  name: string;
+  color: string | null;
+  totalCents: number;
 }
 
 export interface WorthPoint {

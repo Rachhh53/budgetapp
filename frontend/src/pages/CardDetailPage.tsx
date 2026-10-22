@@ -3,11 +3,14 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useCameFrom } from "../lib/cameFrom";
 import { type Account, type AccountDetail, useAccountPerformance, useAccountProjection, useAccounts } from "../api/accounts";
+import { Reconcile } from "../components/accounts/Reconcile";
 import { useAttachmentCounts } from "../api/attachments";
 import { useCategories, useTags } from "../api/categories";
 import {
+  type CardRewards,
   type CardStatement,
   type Promo,
+  type Redemption,
   useAddPayoff,
   useCard,
   useDeletePromo,
@@ -23,6 +26,7 @@ import { useAddItem } from "../components/add/AddItem";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { BillingForm, MinimumForm, PromoForm, StatementForm } from "../components/cards/CardForms";
+import { MONTHS, RedemptionForm, RewardsForm } from "../components/cards/RewardsForms";
 import {
   dayOfMonth,
   minimumRule,
@@ -45,8 +49,10 @@ const STATEMENT_ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[9rem_
 
 /** The pop-up form that is open, if any. One at a time, each short enough for the screen. */
 type Open =
-  | { form: "account" | "balance" | "billing" | "minimum" | "payment" | "statement" }
-  | { form: "promo"; promo?: Promo };
+  | { form: "account" | "balance" | "billing" | "minimum" | "payment" | "rewards" }
+  | { form: "statement"; statement?: CardStatement }
+  | { form: "promo"; promo?: Promo }
+  | { form: "redemption"; redemption?: Redemption };
 
 /**
  * One credit card (design/cards.png): what is owed and how it is paid, its promotional rates
@@ -92,7 +98,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
     );
   }
 
-  const { card, promos, statements, rates, nextCloseDate, nextDueDate, minimum } = detail.data;
+  const { card, promos, statements, rates, nextCloseDate, nextDueDate, minimum, rewards } = detail.data;
   const { account, settings } = card;
   const everyAccount = accounts.data ?? [];
   const points = projection.data ?? [];
@@ -231,7 +237,12 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
         {withBalance.length > 0 && <PayoffCard account={account} promos={withBalance} />}
         {withBalance.length > 0 && <IfNotPaidCard promos={withBalance} />}
 
-        <StatementsCard account={account} statements={statements} onAdd={() => setOpen({ form: "statement" })} />
+        <StatementsCard
+          account={account}
+          statements={statements}
+          onAdd={() => setOpen({ form: "statement" })}
+          onEdit={(statement) => setOpen({ form: "statement", statement })}
+        />
 
         <Card
           title="Statement and due dates"
@@ -246,7 +257,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
               <p className={HINT}>
                 {settings.monthlyEstimateCents === null
                   ? "Charges are added as they happen. No monthly estimate."
-                  : `About ${formatCents(settings.monthlyEstimateCents)} of spending is estimated each statement month, until the real statement is entered.`}
+                  : `About ${formatCents(settings.monthlyEstimateCents)} of spending each statement month in all. Charges you enter count toward it; the rest is estimated until the real statement is entered.`}
               </p>
             </>
           ) : (
@@ -276,6 +287,27 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
           </Card>
         )}
 
+        {/* Rewards are earned at a statement close, so like the minimum they wait for the card's dates (spec §5.6). */}
+        {settings && (
+          <Card title="Rewards" action={<EditButton name="rewards" onClick={() => setOpen({ form: "rewards" })} />}>
+            {rewards === null ? (
+              <p className="text-muted">
+                No rewards set. If this card gives cash back, add its rate: it can come off each statement, or build up until you use it.
+              </p>
+            ) : !rewards.buildUp ? (
+              <>
+                <p className="font-semibold">{formatRate(rewards.rateBp)} cash back on what is charged</p>
+                <p className={HINT}>
+                  All of it comes off the balance when each statement closes, so the payment after it is smaller. Type over a month that came
+                  out different under Charges and payments below.
+                </p>
+              </>
+            ) : (
+              <BuiltUpRewards rewards={rewards} onRedeem={(redemption) => setOpen({ form: "redemption", redemption })} />
+            )}
+          </Card>
+        )}
+
         <RateCard
           account={account}
           rates={rates}
@@ -294,7 +326,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
               you enter, or from the latest statement.
             </p>
           ) : (
-            <BalanceList accountId={account.id} balances={asAccount.balances} changes={performance.data?.balances ?? []} owed />
+            <BalanceList account={account} balances={asAccount.balances} changes={performance.data?.balances ?? []} owed />
           )}
         </Card>
       </div>
@@ -321,7 +353,11 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
         />
       )}
       {open?.form === "minimum" && <MinimumForm account={account} rule={minimum} onClose={close} />}
-      {open?.form === "statement" && <StatementForm account={account} settings={settings} onClose={close} />}
+      {open?.form === "rewards" && <RewardsForm account={account} rewards={rewards} onClose={close} />}
+      {open?.form === "redemption" && (
+        <RedemptionForm account={account} redemption={open.redemption} builtUpCents={rewards?.builtUpCents ?? 0} onClose={close} />
+      )}
+      {open?.form === "statement" && <StatementForm account={account} settings={settings} statement={open.statement} onClose={close} />}
       {open?.form === "promo" && <PromoForm account={account} promo={open.promo} onClose={close} />}
     </>
   );
@@ -525,7 +561,17 @@ function IfNotPaidCard({ promos }: { promos: readonly Promo[] }) {
 }
 
 /** The next statement as projected, then the ones entered as they arrived. */
-function StatementsCard({ account, statements, onAdd }: { account: Account; statements: readonly CardStatement[]; onAdd: () => void }) {
+function StatementsCard({
+  account,
+  statements,
+  onAdd,
+  onEdit,
+}: {
+  account: Account;
+  statements: readonly CardStatement[];
+  onAdd: () => void;
+  onEdit: (statement: CardStatement) => void;
+}) {
   const remove = useDeleteStatement(account.id);
   // Which statements have their PDF (or anything else) attached; the dates asked for do not matter to statements.
   const today = todayIso();
@@ -570,6 +616,9 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
                 </span>
                 <span className="col-span-2 flex items-center justify-end gap-1 md:col-span-1">
                   {statement.id !== null && (
+                    <EditButton name={`the statement that closed ${formatDate(statement.closeDate)}`} onClick={() => onEdit(statement)} />
+                  )}
+                  {statement.id !== null && (
                     <FilesButton
                       count={counts.data?.statements.find((files) => files.statementId === statement.id)?.count ?? 0}
                       name={`the statement that closed ${formatDate(statement.closeDate)}`}
@@ -588,6 +637,17 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
                     </button>
                   )}
                 </span>
+                {statement.recordsCents !== null && statement.reconcileFrom !== null && (
+                  <div className="col-span-full">
+                    <Reconcile
+                      account={account}
+                      from={statement.reconcileFrom}
+                      through={statement.closeDate}
+                      recordsCents={statement.recordsCents}
+                      enteredCents={statement.balanceCents}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -609,5 +669,63 @@ function StatementsCard({ account, statements, onAdd }: { account: Account; stat
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * Rewards left to build up: the rate, what has built up today, how they're used on their own, the next
+ * credit, and each redemption with its pencil, plus Redeem (Rachel, 2026-10-20).
+ */
+function BuiltUpRewards({ rewards, onRedeem }: { rewards: CardRewards; onRedeem: (redemption?: Redemption) => void }) {
+  const rule =
+    rewards.yearlyMonth !== null
+      ? `All of it goes on every ${MONTHS[rewards.yearlyMonth - 1]}, at that statement's close.`
+      : rewards.thresholdCents !== null
+        ? `All of it goes on once it reaches ${formatCents(rewards.thresholdCents)}.`
+        : "They build up until you redeem them.";
+  return (
+    <>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-muted">Built up today</p>
+          <Amount cents={rewards.builtUpCents} className="-ml-2 text-2xl font-bold" />
+          <p className="text-muted">{formatRate(rewards.rateBp)} cash back on what is charged</p>
+        </div>
+        <button type="button" onClick={() => onRedeem()} className={BUTTON_SECONDARY}>
+          Redeem
+        </button>
+      </div>
+      <p className="mt-2">{rule}</p>
+      {rewards.nextCreditDate !== null && rewards.nextCreditCents !== null && (
+        <p className="text-muted">
+          Next credit: <span data-amount>{formatCents(rewards.nextCreditCents)}</span> on {formatDate(rewards.nextCreditDate)}
+        </p>
+      )}
+      {rewards.redemptions.length > 0 && (
+        <ul className="mt-3 divide-y divide-line border-t border-line">
+          {rewards.redemptions.map((redemption) => (
+            <li key={redemption.id} className="flex min-h-11 items-center gap-3 py-1">
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">{formatDate(redemption.date)}</span>
+                <span className="block text-sm text-muted">
+                  {redemption.amountCents === null ? "Everything built up" : "A set amount"}
+                  {redemption.note && ` · ${redemption.note}`}
+                </span>
+              </span>
+              <span data-amount className="shrink-0 tabular-nums">
+                {formatCents(redemption.creditedCents)}
+              </span>
+              <EditButton name={`redemption on ${formatDate(redemption.date)}`} onClick={() => onRedeem(redemption)} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {rewards.startCents !== null && rewards.startDate !== null && (
+        <p className={`${HINT} mt-2`}>
+          Counting from <span data-amount>{formatCents(rewards.startCents)}</span> built up on {formatDate(rewards.startDate)}. Statements you
+          enter already hold their own rewards, so update this when the card shows a different total.
+        </p>
+      )}
+    </>
   );
 }

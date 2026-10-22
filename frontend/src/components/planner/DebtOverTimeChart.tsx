@@ -2,6 +2,7 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 import type { OwedPoint } from "../../api/planner";
 import { formatMonth, yearTicks } from "../../lib/dates";
 import { formatCents, shortDollars } from "../../lib/money";
+import { CHART_TOOLTIP } from "../ui";
 
 const YEAR = new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: "UTC" });
 
@@ -75,7 +76,7 @@ export function DebtOverTimeChart({
             <Tooltip
               formatter={(value, name) => (name === "gap" ? null : [formatCents(Number(value)), name])}
               labelFormatter={(time) => formatMonth(new Date(Number(time)).toISOString().slice(0, 10))}
-              contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
+              {...CHART_TOOLTIP}
             />
             <Area dataKey="gap" name="gap" stroke="none" fill="var(--accent)" fillOpacity={0.15} isAnimationActive={false} tooltipType="none" />
             <Line name="Without the extra" dataKey="without" stroke="var(--text-muted)" strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} />

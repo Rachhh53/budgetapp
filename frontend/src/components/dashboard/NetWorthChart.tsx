@@ -2,6 +2,7 @@ import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Too
 import type { WorthPoint } from "../../api/dashboard";
 import { formatDate } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
+import { CHART_TOOLTIP } from "../ui";
 
 const MONTH_AND_YEAR = new Intl.DateTimeFormat("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
 
@@ -66,8 +67,7 @@ export function NetWorthChart({ points, today }: { points: readonly WorthPoint[]
             <Tooltip
               formatter={(value, name) => [formatCents(Number(value)), name]}
               labelFormatter={(time) => formatDate(new Date(Number(time)).toISOString().slice(0, 10))}
-              contentStyle={{ backgroundColor: "var(--surface)", borderColor: "var(--border)", borderRadius: 8, color: "var(--text)" }}
-              itemStyle={{ color: "var(--text)" }}
+              {...CHART_TOOLTIP}
             />
             <ReferenceLine x={toTime(today)} stroke="var(--border)" />
             <Line name="So far" dataKey="soFar" stroke="var(--accent)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />

@@ -77,7 +77,8 @@ function StubRow({ sourceId, stub }: { sourceId: number; stub: PayStubSummary })
  */
 export function TaxesAndBenefitsCard({ source }: { source: IncomeSource }) {
   const stubs = usePayStubs(source.id);
-  const newest = stubs.data?.find((stub) => stub.status === "saved");
+  // A bonus stub's taxes are not what a regular paycheck pays, so the newest regular one is shown.
+  const newest = stubs.data?.find((stub) => stub.status === "saved" && stub.applied !== "one_off");
   const stub = usePayStub(newest?.id);
   const lines = (stub.data?.lines ?? []).filter((line) => line.tracksAs === "tax" || line.tracksAs === "benefit");
   const hasYtd = lines.some((line) => line.ytdCents !== null);

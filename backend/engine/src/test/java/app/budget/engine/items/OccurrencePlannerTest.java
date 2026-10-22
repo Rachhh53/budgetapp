@@ -12,6 +12,8 @@ import app.budget.engine.schedule.ScheduleGenerator;
 import app.budget.engine.schedule.ScheduleRule;
 import app.budget.engine.schedule.WeekendRule;
 import java.time.LocalDate;
+import java.time.Month;
+import java.util.EnumSet;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +26,16 @@ class OccurrencePlannerTest {
             .periods(ScheduleRule.semiMonthly(1, 15, START, WeekendRule.NONE), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31));
 
     private final OccurrencePlanner planner = new OccurrencePlanner(SCHEDULE, PERIODS);
+
+    @Test
+    void aSeasonalBudgetIsOnlyInThePayPeriodsOfItsMonths() {
+        ScheduleRule winter = new ScheduleRule(Frequency.EVERY_PAY_PERIOD, 1, null, null, null, START, null, WeekendRule.NONE, List.of())
+                .inMonths(EnumSet.of(Month.NOVEMBER, Month.DECEMBER, Month.JANUARY, Month.FEBRUARY, Month.MARCH));
+
+        List<Planned<String>> occurrences = planner.occurrences(List.of(new Version<>(START, winter, 0, "plowing")), date("2026-10-01"), date("2026-11-30"));
+
+        assertThat(occurrences).extracting(Planned::due).containsExactly(date("2026-11-01"), date("2026-11-15"));
+    }
 
     @Test
     void eachOccurrenceTakesTheVersionInForceOnItsScheduledDate() {
