@@ -791,8 +791,33 @@ describe("recurring items screen", () => {
 
     const history = await screen.findByRole("region", { name: "Amount history" });
     await userEvent.click(within(history).getByRole("button", { name: "Remove the amount from Jan 1, 2026" }));
+    // It asks first, keeping is the default, and it says paid bills stay paid.
+    const asking = within(history).getByRole("alertdialog", { name: "Remove the amount from Jan 1, 2026?" });
+    expect(within(asking).getByText(/Bills already paid stay paid/)).toBeInTheDocument();
+    expect(within(asking).getByRole("button", { name: "Keep it" })).toHaveFocus();
+    expect(calls(fetchMock)).not.toContain("DELETE /api/items/1/versions/2");
+    await userEvent.click(within(asking).getByRole("button", { name: "Yes, remove it" }));
 
     await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/items/1/versions/2"));
+  });
+
+  it("keeps an amount when the question is answered Keep it", async () => {
+    const twoPrices: Item = {
+      ...RENT,
+      history: [
+        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000 },
+        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 },
+      ],
+    };
+    const fetchMock = withItems([twoPrices]);
+    renderApp("/recurring/1");
+
+    const history = await screen.findByRole("region", { name: "Amount history" });
+    await userEvent.click(within(history).getByRole("button", { name: "Remove the amount from Jan 1, 2026" }));
+    await userEvent.click(within(history).getByRole("button", { name: "Keep it" }));
+
+    expect(within(history).queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(calls(fetchMock).some((call) => call.startsWith("DELETE"))).toBe(false);
   });
 
   it("offers no Remove when an item has one amount", async () => {

@@ -117,7 +117,7 @@ function Year({ costs, item }: { costs: CostsByMonth; item: Item }) {
           <p role="status" className="mt-3 rounded-lg border border-warn-line bg-warn px-3 py-2 text-warn-ink">
             Your <span data-amount>{formatCents(costs.budgetCents)}</span> a month is below this year's average of{" "}
             <span data-amount>{formatCents(costs.averageCents)}</span>. Use Change the amount if it should be higher.
-            {suggestion !== null && suggestion.reason === "history" && (
+            {suggestion !== null && (suggestion.reason === "history" || suggestion.reason === "short_history") && (
               <>
                 {" "}
                 For {suggestion.year},{" "}

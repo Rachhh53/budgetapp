@@ -26,6 +26,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -218,7 +219,9 @@ public final class ItemCalendar {
      * among them; it is changed as an invoice.
      */
     public Optional<Occurrence> find(Item item, LocalDate scheduledDate) {
-        Expansion expansion = expand(List.of(item), scheduledDate, scheduledDate);
+        // Asked for by its date, an occurrence the schedule no longer names is found too, paid or not, so it can be
+        // changed, and answered for once it has been un-ticked.
+        Expansion expansion = expand(List.of(item), scheduledDate, scheduledDate, scheduledDate);
         return Stream.of(expansion.occurrences(), expansion.visits(), expansion.sessions())
                 .flatMap(List::stream)
                 // A planned pack shares its first session's date, but is paid by recording the payment, never edited.
@@ -231,7 +234,7 @@ public final class ItemCalendar {
      * date. A visit is not something paid, so it keeps none.
      */
     public Optional<Occurrence> findPaid(Item item, LocalDate scheduledDate) {
-        return expand(List.of(item), scheduledDate, scheduledDate).occurrences().stream()
+        return expand(List.of(item), scheduledDate, scheduledDate, scheduledDate).occurrences().stream()
                 .filter(occurrence -> !occurrence.plannedPack() && occurrence.scheduledDate().equals(scheduledDate))
                 .findFirst();
     }
@@ -291,7 +294,12 @@ public final class ItemCalendar {
 
     /** As {@link #expand(LocalDate, LocalDate)}, for just these items. */
     public Expansion expand(List<Item> chosen, LocalDate from, LocalDate to) {
-        Expansion plain = expandSchedules(chosen, from, to);
+        return expand(chosen, from, to, null);
+    }
+
+    /** @param asked a scheduled date to list even if it is not paid and the schedule no longer names it; may be null */
+    private Expansion expand(List<Item> chosen, LocalDate from, LocalDate to, LocalDate asked) {
+        Expansion plain = expandSchedules(chosen, from, to, asked);
         List<Item> packs = chosen.stream().filter(item -> item.versions().stream().anyMatch(version -> version.terms().pack().isPresent())).toList();
         if (packs.isEmpty()) {
             return plain;
@@ -455,13 +463,13 @@ public final class ItemCalendar {
 
     /** {@code item}'s sessions over its whole life to the look-ahead's end, skipped ones left out, oldest first. */
     private List<Occurrence> activeSessions(Item item) {
-        return expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(), pay.horizonEnd()).sessions().stream()
+        return expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(), pay.horizonEnd(), null).sessions().stream()
                 .filter(session -> !session.skipped())
                 .toList();
     }
 
     /** {@link #expand(List, LocalDate, LocalDate)} without the planned packs: what the schedules themselves name. */
-    private Expansion expandSchedules(List<Item> chosen, LocalDate from, LocalDate to) {
+    private Expansion expandSchedules(List<Item> chosen, LocalDate from, LocalDate to, LocalDate asked) {
         LocalDate lo = from.minusMonths(MARGIN_MONTHS);
         LocalDate hi = to.plusMonths(MARGIN_MONTHS);
         List<PayPeriod> periods = pay.payPeriods(lo, hi);
@@ -486,12 +494,15 @@ public final class ItemCalendar {
                     .map(ItemCalendar::planned)
                     .toList();
             Map<LocalDate, Override> edited = edits.getOrDefault(item.id(), Map.of());
+            // The scheduled dates listed, so a payment whose date the schedule no longer names can still be found.
+            Set<LocalDate> listed = new HashSet<>();
             for (Planned<Terms> planned : planner.occurrences(versions, lo, hi)) {
                 // While an item is paused, what its schedule names simply does not happen; nor once it is archived.
                 if (paused.stream().anyMatch(pause -> pause.covers(planned.scheduled()))
                         || Archiving.awayOn(item.archivedOn(), planned.scheduled())) {
                     continue;
                 }
+                listed.add(planned.scheduled());
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
                 Occurrence occurrence = occurrence(item, planned, edit, assigner, payRule, null, null);
                 // Billed by use: no bill comes when the days since the last one had no months it can happen in.
@@ -502,6 +513,21 @@ public final class ItemCalendar {
                 // does a session of something paid ahead: the payment made ahead, a one-off, already did.
                 Terms terms = planned.version().details();
                 (terms.billedLater() ? visits : terms.paidAhead() ? sessions : occurrences).add(occurrence);
+            }
+            // A payment is real money, whatever the schedule says now (Rachel, 2026-10-22: "I deleted an estimate from a
+            // recurring bill and it deleted all my real payments"). Payments are kept by the date the schedule named
+            // when they were made; once a schedule is changed or an amount with its own schedule is removed, that date
+            // may no longer come up. Such a payment is still listed, on the date it was due under the terms in force
+            // then, in the period its paid date puts it in.
+            for (Override edit : edited.values()) {
+                LocalDate scheduled = edit.originalDueDate();
+                if (!(edit.paid() || scheduled.equals(asked)) || listed.contains(scheduled) || scheduled.isBefore(lo) || scheduled.isAfter(hi)) {
+                    continue;
+                }
+                Planned<Terms> planned = new Planned<>(scheduled, scheduled, null, planned(item.versionOn(scheduled)));
+                Terms terms = planned.version().details();
+                (terms.billedLater() ? visits : terms.paidAhead() ? sessions : occurrences)
+                        .add(occurrence(item, planned, edit, assigner, payRule, null, null));
             }
             for (Invoice invoice : invoiced.getOrDefault(item.id(), List.of())) {
                 if (!invoice.dueDate().isBefore(lo) && !invoice.dueDate().isAfter(hi)) {
@@ -633,7 +659,7 @@ public final class ItemCalendar {
     /** {@link Standing} for one item, as of {@code today}. */
     public Standing standing(Item item, LocalDate today) {
         return standing(item, today, prepayments.forItem(item.id()), expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(),
-                pay.horizonEnd()).sessions());
+                pay.horizonEnd(), null).sessions());
     }
 
     /**
@@ -646,7 +672,7 @@ public final class ItemCalendar {
         for (Item item : chosen) {
             if (item.versions().stream().anyMatch(version -> version.terms().paidAhead())) {
                 List<Occurrence> sessions =
-                        expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(), pay.horizonEnd()).sessions();
+                        expandSchedules(List.of(item), item.versions().getFirst().effectiveFrom(), pay.horizonEnd(), null).sessions();
                 standings.put(item.id(), standing(item, today, paid.getOrDefault(item.id(), List.of()), sessions));
             }
         }

@@ -1,10 +1,12 @@
 package app.budget.server.plans;
 
+import app.budget.engine.BasisPoints;
 import app.budget.engine.Money;
 import app.budget.engine.items.AnnualAmount;
 import app.budget.engine.plans.PlanSuggestions;
 import app.budget.engine.plans.PlanSuggestions.Basis;
 import app.budget.engine.plans.PlanSuggestions.History;
+import app.budget.engine.plans.PlanSuggestions.Month;
 import app.budget.engine.plans.PlanSuggestions.Reason;
 import app.budget.engine.plans.PlanSuggestions.Suggestion;
 import app.budget.engine.reports.AnnualCosts.Window;
@@ -16,6 +18,8 @@ import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.Inputs;
 import app.budget.server.income.IncomeRepository;
+import app.budget.server.income.IncomeRepository.Deduction;
+import app.budget.server.income.IncomeRepository.Match;
 import app.budget.server.income.IncomeRepository.Pay;
 import app.budget.server.income.IncomeRepository.Source;
 import app.budget.server.income.PayCalendar;
@@ -29,6 +33,8 @@ import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.plans.PlansRepository.Amount;
 import app.budget.server.plans.PlansRepository.Plan;
+import app.budget.server.plans.PlansRepository.PlannedPay;
+import app.budget.server.plans.PlansRepository.Raise;
 import app.budget.server.plans.PlansRepository.Status;
 import app.budget.server.reports.AnnualCostsRunner;
 import app.budget.server.settings.SettingKey;
@@ -53,9 +59,11 @@ import org.slf4j.LoggerFactory;
  * Yearly plans (spec §4.10, §5.8): what each bill, budget, transfer and paycheck is to come to
  * next year, drawn up ahead of time and put into force on the day the budget year starts.
  *
- * <p>A draft changes nothing. Each amount in it is the suggestion until one is typed in; only
- * typed amounts are kept, so a draft always shows the items as they are now. The suggestion
- * rules are the engine's ({@link PlanSuggestions}); this gathers what goes into them.
+ * <p>A draft changes nothing. Each amount in it is what its item or paycheck will come to on the
+ * plan's first day until another is typed in or a suggestion is taken (Rachel, 2026-10-23: "if I
+ * have amounts that are starting in recurring item or will continue on 1/1 then those should be
+ * preloaded"); only those are kept, so a draft always shows the items as they are now. The
+ * suggestion rules are the engine's ({@link PlanSuggestions}); this gathers what goes into them.
  */
 public final class PlanService {
 
@@ -147,6 +155,9 @@ public final class PlanService {
      * @param savedUpFor        true for a bill that is saved up for in a bucket
      * @param yearCents         the plan's amount over the whole year
      * @param currentYearCents  {@code currentCents} over the whole year
+     * @param pay               an income source's whole paycheck in the plan's year; {@code null} for an item
+     * @param historyMonths     for a suggestion scaled up from fewer than 12 months, how many; {@code last12Cents} is then
+     *                          what those months came to. {@code null} otherwise
      */
     public record Row(
             String kind,
@@ -167,15 +178,88 @@ public final class PlanService {
             long perPaycheckCents,
             boolean savedUpFor,
             long yearCents,
-            long currentYearCents) {
+            long currentYearCents,
+            PlanPay pay,
+            Integer historyMonths) {
 
         boolean isItem() {
             return ITEM.equals(kind);
         }
 
         boolean changes() {
-            return chosenCents != currentCents;
+            return chosenCents != currentCents || (pay != null && pay.raiseBp() != null);
         }
+    }
+
+    /**
+     * An income source's paycheck in a plan's year: the one planned in full, or else the pay in
+     * force on the plan's first day, which a plan form opens on.
+     *
+     * @param planned          true when it was planned in full; false when it is the pay as it stands
+     * @param raiseFrom        the first day of a raise partway through the year; {@code null} for none
+     * @param raiseBp          the raise, 300 for 3%; {@code null} for none
+     * @param raisedGrossCents gross pay from {@code raiseFrom} on; {@code null} without a raise or a gross amount
+     * @param raisedNetCents   take-home pay from {@code raiseFrom} on; {@code null} without a raise
+     * @param raisedPaychecks  how many of the year's paychecks are at the raised pay; 0 without a raise
+     */
+    public record PlanPay(
+            Long grossCents,
+            long netCents,
+            boolean netIsEstimate,
+            List<Deduction> deductions,
+            Match match,
+            boolean planned,
+            LocalDate raiseFrom,
+            Integer raiseBp,
+            Long raisedGrossCents,
+            Long raisedNetCents,
+            int raisedPaychecks) {
+
+        static PlanPay of(Pay pay, boolean planned, Raise raise, int raisedPaychecks) {
+            Pay raised = raise == null ? null : PlanService.raised(pay, raise.bp());
+            return new PlanPay(
+                    pay.grossCents(), pay.netCents(), pay.netIsEstimate(), pay.deductions(), pay.match(), planned,
+                    raise == null ? null : raise.from(), raise == null ? null : raise.bp(),
+                    raised == null ? null : raised.grossCents(), raised == null ? null : raised.netCents(),
+                    raise == null ? 0 : raisedPaychecks);
+        }
+
+        Raise raise() {
+            return raiseFrom == null ? null : new Raise(raiseFrom, raiseBp);
+        }
+    }
+
+    /** The most a raise can be: double the pay. Beyond any cost of living raise, and a typo still fits so it can be fixed. */
+    static final int MAX_RAISE_BP = 10_000;
+
+    /**
+     * A paycheck after a raise: gross pay and take-home go up by {@code bp}, and a deduction set as a
+     * share of pay goes up with the gross amount, as it does when it is typed. A deduction in dollars
+     * and the match stay as they are. Take-home after a raise is an estimate: the tax on the raise is
+     * not known until a pay stub shows it.
+     */
+    static Pay raised(Pay pay, int bp) {
+        BigDecimal factor = BasisPoints.of(10_000 + bp).toFraction();
+        Long gross = pay.grossCents() == null ? null : Money.ofCents(pay.grossCents()).times(factor).cents();
+        List<Deduction> deductions = pay.deductions().stream()
+                .map(deduction -> deduction.percentBp() == null || gross == null
+                        ? deduction
+                        : new Deduction(
+                                deduction.name(),
+                                Money.ofCents(gross).times(BasisPoints.of(deduction.percentBp()).toFraction()).cents(),
+                                deduction.toAccountId(),
+                                deduction.percentBp()))
+                .toList();
+        return new Pay(gross, Money.ofCents(pay.netCents()).times(factor).cents(), true, deductions, pay.match());
+    }
+
+    /** An income line's take-home over the plan's year: {@code chosen} each paycheck, raised from the raise on. */
+    private static long incomeYearCents(long chosen, int paychecks, PlanPay pay) {
+        if (pay == null || pay.raiseBp() == null) {
+            return chosen * paychecks;
+        }
+        long raised = Money.ofCents(chosen).times(BasisPoints.of(10_000 + pay.raiseBp()).toFraction()).cents();
+        return chosen * (paychecks - pay.raisedPaychecks()) + raised * pay.raisedPaychecks();
     }
 
     /**
@@ -309,19 +393,67 @@ public final class PlanService {
         Long sourceId = row.isItem() ? null : (Long) rowId;
         if (amountCents == null) {
             plans.clear(id, itemId, sourceId);
-        } else {
-            plans.put(id, new Amount(itemId, sourceId, row.suggestedCents(), Inputs.amount(amountCents, "The amount"), true));
+            return;
         }
+        long amount = Inputs.amount(amountCents, "The amount");
+        jdbi.useTransaction(handle -> {
+            plans.put(id, new Amount(itemId, sourceId, row.suggestedCents(), amount, true));
+            // A paycheck planned in full keeps its take-home in step with the amount typed here, and keeps its raise.
+            if (sourceId != null && row.pay().planned()) {
+                PlanPay planned = row.pay();
+                plans.putPay(id, sourceId, new PlannedPay(
+                        new Pay(planned.grossCents(), amount, planned.netIsEstimate(), planned.deductions(), planned.match()),
+                        planned.raise()));
+            }
+        });
     }
 
-    /** Takes every typed amount out of one step, or of all of them when {@code step} is {@code null}. */
-    public void acceptSuggestions(long id, Step step) {
+    /**
+     * Plans an income source's whole paycheck for a draft's year: take-home, gross, deductions and
+     * the match, and a raise partway through the year. Nothing about the source itself changes
+     * until the plan takes effect.
+     *
+     * @param raise {@code null} when the pay stays the same all year
+     */
+    public void setPay(long id, long sourceId, Pay planned, Raise raise) {
         Plan plan = planning(id);
-        for (Row row : rows(plan)) {
-            if (row.yours() && (step == null || row.step() == step)) {
-                plans.clear(id, row.isItem() ? (Long) row.id() : null, row.isItem() ? null : (Long) row.id());
+        Row row = rows(plan).stream()
+                .filter(candidate -> !candidate.isItem() && candidate.id() == sourceId)
+                .findFirst()
+                .orElseThrow(ApiException::notFound);
+        if (raise != null) {
+            // From the plan's first day it is not a raise but the pay; after the year it belongs to the next plan.
+            if (!raise.from().isAfter(plan.startsOn()) || raise.from().isAfter(plan.endsOn())) {
+                throw ApiException.badRequest(
+                        "Please choose a day in " + plan.year() + " for the raise, after the first day of the plan.");
+            }
+            if (raise.bp() < 1 || raise.bp() > MAX_RAISE_BP) {
+                throw ApiException.badRequest("Please enter the raise as a percent above 0% and up to 100%.");
             }
         }
+        jdbi.useTransaction(handle -> {
+            plans.putPay(id, sourceId, new PlannedPay(planned, raise));
+            plans.put(id, new Amount(null, sourceId, row.suggestedCents(), planned.netCents(), true));
+        });
+    }
+
+    /** Takes the suggestion for every line of one step, or of all of them when {@code step} is {@code null}. */
+    public void acceptSuggestions(long id, Step step) {
+        Plan plan = planning(id);
+        jdbi.useTransaction(handle -> {
+            for (Row row : rows(plan)) {
+                if (step != null && row.step() != step) {
+                    continue;
+                }
+                // A line opens on what it will be on the plan's first day, so a suggestion that differs is kept as an
+                // amount of the plan's; one that is the same needs nothing kept. Pay is suggested as it is.
+                if (row.isItem() && row.suggestedCents() != row.currentCents()) {
+                    plans.put(id, new Amount(row.id(), null, row.suggestedCents(), row.suggestedCents(), true));
+                } else if (row.yours()) {
+                    plans.clear(id, row.isItem() ? (Long) row.id() : null, row.isItem() ? null : (Long) row.id());
+                }
+            }
+        });
     }
 
     /** Deletes a draft. Nothing it held had taken effect. */
@@ -359,22 +491,39 @@ public final class PlanService {
                 Long itemId = row.isItem() ? (Long) row.id() : null;
                 Long sourceId = row.isItem() ? null : (Long) row.id();
                 plans.put(plan.id(), new Amount(itemId, sourceId, row.suggestedCents(), row.chosenCents(), row.yours()));
-                if (!row.changes()) {
+                // A paycheck planned in full takes effect even with the same take-home: its deductions or match may differ.
+                boolean plannedPay = !row.isItem() && row.pay().planned();
+                if (!row.changes() && !plannedPay) {
                     continue;
                 }
                 if (row.isItem()) {
                     Terms terms = itemById.get(row.id()).versionOn(plan.startsOn()).terms();
-                    long amount = terms.amountMode() == AmountMode.ANNUAL ? row.chosenCents() : row.perOccurrenceCents();
+                    // A pack is priced for the pack: a session's share of the year, times the sessions in a pack.
+                    long amount = terms.pack().isPresent()
+                            ? row.perOccurrenceCents() * terms.pack().get().sessions()
+                            : terms.amountMode() == AmountMode.ANNUAL ? row.chosenCents() : row.perOccurrenceCents();
                     items.changeAmountFrom(row.id(), plan.startsOn(), amount);
                 } else {
                     Source source = income.find(row.id()).orElseThrow();
                     Pay now = source.termsOn(plan.startsOn()).pay();
-                    // A planned take-home amount is an estimate until a pay stub says what it really is.
-                    Pay planned = new Pay(now.grossCents(), row.chosenCents(), true, now.deductions(), now.match());
+                    PlanPay whole = row.pay();
+                    // A planned take-home amount alone is an estimate until a pay stub says what it really is; a whole
+                    // paycheck is marked as it was planned.
+                    Pay planned = plannedPay
+                            ? new Pay(whole.grossCents(), whole.netCents(), whole.netIsEstimate(), whole.deductions(), whole.match())
+                            : new Pay(now.grossCents(), row.chosenCents(), true, now.deductions(), now.match());
                     income.updateFrom(
                             source.id(),
                             new IncomeRepository.Fields(source.name(), source.depositAccountId(), source.primary(), source.schedule(), planned),
                             plan.startsOn());
+                    // A raise partway through the year is a second pay change, from its own day.
+                    if (plannedPay && whole.raiseBp() != null) {
+                        income.updateFrom(
+                                source.id(),
+                                new IncomeRepository.Fields(source.name(), source.depositAccountId(), source.primary(), source.schedule(),
+                                        raised(planned, whole.raiseBp())),
+                                whole.raiseFrom());
+                    }
                 }
             }
             plans.activate(plan.id(), today);
@@ -528,11 +677,18 @@ public final class PlanService {
         for (Paycheck paycheck : pay.paychecks(last12.from(), last12.to())) {
             received.merge(paycheck.incomeSourceId(), paycheck.netCents(), Long::sum);
         }
+        Map<Long, PlannedPay> plannedPays = plans.pays(plan.id());
         Map<Long, Integer> paychecksInYear = new HashMap<>();
+        Map<Long, Integer> raisedInYear = new HashMap<>();
         for (Paycheck paycheck : pay.paychecks(plan.startsOn(), plan.endsOn())) {
             // A plan's amount is take-home per regular paycheck; a one-off (a bonus) is not one of them.
             if (paycheck.scheduled()) {
                 paychecksInYear.merge(paycheck.incomeSourceId(), 1, Integer::sum);
+                // As with a real pay change, a raise takes over from the first paycheck whose schedule names its day or a later one.
+                PlannedPay planned = plannedPays.get(paycheck.incomeSourceId());
+                if (planned != null && planned.raise() != null && !paycheck.scheduledDate().isBefore(planned.raise().from())) {
+                    raisedInYear.merge(paycheck.incomeSourceId(), 1, Integer::sum);
+                }
             }
         }
 
@@ -542,7 +698,12 @@ public final class PlanService {
             if (schedule.endDate() != null && schedule.endDate().isBefore(plan.startsOn())) {
                 continue;
             }
-            long current = source.termsOn(plan.startsOn()).pay().netCents();
+            Pay now = source.termsOn(plan.startsOn()).pay();
+            PlannedPay planned = plannedPays.get(source.id());
+            PlanPay whole = planned == null
+                    ? PlanPay.of(now, false, null, 0)
+                    : PlanPay.of(planned.pay(), true, planned.raise(), raisedInYear.getOrDefault(source.id(), 0));
+            long current = now.netCents();
             Amount amount = typed.get(source.id());
             long chosen = amount == null ? current : amount.chosenCents();
             int paychecks = paychecksInYear.getOrDefault(source.id(), 0);
@@ -551,7 +712,7 @@ public final class PlanService {
                     INCOME, Step.INCOME, source.id(), source.name(), null, schedule.frequency(),
                     fullYear ? received.getOrDefault(source.id(), 0L) : null,
                     null, current, Reason.FIXED, current, chosen, amount != null,
-                    chosen, paychecks, chosen, false, chosen * paychecks, current * paychecks));
+                    chosen, paychecks, chosen, false, incomeYearCents(chosen, paychecks, whole), current * paychecks, whole, null));
         }
         return rows;
     }
@@ -568,15 +729,37 @@ public final class PlanService {
         Window priorYear = PlanSuggestions.priorYear(plan.suggestedAsOf());
         LocalDate from = before12.from().isBefore(priorYear.from()) ? before12.from() : priorYear.from();
         Map<Long, long[]> sums = new HashMap<>();
-        for (Occurrence occurrence : calendar.expand(planned, from, last12.to()).occurrences()) {
+        // What each item came to month by month over the 24 months, and how many times, for an item with less history.
+        Map<Long, Map<YearMonth, long[]>> byMonth = new HashMap<>();
+        ItemCalendar.Expansion history = calendar.expand(planned, from, last12.to());
+        Map<Long, Item> byId = new HashMap<>();
+        planned.forEach(item -> byId.put(item.id(), item));
+        // What was used of something paid ahead as a pack is its history: each session not skipped, at its share of the
+        // pack's price (Rachel, 2026-10-23: personal training, twice a week, was planned at nothing). The packs bought
+        // are payments made ahead, not bills; one Budget plans next is not history either.
+        List<Map.Entry<Occurrence, Long>> spent = new ArrayList<>();
+        history.occurrences().stream()
+                .filter(occurrence -> !occurrence.plannedPack())
+                .forEach(occurrence -> spent.add(Map.entry(occurrence, occurrence.amountCents())));
+        history.sessions().forEach(session -> spent.add(Map.entry(session,
+                calendar.amounts(byId.get(session.itemId()).versionOn(session.scheduledDate()).terms()).perOccurrenceCents())));
+        for (Map.Entry<Occurrence, Long> entry : spent) {
+            Occurrence occurrence = entry.getKey();
+            long cents = entry.getValue();
             if (!AnnualCostsRunner.counts(occurrence)) {
                 continue;
             }
             LocalDate date = AnnualCostsRunner.date(occurrence);
             long[] sum = sums.computeIfAbsent(occurrence.itemId(), unused -> new long[3]);
-            sum[0] += holds(last12, date) ? occurrence.amountCents() : 0;
-            sum[1] += holds(before12, date) ? occurrence.amountCents() : 0;
-            sum[2] += holds(priorYear, date) ? occurrence.amountCents() : 0;
+            sum[0] += holds(last12, date) ? cents : 0;
+            sum[1] += holds(before12, date) ? cents : 0;
+            sum[2] += holds(priorYear, date) ? cents : 0;
+            if (!date.isBefore(before12.from())) {
+                long[] month = byMonth.computeIfAbsent(occurrence.itemId(), unused -> new HashMap<>())
+                        .computeIfAbsent(YearMonth.from(date), unused -> new long[2]);
+                month[0] += cents;
+                month[1]++;
+            }
         }
 
         ScheduleRule payRule = pay.payRule().orElse(null);
@@ -591,30 +774,42 @@ public final class PlanService {
             Terms terms = item.versionOn(plan.startsOn()).terms();
             AnnualAmount.PerYear perYear = AnnualAmount.perYear(terms.schedule(), payRule, plan.startsOn().getYear());
             Money set = Money.ofCents(terms.amountCents());
-            // Billed by use is a cost each time at about so many times, which the calendar turns into a year.
-            long current = terms.billedByUse()
+            // Billed by use is a cost each time at about so many times, and a pack a share of its price each session,
+            // which the calendar turns into a year.
+            long current = terms.billedByUse() || terms.pack().isPresent()
                     ? calendar.amounts(terms).perYearCents()
                     : (terms.amountMode() == AmountMode.ANNUAL ? set : AnnualAmount.yearly(set, perYear)).cents();
 
             boolean cost = item.kind() == ItemKind.BILL || item.kind() == ItemKind.BUDGET;
             ScheduleRule first = item.versions().getFirst().terms().schedule();
-            YearMonth began = YearMonth.from(first.startDate());
-            if (first.frequency() == Frequency.EVERY_PAY_PERIOD && payRule != null && YearMonth.from(payRule.startDate()).isAfter(began)) {
+            LocalDate beganOn = first.startDate();
+            if (first.frequency() == Frequency.EVERY_PAY_PERIOD && payRule != null && payRule.startDate().isAfter(beganOn)) {
                 // It comes round with each payday, so there is none of it before the paydays themselves begin.
-                began = YearMonth.from(payRule.startDate());
+                beganOn = payRule.startDate();
             }
+            YearMonth began = YearMonth.from(beganOn);
             long[] sum = sums.getOrDefault(item.id(), new long[3]);
             // History counts from the month an item began: a bill added in March has no January to compare.
             Long last = cost && !began.isAfter(YearMonth.from(last12.from())) ? (Long) sum[0] : null;
             Long before = cost && !began.isAfter(YearMonth.from(before12.from())) ? (Long) sum[1] : null;
             Long prior = cost && !began.isAfter(YearMonth.from(priorYear.from())) ? (Long) sum[2] : null;
+            List<Month> months = cost && before == null && scalable(terms.schedule())
+                    ? months(byMonth.getOrDefault(item.id(), Map.of()), beganOn, last12)
+                    : List.of();
             Suggestion suggestion = PlanSuggestions.suggest(plan.basis(), new History(
-                    money(last), money(before), money(prior), Money.ofCents(current), !cost));
+                    money(last), money(before), money(prior), Money.ofCents(current), !cost, months,
+                    // Billed by use comes round as often as it is used, which its schedule does not say.
+                    terms.billedByUse() ? null : perYear));
+            if (suggestion.reason() == Reason.SHORT_HISTORY) {
+                // What the months there are came to, said as that: the step's "Last 12 months" is what was spent in them.
+                last = months.stream().mapToLong(month -> month.amount().cents()).sum();
+            }
 
             Amount amount = typed.get(item.id());
             // First-time setup plans nothing: every amount is the one the item already has.
             long suggested = plan.setup() ? current : suggestion.amount().cents();
-            long chosen = plan.setup() ? current : amount == null ? suggested : amount.chosenCents();
+            // What it will be on the plan's first day, until another amount is typed or the suggestion taken.
+            long chosen = plan.setup() || amount == null ? current : amount.chosenCents();
             int occurrences = Math.max(1, Math.round((float) perYear.occurrences() / perYear.years()));
             rows.add(new Row(
                     ITEM, stepOf(item, terms, loans), item.id(), item.name(), item.kind(), terms.schedule().frequency(),
@@ -626,21 +821,21 @@ public final class PlanService {
                     occurrences,
                     paydays == 0 ? 0 : Math.round((double) chosen / paydays),
                     terms.saveUpBucketId() != null,
-                    chosen, current));
+                    chosen, current, null, suggestion.months()));
         }
         rows.sort(Comparator.comparing(Row::name, String.CASE_INSENSITIVE_ORDER).thenComparing(Row::id));
         return rows;
     }
 
     private static Row withChosen(Row row, long suggested, long chosen, boolean yours) {
-        long year = row.isItem() ? chosen : chosen * row.occurrences();
+        long year = row.isItem() ? chosen : incomeYearCents(chosen, row.occurrences(), row.pay());
         long perOccurrence = row.isItem() && row.yearCents() > 0
                 ? Math.round((double) row.perOccurrenceCents() * chosen / row.yearCents())
                 : chosen;
         return new Row(
                 row.kind(), row.step(), row.id(), row.name(), row.itemKind(), row.frequency(), row.last12Cents(), row.trendBp(), suggested,
                 row.reason(), row.currentCents(), chosen, yours, perOccurrence, row.occurrences(), row.perPaycheckCents(),
-                row.savedUpFor(), year, row.currentYearCents());
+                row.savedUpFor(), year, row.currentYearCents(), row.pay(), row.historyMonths());
     }
 
     /** How many paydays of the primary income fall in the plan's year. */
@@ -663,6 +858,36 @@ public final class PlanService {
 
     private MonthDay monthDay(SettingKey setting) {
         return MonthDay.parse("--" + settings.get(setting));
+    }
+
+    /**
+     * True for a schedule that a few months show the whole year of: every month or more often, all year round. One
+     * that runs only some months, or comes every few months or once a year, would come out wrong scaled up.
+     */
+    private static boolean scalable(ScheduleRule schedule) {
+        if (schedule.seasonal()) {
+            return false;
+        }
+        return switch (schedule.frequency()) {
+            case EVERY_PAY_PERIOD, BIWEEKLY, SEMI_MONTHLY, MONTHLY -> true;
+            // Every 5 weeks or more is less often than monthly.
+            case WEEKLY -> schedule.interval() <= 4;
+            case EVERY_N_MONTHS, YEARLY, ONE_TIME, MANUAL_DATES -> false;
+        };
+    }
+
+    /**
+     * An item's whole months of history, oldest first, up to the end of the 12 months the suggestions look at. The month
+     * it began counts only when it began on the 1st: a weekly bill begun on the 20th has only part of that month.
+     */
+    private static List<Month> months(Map<YearMonth, long[]> byMonth, LocalDate beganOn, Window last12) {
+        YearMonth first = beganOn.getDayOfMonth() == 1 ? YearMonth.from(beganOn) : YearMonth.from(beganOn).plusMonths(1);
+        List<Month> months = new ArrayList<>();
+        for (YearMonth month = first; !month.isAfter(YearMonth.from(last12.to())); month = month.plusMonths(1)) {
+            long[] held = byMonth.getOrDefault(month, new long[2]);
+            months.add(new Month(Money.ofCents(held[0]), Math.toIntExact(held[1])));
+        }
+        return months;
     }
 
     private static boolean holds(Window window, LocalDate date) {

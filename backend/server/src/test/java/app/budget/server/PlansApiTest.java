@@ -222,31 +222,36 @@ class PlansApiTest extends ApiTestBase {
             // $1,731.00 × 1.0846 = $1,877.44, to the dollar.
             assertThat(electricRow.get("suggestedCents").asLong()).isEqualTo(187_700);
             assertThat(electricRow.get("reason").asText()).isEqualTo("history");
-            assertThat(electricRow.get("chosenCents").asLong()).isEqualTo(187_700);
+            // The plan's amount starts at what it will be on Jan 1, beside the suggestion (Rachel, 2026-10-23).
+            assertThat(electricRow.get("chosenCents").asLong()).isEqualTo(168_000);
             assertThat(electricRow.get("yours").asBoolean()).isFalse();
             assertThat(electricRow.get("currentCents").asLong()).isEqualTo(168_000);
-            assertThat(electricRow.get("perOccurrenceCents").asLong()).isEqualTo(15_642);
+            assertThat(electricRow.get("perOccurrenceCents").asLong()).isEqualTo(14_000);
             assertThat(electricRow.get("occurrences").asInt()).isEqualTo(12);
             assertThat(electricRow.get("step").asText()).isEqualTo("bills");
         }
 
         @Test
-        void aBillWithOneYearBehindItHasNoTrendToApply() throws Exception {
+        void aBillWithOneYearBehindItHasATrendFromItsTwoHalves() throws Exception {
             JsonNode rentRow = row(plan(startPlan()), "Rent");
 
             assertThat(rentRow.get("last12Cents").asLong()).isEqualTo(1_800_000);
-            assertThat(rentRow.get("trendBp").isNull()).isTrue();
+            // Without 24 months, the last six against the six before: the same rent, so no change.
+            assertThat(rentRow.get("trendBp").asInt()).isZero();
+            assertThat(rentRow.get("historyMonths").isNull()).isTrue();
             assertThat(rentRow.get("suggestedCents").asLong()).isEqualTo(1_800_000);
             assertThat(rentRow.get("reason").asText()).isEqualTo("history");
         }
 
         @Test
-        void aBillThatBeganThisSummerIsSuggestedAtWhatItIsNowOverAYear() throws Exception {
+        void aBillThatBeganThisSummerIsSuggestedFromItsMonthsScaledUpToAYear() throws Exception {
             JsonNode phoneRow = row(plan(startPlan()), "Phone");
 
-            assertThat(phoneRow.get("last12Cents").isNull()).isTrue();
-            assertThat(phoneRow.get("reason").asText()).isEqualTo("not_enough_history");
-            // Not its four months stretched to twelve: $85.00 × 12.
+            // June to September: $340.00 in four months, $85.00 a month, $1,020.00 a year. Too few for a trend.
+            assertThat(phoneRow.get("last12Cents").asLong()).isEqualTo(34_000);
+            assertThat(phoneRow.get("historyMonths").asInt()).isEqualTo(4);
+            assertThat(phoneRow.get("reason").asText()).isEqualTo("short_history");
+            assertThat(phoneRow.get("trendBp").isNull()).isTrue();
             assertThat(phoneRow.get("suggestedCents").asLong()).isEqualTo(102_000);
         }
 
@@ -254,8 +259,10 @@ class PlansApiTest extends ApiTestBase {
         void aBudgetHasNoHistoryFromBeforeThePaydaysItFollows() throws Exception {
             JsonNode groceriesRow = row(plan(startPlan()), "Groceries");
 
-            // The budget is dated 2024, but paychecks only began in January 2026.
-            assertThat(groceriesRow.get("reason").asText()).isEqualTo("not_enough_history");
+            // The budget is dated 2024, but paychecks only began in January 2026: nine months, $5,400.00, scaled to a year.
+            assertThat(groceriesRow.get("reason").asText()).isEqualTo("short_history");
+            assertThat(groceriesRow.get("historyMonths").asInt()).isEqualTo(9);
+            assertThat(groceriesRow.get("last12Cents").asLong()).isEqualTo(540_000);
             assertThat(groceriesRow.get("suggestedCents").asLong()).isEqualTo(720_000);
             assertThat(groceriesRow.get("step").asText()).isEqualTo("budgets");
             assertThat(groceriesRow.get("occurrences").asInt()).isEqualTo(24);
@@ -283,13 +290,14 @@ class PlansApiTest extends ApiTestBase {
             JsonNode plan = plan(startPlan());
 
             assertThat(step(plan, "bills").get("rows").findValuesAsText("name")).containsExactly("Electric", "Phone", "Rent");
-            // 1,877.00 + 1,020.00 + 18,000.00
-            assertThat(step(plan, "bills").get("chosenCents").asLong()).isEqualTo(2_089_700);
+            // Every amount as it will be on Jan 1: 1,680.00 + 1,020.00 + 18,000.00, beside the suggestions' 1,877.00 + ...
+            assertThat(step(plan, "bills").get("chosenCents").asLong()).isEqualTo(2_070_000);
+            assertThat(step(plan, "bills").get("suggestedCents").asLong()).isEqualTo(2_089_700);
             assertThat(step(plan, "bills").get("currentCents").asLong()).isEqualTo(168_000 + 102_000 + 1_800_000);
-            assertThat(step(plan, "bills").get("changes").asInt()).isEqualTo(1);
+            assertThat(step(plan, "bills").get("changes").asInt()).isZero();
             assertThat(step(plan, "annual").get("rows")).isEmpty();
             assertThat(plan.get("incomeCents").asLong()).isEqualTo(248_620L * 24);
-            assertThat(plan.get("outCents").asLong()).isEqualTo(2_089_700 + 720_000 + 240_000);
+            assertThat(plan.get("outCents").asLong()).isEqualTo(2_070_000 + 720_000 + 240_000);
         }
 
         @Test
@@ -397,7 +405,11 @@ class PlansApiTest extends ApiTestBase {
 
             JsonNode plan = server.post("/api/plans/" + id + "/accept-suggestions", "{\"step\":\"bills\"}", cookie).data();
 
+            // Rent's suggestion is what it already is, so nothing is kept; Electric's is taken as the plan's amount.
             assertThat(row(plan, "Rent").get("yours").asBoolean()).isFalse();
+            assertThat(row(plan, "Rent").get("chosenCents").asLong()).isEqualTo(1_800_000);
+            assertThat(row(plan, "Electric").get("chosenCents").asLong()).isEqualTo(187_700);
+            assertThat(row(plan, "Electric").get("yours").asBoolean()).isTrue();
             // Another step's amounts are left as they were typed.
             assertThat(row(plan, "Groceries").get("chosenCents").asLong()).isEqualTo(800_000);
 
@@ -482,6 +494,8 @@ class PlansApiTest extends ApiTestBase {
         @Test
         void onItsFirstDayThePlanBecomesActiveAndItsAmountsTakeOverFromThatDay() throws Exception {
             long id = startPlan();
+            // Electric's suggestion is taken; Rent and pay are typed.
+            server.post("/api/plans/" + id + "/accept-suggestions", "{\"step\":\"bills\"}", cookie);
             type(id, "item", rent, "1920000");
             type(id, "income", salary, "260000");
             long electric2026 = costsRow("Electric").get(2).asLong();
@@ -523,7 +537,8 @@ class PlansApiTest extends ApiTestBase {
 
             assertThat(rentRow.get("chosenCents").asLong()).isEqualTo(1_920_000);
             assertThat(rentRow.get("yours").asBoolean()).isTrue();
-            assertThat(row(plan(id), "Electric").get("chosenCents").asLong()).isEqualTo(187_700);
+            // Left as it was, Electric stayed what it was set to.
+            assertThat(row(plan(id), "Electric").get("chosenCents").asLong()).isEqualTo(168_000);
             assertThat(row(plan(id), "Electric").get("yours").asBoolean()).isFalse();
         }
 

@@ -15,9 +15,10 @@ import {
   type WeekendRule,
 } from "../../api/income";
 import { formatDate, todayIso } from "../../lib/dates";
+import { type PlanPay, type PlanRaiseInput, useSetPlanPay } from "../../api/plans";
 import { ACCEPTED_STUBS, problemWithStub, type StubRead, useReadStub, useUploadStub } from "../../api/payStubs";
 import { useDefaultDate } from "../../api/settings";
-import { centsToInput, parseDollars } from "../../lib/money";
+import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { formatRate, parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { DaySelect } from "../DaySelect";
@@ -47,8 +48,11 @@ const MAX_CAP_BP = 10_000;
 /** How many hand-picked paydays are shown at once: the form never scrolls, however many there are. */
 const PAYDAYS_SHOWN = 3;
 
-/** The screens of the form: who pays and where, when, how much, what comes out, what the employer adds, and deleting. */
-export type IncomePart = "who" | "when" | "pay" | "deductions" | "match" | "delete";
+/**
+ * The screens of the form: who pays and where, when, how much, a raise partway through a planned year, what comes out,
+ * what the employer adds, and deleting.
+ */
+export type IncomePart = "who" | "when" | "pay" | "raise" | "deductions" | "match" | "delete";
 
 /** Something still to put right: the screen it is on and, for a deduction, which one. */
 type Trouble = PartProblem<IncomePart> & { deduction?: number };
@@ -57,6 +61,7 @@ const GROUPS = {
   who: { label: "Name and account", parts: ["who"] },
   when: { label: "Paydays", parts: ["when"] },
   pay: { label: "Pay", parts: ["pay"] },
+  raise: { label: "Raise", parts: ["raise"] },
   deductions: { label: "Deductions", parts: ["deductions"] },
   match: { label: "Employer match", parts: ["match"] },
   delete: { label: "Delete", parts: ["delete"] },
@@ -64,6 +69,12 @@ const GROUPS = {
 
 /** The amounts of a paycheck: what a pay change, or one entry of the pay history, is about. */
 const AMOUNTS = [GROUPS.pay, GROUPS.deductions, GROUPS.match] as const;
+
+/** A planned year's paycheck: its pay, then whether it goes up partway through the year, then the rest. */
+const PLAN_AMOUNTS = [GROUPS.pay, GROUPS.raise, GROUPS.deductions, GROUPS.match] as const;
+
+/** The most a planned raise can be, as the backend takes it: double the pay. */
+const MAX_RAISE_BP = 10_000;
 
 interface IncomeSourceFormProps {
   /** The source being changed; leave out to add a new one. */
@@ -75,6 +86,11 @@ interface IncomeSourceFormProps {
   terms?: PayTerms;
   /** Recording a raise: the amounts apply from a date, and the paychecks before it keep theirs. */
   startAsPayChange?: boolean;
+  /**
+   * Planning next year's paycheck, with `source`: the form opens on the plan's paycheck and saves it to the plan
+   * only. The source itself is not touched until the plan takes effect on `startsOn`.
+   */
+  plan?: { id: number; year: number; startsOn: string; pay: PlanPay };
   /** When changing: the screen to open on, for a form reached from that card's own Edit. */
   startAt?: IncomePart;
   /** Whether any income source exists yet. The first one always sets the pay periods. */
@@ -95,11 +111,13 @@ interface IncomeSourceFormProps {
  * - **Editing**: any one screen, chosen at the top. The amounts typed correct the ones in force today.
  * - **Recording a pay change**: the date and the new pay, then deductions and the match. Nothing else is asked.
  * - **Editing one entry of the pay history**: its amounts only.
+ * - **Planning next year's paycheck**: its amounts only, kept with the plan; nothing real changes.
  */
 export function IncomeSourceForm({
   source,
   terms,
   startAsPayChange = false,
+  plan,
   startAt,
   isFirst,
   accounts,
@@ -108,6 +126,7 @@ export function IncomeSourceForm({
 }: IncomeSourceFormProps) {
   const id = useId();
   const save = useSaveIncomeSource(source?.id);
+  const savePlanPay = useSetPlanPay(plan?.id ?? 0);
   const navigate = useNavigate();
   const readStub = useReadStub();
   const keepStub = useUploadStub();
@@ -117,24 +136,27 @@ export function IncomeSourceForm({
   // Set when the source was added but its stub could not be kept: the form then only says so, and closes.
   const [stubNotKept, setStubNotKept] = useState<string>();
   const schedule = source?.schedule;
-  // The amounts the form opens on: the history entry asked for, or the ones in force today.
-  const pay = terms ?? source;
+  // The amounts the form opens on: the plan's paycheck, the history entry asked for, or the ones in force today.
+  const pay = plan?.pay ?? terms ?? source;
   // A raise starts new amounts from a date; anything else corrects amounts already in use.
-  const payChange = source !== undefined && !terms && startAsPayChange;
+  const payChange = source !== undefined && !terms && !plan && startAsPayChange;
   const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
 
-  // Adding and recording a pay change go through as steps; editing picks a screen.
-  const stepping = !source || payChange;
+  // Adding, recording a pay change and planning next year's pay go through as steps; editing picks a screen.
+  const stepping = !source || payChange || plan !== undefined;
   const groups: readonly FormGroup<IncomePart>[] = !source
     ? [GROUPS.who, GROUPS.when, ...AMOUNTS]
-    : payChange || terms
-      ? AMOUNTS
-      : [GROUPS.who, GROUPS.when, ...AMOUNTS, GROUPS.delete];
+    : plan
+      ? PLAN_AMOUNTS
+      : payChange || terms
+        ? AMOUNTS
+        : [GROUPS.who, GROUPS.when, ...AMOUNTS, GROUPS.delete];
   const parts = useFormParts<IncomePart>({
     groups,
     adding: stepping,
-    // Everyone is asked up to the pay itself; deductions and a match are for those who have them.
-    required: groups.indexOf(GROUPS.pay) + 1,
+    // Everyone is asked up to the pay itself, and in a plan whether it goes up during the year; deductions and a match
+    // are for those who have them.
+    required: groups.indexOf(plan ? GROUPS.raise : GROUPS.pay) + 1,
     moreLabel: "Deductions and match",
     startAt,
   });
@@ -154,7 +176,8 @@ export function IncomeSourceForm({
   const [paydaysFrom, setPaydaysFrom] = useState(0);
   const [weekendRule, setWeekendRule] = useState<WeekendRule>(schedule?.weekendRule ?? "previous_business_day");
   const [net, setNet] = useState(pay ? centsToInput(pay.netCents) : "");
-  const [netIsEstimate, setNetIsEstimate] = useState(pay?.netIsEstimate ?? false);
+  // Next year's pay is a guess until a stub says otherwise, so a paycheck not yet planned starts as an estimate.
+  const [netIsEstimate, setNetIsEstimate] = useState(plan && !plan.pay.planned ? true : (pay?.netIsEstimate ?? false));
   const [gross, setGross] = useState(pay?.grossCents != null ? centsToInput(pay.grossCents) : "");
   // The first source, and the current primary, must stay primary: something has to set the pay periods.
   const primaryLocked = isFirst || source?.primary === true;
@@ -171,6 +194,11 @@ export function IncomeSourceForm({
   const [withinCap, setWithinCap] = useState(match?.contributionWithinCap ?? false);
   // Read as typed, for what a percent comes to and for whether the match can be checked at all.
   const grossTyped = gross.trim() === "" ? null : parseDollars(gross);
+  // A raise partway through the planned year (Rachel, 2026-10-23: "let me just do the raise as a percent"). No percent, no raise.
+  const [raisePercent, setRaisePercent] = useState(plan?.pay.raiseBp != null ? rateToInput(plan.pay.raiseBp) : "");
+  const [raiseFrom, setRaiseFrom] = useState(plan?.pay.raiseFrom ?? "");
+  const raiseBpTyped = raisePercent.trim() === "" ? null : parseRate(raisePercent);
+  const netTyped = parseDollars(net);
 
   // Archived accounts are left out, unless this source already points at one.
   const inUse = new Set([depositAccountId, matchAccountId, ...deductions.map((row) => row.toAccountId)]);
@@ -286,7 +314,25 @@ export function IncomeSourceForm({
     return payChange ? { effectiveFrom } : {};
   }
 
+  /** The planned raise, nothing for none, or what still needs attention on its screen. */
+  const toRaise = (): PlanRaiseInput | null | Trouble => {
+    if (raisePercent.trim() === "") {
+      return null;
+    }
+    if (raiseBpTyped === null || raiseBpTyped <= 0 || raiseBpTyped > MAX_RAISE_BP) {
+      return { part: "raise", problem: "Please enter the raise as a percent like 3, above 0 and up to 100." };
+    }
+    if (raiseFrom === "") {
+      return { part: "raise", problem: "Please choose the day the raise starts." };
+    }
+    return { from: raiseFrom, bp: raiseBpTyped };
+  };
+
   const check = (): Trouble | null => {
+    const raise = plan ? toRaise() : null;
+    if (raise !== null && "problem" in raise) {
+      return raise;
+    }
     const input = toInput();
     if (!isTrouble(input)) {
       return null;
@@ -299,40 +345,55 @@ export function IncomeSourceForm({
 
   const send = () => {
     const input = toInput();
-    if (!isTrouble(input)) {
-      save.mutate(input, {
-        onSuccess: (saved) => {
-          if (source || !stubFile) {
-            onClose();
-            return;
-          }
-          // The stub that filled the form in is kept with the new source, and opens to be looked over:
-          // that is where its lines get their accounts, and where they are remembered for the next stub.
-          keepStub.mutate(
-            { sourceId: saved.id, file: stubFile },
-            {
-              onSuccess: (stub) => {
-                onClose();
-                navigate(`/income/${saved.id}/stubs/${stub.id}`);
-              },
-              onError: (error) => setStubNotKept(error.message),
-            },
-          );
-        },
-      });
+    if (isTrouble(input)) {
+      return;
     }
+    if (plan && source) {
+      const raise = toRaise();
+      if (raise !== null && "problem" in raise) {
+        return;
+      }
+      const { grossCents, netCents, netIsEstimate: estimate, deductions: deducted, match: matched } = input;
+      savePlanPay.mutate(
+        { sourceId: source.id, pay: { grossCents, netCents, netIsEstimate: estimate, deductions: deducted, match: matched, raise } },
+        { onSuccess: onClose },
+      );
+      return;
+    }
+    save.mutate(input, {
+      onSuccess: (saved) => {
+        if (source || !stubFile) {
+          onClose();
+          return;
+        }
+        // The stub that filled the form in is kept with the new source, and opens to be looked over:
+        // that is where its lines get their accounts, and where they are remembered for the next stub.
+        keepStub.mutate(
+          { sourceId: saved.id, file: stubFile },
+          {
+            onSuccess: (stub) => {
+              onClose();
+              navigate(`/income/${saved.id}/stubs/${stub.id}`);
+            },
+            onError: (error) => setStubNotKept(error.message),
+          },
+        );
+      },
+    });
   };
 
   const title = !source
     ? "Add an income source"
-    : payChange
+    : plan
+      ? `${source.name}: pay in ${plan.year}`
+      : payChange
       ? "Record a pay change"
       : terms
         ? terms.effectiveDate === null
           ? "Edit the pay from the start"
           : `Edit the pay from ${formatDate(terms.effectiveDate)}`
         : "Edit income source";
-  const failure = parts.problem ?? save.error?.message;
+  const failure = parts.problem ?? save.error?.message ?? savePlanPay.error?.message;
 
   /** Reads a stub on this PC and puts its figures in the form, to be looked over like anything typed. */
   const fillFromStub = (picked: readonly File[]) => {
@@ -395,6 +456,12 @@ export function IncomeSourceForm({
         hidden={stubNotKept !== undefined}
         className="space-y-4"
       >
+        {source && plan && (
+          <p className="rounded-lg border-l-4 border-accent bg-bg px-4 py-2 text-sm">
+            Only your {plan.year} plan changes. {source.name} stays as it is until {formatDate(plan.startsOn)}, when these become its
+            pay from that day.
+          </p>
+        )}
         {source && terms && (
           <p className="rounded-lg border-l-4 border-accent bg-bg px-4 py-2 text-sm">
             {terms.effectiveDate === null
@@ -654,11 +721,56 @@ export function IncomeSourceForm({
                 )}
               </div>
             )}
-            {source && !terms && !payChange && (
+            {source && !terms && !payChange && !plan && (
               // Editing corrects; a raise is recorded with its own button, so the earlier paychecks keep what they had.
               <p className={HINT}>
                 {correctingHint(source)} For a raise, or new deductions or a new match from a date, close this and choose{" "}
                 <span className="font-semibold">Record a pay change</span>.
+              </p>
+            )}
+          </Screen>
+        )}
+
+        {plan && parts.shows("raise") && (
+          <Screen title={`A raise during ${plan.year}`} named={stepping}>
+            <p className={HINT}>
+              A cost of living raise, say, from June. Leave the percent empty if your pay stays the same all year.
+            </p>
+            {/* Side by side on a phone too, as it is said: "3% from June 1". */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor={`${id}-raise-percent`} className={LABEL}>
+                  Raise, %
+                </label>
+                <input
+                  id={`${id}-raise-percent`}
+                  value={raisePercent}
+                  onChange={(event) => setRaisePercent(event.target.value)}
+                  inputMode="decimal"
+                  autoComplete="off"
+                  placeholder="e.g. 3"
+                  className={`${INPUT} tabular-nums`}
+                />
+              </div>
+              <div>
+                <label htmlFor={`${id}-raise-from`} className={LABEL}>
+                  From
+                </label>
+                <input
+                  id={`${id}-raise-from`}
+                  type="date"
+                  value={raiseFrom}
+                  onChange={(event) => setRaiseFrom(event.target.value)}
+                  className={INPUT}
+                />
+              </div>
+            </div>
+            {raiseBpTyped !== null && raiseBpTyped > 0 && netTyped !== null && (
+              <p role="status" className="rounded-lg border-l-4 border-accent bg-bg px-4 py-2 text-sm">
+                From {raiseFrom === "" ? "that day" : formatDate(raiseFrom)}: about{" "}
+                <span className="font-semibold tabular-nums">{formatCents(raised(netTyped, raiseBpTyped))}</span> take-home per paycheck
+                {grossTyped !== null && <>, {formatCents(raised(grossTyped, raiseBpTyped))} gross</>}. Deductions set as a % of pay go up
+                with it. On {formatDate(plan.startsOn)} it becomes a pay change from that day.
               </p>
             )}
           </Screen>
@@ -794,12 +906,17 @@ export function IncomeSourceForm({
 
         {parts.buttons({
           onClose,
-          pending: save.isPending || keepStub.isPending,
-          saveLabel: !source ? "Add income source" : payChange ? "Save pay change" : "Save changes",
+          pending: save.isPending || keepStub.isPending || savePlanPay.isPending,
+          saveLabel: !source ? "Add income source" : plan ? `Save to the ${plan.year} plan` : payChange ? "Save pay change" : "Save changes",
         })}
       </form>
     </Modal>
   );
+}
+
+/** An amount after a raise, to the cent: a preview of what the plan works out, which rounds the same way. */
+function raised(cents: number, bp: number): number {
+  return Math.round((cents * (10_000 + bp)) / 10_000);
 }
 
 function isTrouble(input: IncomeSourceInput | Trouble): input is Trouble {

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import { PAY_KEY } from "./income";
+import { type Deduction, type EmployerMatch, type IncomeSourceInput, PAY_KEY } from "./income";
 import type { ItemKind } from "./items";
 
 /** What a plan's suggestions are worked out from (spec §5.8). */
@@ -50,12 +50,21 @@ export interface PlanRow {
   name: string;
   itemKind: ItemKind | null;
   frequency: string;
-  /** What it came to in the 12 months the suggestions look at; `null` without that much history. */
+  /**
+   * What it came to in the 12 months the suggestions look at, or with `historyMonths` in the fewer months it has;
+   * `null` without that much history.
+   */
   last12Cents: number | null;
-  /** Those 12 months against the 12 before, in basis points (3.3% is 330); `null` with nothing to compare. */
+  /**
+   * Those 12 months against the 12 before, in basis points (3.3% is 330), or without 24 months the later half of its
+   * months against the earlier half; `null` with nothing to compare.
+   */
   trendBp: number | null;
   suggestedCents: number;
-  reason: "history" | "fixed" | "not_enough_history";
+  /** `short_history`: fewer than 12 whole months, scaled up to a year. */
+  reason: "history" | "short_history" | "fixed" | "not_enough_history";
+  /** For a suggestion scaled up from fewer than 12 months, how many; `null` otherwise. */
+  historyMonths: number | null;
   /** What it comes to at the amount already set for the plan's first day. */
   currentCents: number;
   /** The plan's amount: what was typed, or else the suggestion. */
@@ -71,7 +80,46 @@ export interface PlanRow {
   savedUpFor: boolean;
   yearCents: number;
   currentYearCents: number;
+  /** An income source's whole paycheck in the plan's year; `null` for an item. */
+  pay: PlanPay | null;
 }
+
+/**
+ * A paycheck in a plan's year: the one planned in full, or else the pay in force on the plan's
+ * first day. Planning it changes only the plan; it becomes the pay from that day when the plan takes effect.
+ */
+export interface PlanPay {
+  grossCents: number | null;
+  netCents: number;
+  netIsEstimate: boolean;
+  deductions: Deduction[];
+  match: EmployerMatch | null;
+  /** True when it was planned in full; false when it is the pay as it stands. */
+  planned: boolean;
+  /** The first day of a raise partway through the year; null for none. */
+  raiseFrom: string | null;
+  /** The raise in basis points, 300 for 3%; null for none. */
+  raiseBp: number | null;
+  /** Gross pay from the raise on; null without a raise or a gross amount. */
+  raisedGrossCents: number | null;
+  /** Take-home from the raise on; null without a raise. */
+  raisedNetCents: number | null;
+  /** How many of the year's paychecks are at the raised pay. */
+  raisedPaychecks: number;
+}
+
+/** A raise partway through the plan's year. */
+export interface PlanRaiseInput {
+  from: string;
+  bp: number;
+}
+
+/** What is sent to plan a paycheck: the amounts of an income source, and nothing about the source itself. */
+export type PlanPayInput = Pick<IncomeSourceInput, "grossCents" | "netCents" | "netIsEstimate" | "match"> & {
+  deductions: IncomeSourceInput["deductions"];
+  /** Left out, or null, for pay that stays the same all year. */
+  raise: PlanRaiseInput | null;
+};
 
 export interface PlanStepView {
   step: PlanStep;
@@ -169,6 +217,13 @@ export function useSetPlanBasis(id: number) {
 export function useSetPlanAmount(id: number) {
   return usePlanChange(id, (input: { kind: PlanRow["kind"]; id: number; amountCents: number | null }) =>
     api.put<PlanDetail>(`/api/plans/${id}/amounts`, input),
+  );
+}
+
+/** Plans one income source's whole paycheck for the plan's year. Its real pay is not touched. */
+export function useSetPlanPay(id: number) {
+  return usePlanChange(id, ({ sourceId, pay }: { sourceId: number; pay: PlanPayInput }) =>
+    api.put<PlanDetail>(`/api/plans/${id}/income/${sourceId}/pay`, pay),
   );
 }
 

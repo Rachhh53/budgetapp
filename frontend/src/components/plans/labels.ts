@@ -17,7 +17,7 @@ export const STEP_LABELS: Record<WizardStep, string> = {
 
 /** What a step holds, said once at its top. */
 export const STEP_HELP: Record<PlanStep, string> = {
-  income: "What each paycheck brings home. It stays as it is unless you expect a raise, or a change in what is taken out.",
+  income: "What each paycheck brings home. It stays as it is unless you expect a raise, or a change in what is taken out: Edit plans either, a raise from any day of the year.",
   bills: "Bills that come round through the year: rent, utilities, subscriptions, loan payments.",
   annual: "Bills that come once or a few times a year, and anything you save up for a little each paycheck.",
   budgets: "Money you plan to spend a little at a time: groceries, gas, eating out.",
@@ -82,11 +82,22 @@ export function describeRow(row: PlanRow): string {
   if (row.kind === "item" && row.reason === "fixed") {
     parts.push(row.step === "bills" ? "fixed payment" : "your choice");
   }
+  if (row.reason === "short_history" && row.historyMonths !== null) {
+    parts.push(`from ${row.historyMonths} months of history`);
+  }
   if (row.reason === "not_enough_history") {
     parts.push("not enough history yet");
   }
   return parts.join(" · ");
 }
+
+/** How many times a whole year holds of each frequency that "a month" or "a week" is said of; 53 Fridays happen. */
+const WHOLE_YEAR: Partial<Record<PlanRow["frequency"], number[]>> = {
+  monthly: [12],
+  weekly: [52, 53],
+  biweekly: [26, 27],
+  semi_monthly: [24],
+};
 
 /** "$1,600.00 a month", "save $52.67 per paycheck", "$62,400.00 a year · 24 paychecks": what an amount comes to. */
 export function worksOutTo(row: PlanRow): string {
@@ -97,6 +108,14 @@ export function worksOutTo(row: PlanRow): string {
     return `save ${formatCents(row.perPaycheckCents)} per paycheck`;
   }
   const each = formatCents(row.perOccurrenceCents);
+  // "$100.00 a week" is only true of something that comes every week of the year. One that runs only some months, ends
+  // partway through the year or is billed by use says how many times the year holds instead (Rachel, 2026-10-23: a bill
+  // of $866.67 for the year showed as "$100/week").
+  const times = row.perOccurrenceCents > 0 ? Math.round(row.yearCents / row.perOccurrenceCents) : row.occurrences;
+  const wholeYear = WHOLE_YEAR[row.frequency];
+  if (wholeYear && !wholeYear.includes(times)) {
+    return `${each} each time · ${times} ${times === 1 ? "time" : "times"} a year`;
+  }
   switch (row.frequency) {
     case "monthly":
       return `${each} a month`;
