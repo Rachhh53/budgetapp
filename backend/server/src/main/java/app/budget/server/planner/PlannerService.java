@@ -8,6 +8,7 @@ import app.budget.engine.interest.SavingsInterest;
 import app.budget.engine.investments.EmployerMatch;
 import app.budget.engine.loans.Amortization;
 import app.budget.engine.planner.ContributionGrowth;
+import app.budget.engine.planner.DebtOrInvest;
 import app.budget.engine.planner.MatchOnExtra;
 import app.budget.engine.planner.MatchOnExtra.Matched;
 import app.budget.engine.planner.PayoffPlan;
@@ -47,6 +48,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.IntFunction;
 import org.jdbi.v3.core.Jdbi;
 
 /**
@@ -237,14 +239,93 @@ public final class PlannerService {
     public record Hidden(long accountId, String name, String type) {}
 
     public record Comparison(
-            LocalDate today, long extraCents, int years, List<Flag> flags, List<Option> options, Payoff payoff, List<Hidden> hidden) {}
+            LocalDate today, long extraCents, int years, List<Flag> flags, List<Option> options, Payoff payoff, List<Hidden> hidden,
+            DebtOrInvestView debtOrInvest) {}
+
+    /** The longest "Pay off debt or invest?" runs, in years. */
+    public static final int MOST_PLAN_YEARS = 30;
+
+    /** The split tried for the best one, in steps of 5%. */
+    private static final int SPLIT_STEP_BP = 500;
+
+    /** All of it, in basis points. */
+    private static final int ALL_BP = 10_000;
+
+    public static final String INVEST_ALL = "invest_all";
+    public static final String PAY_OFF_FIRST = "pay_off_first";
+    public static final String SPLIT = "split";
+
+    /** Nothing to weigh: no debt that can be followed, or nowhere to invest. */
+    public static final String NO_DEBTS = "no_debts";
+    public static final String NOWHERE_TO_INVEST = "nowhere_to_invest";
+
+    /**
+     * How "Pay off debt or invest?" is to be worked out; any of it left out takes the usual.
+     *
+     * @param investAccountId where the money not going to debts goes; {@code null} for the account the extra does most in
+     * @param splitBp         the share of the spare money for debts in the split, 0 to 10000 ({@code null}: 5000)
+     * @param growthBp        the yearly growth to assume there; {@code null} for the account's (or the one typed on its card)
+     * @param years           how long, 1 to {@value #MOST_PLAN_YEARS}; {@code null} for the comparison's own period
+     * @param freedMoves      whether a paid-off debt's payment stays in the plan; {@code null}: true
+     */
+    public record PlanSettings(Long investAccountId, Integer splitBp, Integer growthBp, Integer years, Boolean freedMoves) {
+
+        public static final PlanSettings USUAL = new PlanSettings(null, null, null, null, null);
+    }
+
+    /**
+     * One plan, at the end of the period.
+     *
+     * @param kind         {@code invest_all}, {@code pay_off_first} or {@code split}
+     * @param debtShareBp    the share of the spare money that went to debts while any were owed
+     * @param betterOffCents how much better off than today it leaves you: what is invested plus the debt paid down. Not
+     *                       net worth, which counts everything already owned (Rachel, 2026-10-23: "how can I have a
+     *                       networth on accounts screen of like 500k today and then that graph shows me as negative")
+     * @param paidDownCents  what is owed today less what is still owed at the end
+     * @param debtFreeDate   when the last debt is gone; {@code null} when one is still owed at the end
+     */
+    public record PlanView(
+            String kind, int debtShareBp, long betterOffCents, long investedCents, long putInCents, long matchCents, long growthCents,
+            long paidDownCents, long owedCents, long interestCents, LocalDate debtFreeDate) {}
+
+    /**
+     * One month's end on the chart: how much better off than today each plan leaves you so far ({@code ...Cents}), and
+     * what it is made of, what is invested and what is still owed, so the chart can say how each point is reached.
+     */
+    public record PlanPoint(
+            LocalDate month, long investAllCents, long payOffFirstCents, long splitCents, long investAllInvestedCents,
+            long payOffFirstInvestedCents, long splitInvestedCents, long investAllOwedCents, long payOffFirstOwedCents, long splitOwedCents) {}
+
+    /** An account the money could be invested in, with the growth it is worked out at. */
+    public record InvestChoice(long accountId, String name, String color, String kind, Integer growthBp) {}
+
+    /**
+     * Pay off debt or invest, every plan spending the same each month and measured on the same day (§5.9; Rachel,
+     * 2026-10-23). {@code reason} says why there is nothing to weigh ({@code no_debts} or {@code nowhere_to_invest});
+     * the rest is then empty.
+     *
+     * @param owedTodayCents what the debts in the plans owe today
+     * @param monthlyCents  what every plan spends each month at the start: the debts' payments and the extra
+     * @param best          the plan that comes to the most
+     * @param bestSplitBp   the share for debts, in steps of 5%, that comes to the most over the period
+     * @param points        every month's end, the first month first
+     */
+    public record DebtOrInvestView(
+            String reason, Long investAccountId, Integer growthBp, Integer accountGrowthBp, Integer years, Integer splitBp,
+            Boolean freedMoves, Long owedTodayCents, Long monthlyCents, List<InvestChoice> choices, List<PlanView> plans, String best, Integer bestSplitBp,
+            Integer bestSplitNetDiffCents, List<PlanPoint> points) {
+
+        static DebtOrInvestView nothing(String reason) {
+            return new DebtOrInvestView(reason, null, null, null, null, null, null, null, null, List.of(), List.of(), null, null, null, List.of());
+        }
+    }
 
     /**
      * @param growthBp the yearly rate to assume for an investment or savings account in place of its own, by account id
      */
-    public Comparison compare(long extraCents, int years, Order order, Map<Long, Integer> growthBp) {
+    public Comparison compare(long extraCents, int years, Order order, Map<Long, Integer> growthBp, PlanSettings plans) {
         // Balances are worked out from many reads; one open connection serves them all.
-        return jdbi.withHandle(handle -> gather(extraCents, years, order, growthBp));
+        return jdbi.withHandle(handle -> gather(extraCents, years, order, growthBp, plans));
     }
 
     /** True for an account of a kind the comparison can hold: anything but checking. */
@@ -255,7 +336,7 @@ public final class PlannerService {
     /** A debt ready to be followed, or the reason it cannot be. */
     private record Owed(Account account, long balanceCents, Integer rateBp, PayoffPlan.Debt debt) {}
 
-    private Comparison gather(long extraCents, int years, Order order, Map<Long, Integer> growthBp) {
+    private Comparison gather(long extraCents, int years, Order order, Map<Long, Integer> growthBp, PlanSettings settings) {
         LocalDate today = pay.today();
         Money extra = Money.ofCents(extraCents);
         Set<Long> hiddenIds = planner.hidden();
@@ -332,7 +413,108 @@ public final class PlannerService {
                 before.paysOff() && after.paysOff() ? (Long) before.totalInterest().minus(after.totalInterest()).cents() : null,
                 owedOverTime(after, before));
 
-        return new Comparison(today, extraCents, years, flags, options, payoff, hidden);
+        DebtOrInvestView debtOrInvest = debtOrInvest(
+                followed, growing, extra, years, order, settings, sources, paychecksAYear, today);
+        return new Comparison(today, extraCents, years, flags, options, payoff, hidden, debtOrInvest);
+    }
+
+    /**
+     * The three plans side by side (§5.9): invest it all, pay the debts off first, and the split chosen; and the split
+     * that comes to the most. A card's typed growth is the one used unless a growth is given here.
+     */
+    private DebtOrInvestView debtOrInvest(
+            List<PayoffPlan.Debt> debts, List<Option> growing, Money extra, int years, Order order, PlanSettings settings,
+            List<Source> sources, Map<Long, Integer> paychecksAYear, LocalDate today) {
+        if (debts.isEmpty()) {
+            return DebtOrInvestView.nothing(NO_DEBTS);
+        }
+        if (growing.isEmpty()) {
+            return DebtOrInvestView.nothing(NOWHERE_TO_INVEST);
+        }
+        // The account the extra does most in, unless another is chosen (or the one chosen is no longer on offer).
+        Option into = growing.stream()
+                .filter(option -> settings.investAccountId() != null && option.accountId() == settings.investAccountId())
+                .findFirst()
+                .orElseGet(() -> growing.stream().max(Comparator.comparingLong(Option::valueCents)).orElseThrow());
+        int growthBp = settings.growthBp() != null ? settings.growthBp() : into.rateBp() == null ? 0 : into.rateBp();
+        int planYears = settings.years() != null ? settings.years() : years;
+        int splitBp = settings.splitBp() != null ? settings.splitBp() : ALL_BP / 2;
+        boolean freedMoves = settings.freedMoves() == null || settings.freedMoves();
+
+        Map<Long, Money> matchByAmount = new HashMap<>();
+        DebtOrInvest.Investment investment = new DebtOrInvest.Investment(
+                BasisPoints.of(growthBp),
+                amount -> matchByAmount.computeIfAbsent(
+                        amount.cents(), cents -> matched(into.accountId(), Money.ofCents(cents), sources, paychecksAYear, today).match()));
+        YearMonth from = debts.stream().map(debt -> YearMonth.from(debt.firstPayment())).min(YearMonth::compareTo).orElseThrow();
+        int months = planYears * MONTHS_IN_YEAR;
+
+        IntFunction<DebtOrInvest.Outcome> follow = shareBp -> DebtOrInvest.follow(
+                debts, extra, order, investment, new DebtOrInvest.Plan(BasisPoints.of(shareBp), freedMoves), from, months);
+        DebtOrInvest.Outcome all = follow.apply(0);
+        DebtOrInvest.Outcome first = follow.apply(ALL_BP);
+        DebtOrInvest.Outcome split = follow.apply(splitBp);
+
+        // Every split in steps of 5%; the smaller share wins a tie, as money invested can still be reached.
+        int bestSplit = 0;
+        Money bestNet = all.net();
+        for (int share = SPLIT_STEP_BP; share <= ALL_BP; share += SPLIT_STEP_BP) {
+            Money net = share == ALL_BP ? first.net() : follow.apply(share).net();
+            if (net.compareTo(bestNet) > 0) {
+                bestSplit = share;
+                bestNet = net;
+            }
+        }
+
+        // Every plan starts from the same debts, so better off than today ranks them as the end figure would.
+        Money owedToday = debts.stream().map(debt -> debt.balance().isNegative() ? Money.ZERO : debt.balance()).reduce(Money.ZERO, Money::plus);
+        long owedTodayCents = owedToday.cents();
+        List<PlanView> plans = List.of(
+                planView(INVEST_ALL, 0, all, owedToday), planView(PAY_OFF_FIRST, ALL_BP, first, owedToday), planView(SPLIT, splitBp, split, owedToday));
+        String best = plans.stream().max(Comparator.comparingLong(PlanView::betterOffCents)).orElseThrow().kind();
+        List<PlanPoint> points = new ArrayList<>(months);
+        for (int i = 0; i < months; i++) {
+            DebtOrInvest.Point a = all.months().get(i);
+            DebtOrInvest.Point b = first.months().get(i);
+            DebtOrInvest.Point c = split.months().get(i);
+            points.add(new PlanPoint(
+                    a.month().atDay(1), a.net().cents() + owedTodayCents, b.net().cents() + owedTodayCents, c.net().cents() + owedTodayCents, a.invested().cents(),
+                    b.invested().cents(), c.invested().cents(), a.owed().cents(), b.owed().cents(), c.owed().cents()));
+        }
+        long monthly = debts.stream().mapToLong(debt -> debt.payment().cents()).sum() + extra.cents();
+        List<InvestChoice> choices = growing.stream()
+                .map(option -> new InvestChoice(option.accountId(), option.name(), option.color(), option.kind(), option.rateBp()))
+                .toList();
+        return new DebtOrInvestView(
+                null, into.accountId(), growthBp, into.accountRateBp(), planYears, splitBp, freedMoves, owedTodayCents, monthly, choices, plans, best,
+                bestSplit, (int) Math.min(Integer.MAX_VALUE, bestNet.minus(split.net()).cents()), List.copyOf(points));
+    }
+
+    private static PlanView planView(String kind, int shareBp, DebtOrInvest.Outcome outcome, Money owedToday) {
+        Money paidDown = owedToday.minus(outcome.owed());
+        return new PlanView(
+                kind, shareBp, outcome.invested().plus(paidDown).cents(), outcome.invested().cents(), outcome.putIn().cents(),
+                outcome.match().cents(), outcome.growth().cents(), paidDown.cents(), outcome.owed().cents(), outcome.interest().cents(),
+                outcome.debtFreeDate());
+    }
+
+    /** What an employer adds to a month's amount put into an account: through the paycheck where it earns the most. */
+    private static Matched matched(long accountId, Money amount, List<Source> sources, Map<Long, Integer> paychecksAYear, LocalDate today) {
+        Matched matched = Matched.NONE;
+        for (Source source : sources) {
+            Pay terms = source.termsOn(today).pay();
+            Match match = terms.match();
+            if (match == null || match.toAccountId() != accountId || match.mode() != MatchMode.FORMULA || terms.grossCents() == null) {
+                continue;
+            }
+            Matched here = MatchOnExtra.perMonth(
+                    EmployerMatch.formula(BasisPoints.of(match.matchBp()), BasisPoints.of(match.capBpOfGross())),
+                    Money.ofCents(terms.grossCents()), putIn(terms, match), amount, paychecksAYear.getOrDefault(source.id(), 0));
+            if (here.match().compareTo(matched.match()) > 0) {
+                matched = here;
+            }
+        }
+        return matched;
     }
 
     /**
@@ -484,21 +666,8 @@ public final class PlannerService {
         Integer used = assumedBp != null ? assumedBp : own;
         int months = years * MONTHS_IN_YEAR;
 
-        Matched matched = Matched.NONE;
-        for (Source source : sources) {
-            Pay terms = source.termsOn(today).pay();
-            Match match = terms.match();
-            if (match == null || match.toAccountId() != account.id() || match.mode() != MatchMode.FORMULA || terms.grossCents() == null) {
-                continue;
-            }
-            Matched here = MatchOnExtra.perMonth(
-                    EmployerMatch.formula(BasisPoints.of(match.matchBp()), BasisPoints.of(match.capBpOfGross())),
-                    Money.ofCents(terms.grossCents()), putIn(terms, match), extra, paychecksAYear.getOrDefault(source.id(), 0));
-            // The extra goes in through one paycheck: the one where it earns the most.
-            if (here.match().compareTo(matched.match()) > 0) {
-                matched = here;
-            }
-        }
+        // The extra goes in through one paycheck: the one where it earns the most.
+        Matched matched = matched(account.id(), extra, sources, paychecksAYear, today);
         ContributionGrowth.Value value = ContributionGrowth.of(extra.plus(matched.match()), BasisPoints.of(used == null ? 0 : used), months);
         long putIn = extra.cents() * months;
         long matchTotal = matched.match().cents() * months;

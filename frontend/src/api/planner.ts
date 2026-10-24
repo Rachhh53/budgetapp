@@ -98,6 +98,88 @@ export interface OwedPoint {
   withoutCents: number;
 }
 
+/** The three plans of "Pay off debt or invest?". */
+export type PlanKind = "invest_all" | "pay_off_first" | "split";
+
+/** One plan at the end of the period: what the investment is worth, less what is still owed. */
+export interface PlanOutcome {
+  kind: PlanKind;
+  /** The share of the spare money that went to debts while any were owed. */
+  debtShareBp: number;
+  /** How much better off than today: what is invested plus the debt paid down. Not net worth. */
+  betterOffCents: number;
+  paidDownCents: number;
+  investedCents: number;
+  putInCents: number;
+  matchCents: number;
+  growthCents: number;
+  owedCents: number;
+  interestCents: number;
+  /** `null` when a debt is still owed at the end. */
+  debtFreeDate: string | null;
+}
+
+/** One month's end on the chart: what each plan comes to so far, and the invested and still-owed figures it is made of. */
+export interface PlanPoint {
+  month: string;
+  investAllCents: number;
+  payOffFirstCents: number;
+  splitCents: number;
+  investAllInvestedCents: number;
+  payOffFirstInvestedCents: number;
+  splitInvestedCents: number;
+  investAllOwedCents: number;
+  payOffFirstOwedCents: number;
+  splitOwedCents: number;
+}
+
+export interface InvestChoice {
+  accountId: number;
+  name: string;
+  color: string;
+  kind: "invest" | "save";
+  growthBp: number | null;
+}
+
+/**
+ * Pay off debt or invest (spec §5.9; Rachel, 2026-10-23): every plan spends the same each month and is measured on the
+ * same day. `reason` says why there is nothing to weigh; everything else is then empty.
+ */
+export interface DebtOrInvest {
+  reason: "no_debts" | "nowhere_to_invest" | null;
+  investAccountId: number | null;
+  growthBp: number | null;
+  /** The account's own growth or APY, to go back to. */
+  accountGrowthBp: number | null;
+  years: number | null;
+  splitBp: number | null;
+  freedMoves: boolean | null;
+  /** What the debts in the plans owe today. */
+  owedTodayCents: number | null;
+  /** What every plan spends a month at the start: the debts' payments and the extra. */
+  monthlyCents: number | null;
+  choices: InvestChoice[];
+  plans: PlanOutcome[];
+  best: PlanKind | null;
+  /** The share for debts, in steps of 5%, that comes to the most. */
+  bestSplitBp: number | null;
+  /** How much more that comes to than the split chosen. */
+  bestSplitNetDiffCents: number | null;
+  points: PlanPoint[];
+}
+
+/** How "Pay off debt or invest?" is worked out; anything left out takes the usual. */
+export interface PlanSettings {
+  investAccountId?: number;
+  splitBp?: number;
+  growthBp?: number;
+  years?: number;
+  freedMoves?: boolean;
+}
+
+/** The longest the plans run, in years. */
+export const MOST_PLAN_YEARS = 30;
+
 export interface PlannerComparison {
   today: string;
   extraCents: number;
@@ -115,6 +197,7 @@ export interface PlannerComparison {
     owedOverTime: OwedPoint[];
   };
   hidden: { accountId: number; name: string; type: AccountType }[];
+  debtOrInvest: DebtOrInvest;
 }
 
 export interface PlannerInput {
@@ -123,6 +206,7 @@ export interface PlannerInput {
   order: PayoffOrder;
   /** A yearly rate to assume for an account in place of its own, by account id. Never saved. */
   growthBp: Record<number, number>;
+  plans: PlanSettings;
 }
 
 /**

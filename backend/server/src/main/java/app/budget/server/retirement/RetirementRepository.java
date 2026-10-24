@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
@@ -27,8 +28,13 @@ public final class RetirementRepository {
         this.clock = clock;
     }
 
-    /** Other money coming in, a year in today's dollars, from an age on. */
-    public record Income(String name, long yearlyCents, int startAge) {}
+    /**
+     * Other money coming in, a year in today's dollars, from an age on.
+     *
+     * @param socialSecurity true for Social Security, which is taxed by its own formula
+     * @param countedBp      for anything else, how much of it is taxed income: a pension 10000, a disability benefit 0
+     */
+    public record Income(String name, long yearlyCents, int startAge, boolean socialSecurity, int countedBp) {}
 
     /** Money in (+) or out (−) once, at an age, in today's dollars. */
     public record OneOff(String name, long amountCents, int age) {}
@@ -60,16 +66,46 @@ public final class RetirementRepository {
             String extraInto,
             Integer retireAge,
             boolean compared,
+            Taxes taxes,
             List<Income> incomes,
             List<OneOff> oneOffs) {
 
         public Fields {
+            Objects.requireNonNull(taxes);
             incomes = List.copyOf(incomes);
             oneOffs = List.copyOf(oneOffs);
         }
     }
 
     public record Scenario(long id, Fields fields) {}
+
+    /**
+     * How a scenario taxes retirement (§5.12).
+     *
+     * @param mode            {@code flat} for the one rate on traditional money, {@code worked_out} for the rules
+     * @param filing          {@code single} or {@code joint}
+     * @param medicarePeople  1, or 2 with a spouse
+     * @param partDPlanCents  a Part D plan, a month a person
+     * @param supplementCents Medigap or Medicare Advantage, a month a person
+     * @param workingMagiCents income a year while working; {@code null} for the pay Budget knows
+     * @param magiOverrideCents income typed for every year in retirement; {@code null} to work it out
+     * @param strategy        {@code none}, {@code bracket:N} or {@code medicare:N}; {@code null} for the cheapest
+     */
+    public record Taxes(
+            String mode,
+            String filing,
+            int medicarePeople,
+            int stateTaxBp,
+            int gainsShareBp,
+            long partDPlanCents,
+            long supplementCents,
+            Long workingMagiCents,
+            Long magiOverrideCents,
+            String strategy) {
+
+        /** As a scenario has them before any is set: the flat rate, filing alone. */
+        public static final Taxes FLAT = new Taxes("flat", "single", 1, 0, 5000, 0, 0, null, null, null);
+    }
 
     public Optional<LocalDate> birthDate() {
         return jdbi.withHandle(handle -> handle.createQuery("SELECT birth_date FROM retirement_profile WHERE id = 1")
@@ -85,6 +121,48 @@ public final class RetirementRepository {
                         """)
                 .bind("birthDate", birthDate.toString())
                 .execute());
+    }
+
+    public Optional<LocalDate> spouseBirthDate() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT spouse_birth_date FROM retirement_profile WHERE id = 1")
+                .mapTo(String.class)
+                .findOne()
+                .filter(Objects::nonNull)
+                .map(LocalDate::parse));
+    }
+
+    /**
+     * @param spouseBirthDate {@code null} for no spouse
+     * @return false when there is no birth date yet to go with it
+     */
+    public boolean setSpouseBirthDate(LocalDate spouseBirthDate) {
+        return jdbi.withHandle(handle -> handle.createUpdate("UPDATE retirement_profile SET spouse_birth_date = :date WHERE id = 1")
+                .bind("date", spouseBirthDate == null ? null : spouseBirthDate.toString())
+                .execute()) > 0;
+    }
+
+    /** The tax and Medicare figures as changed, as their JSON; empty for the built-in ones. */
+    public Optional<String> taxFigures() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT figures FROM retirement_tax_figures WHERE id = 1")
+                .mapTo(String.class)
+                .findOne());
+    }
+
+    /** @param json {@code null} to go back to the built-in figures */
+    public void setTaxFigures(String json) {
+        jdbi.useHandle(handle -> {
+            if (json == null) {
+                handle.createUpdate("DELETE FROM retirement_tax_figures WHERE id = 1").execute();
+                return;
+            }
+            handle.createUpdate("""
+                            INSERT INTO retirement_tax_figures (id, figures, updated_at) VALUES (1, :figures, :now)
+                            ON CONFLICT (id) DO UPDATE SET figures = excluded.figures, updated_at = excluded.updated_at
+                            """)
+                    .bind("figures", json)
+                    .bind("now", clock.instant().toString())
+                    .execute();
+        });
     }
 
     /** How each counted account's money is taxed, by account id; an account not counted isn't listed. */
@@ -139,13 +217,16 @@ public final class RetirementRepository {
             long id = handle.createQuery("""
                             INSERT INTO retirement_scenarios (name, salary_cents, inflation_bp, withdrawal_bp, tax_bp,
                                 health_before_cents, health_after_cents, health_inflation_bp, growth_bp, growth_low_bp, growth_high_bp, raise_bp, extra_monthly_cents,
-                                extra_into, retire_age, compared, created_at)
+                                extra_into, retire_age, compared, tax_mode, filing, medicare_people, state_tax_bp, gains_share_bp,
+                                part_d_plan_cents, supplement_cents, working_magi_cents, magi_override_cents, strategy, created_at)
                             VALUES (:name, :salaryCents, :inflationBp, :withdrawalBp, :taxBp, :healthBeforeCents,
                                 :healthAfterCents, :healthInflationBp, :growthBp, :growthLowBp, :growthHighBp, :raiseBp, :extraMonthlyCents, :extraInto, :retireAge,
-                                :compared, :now)
+                                :compared, :mode, :filing, :medicarePeople, :stateTaxBp, :gainsShareBp, :partDPlanCents, :supplementCents,
+                                :workingMagiCents, :magiOverrideCents, :strategy, :now)
                             RETURNING id
                             """)
                     .bindMethods(fields)
+                    .bindMethods(fields.taxes())
                     .bind("now", clock.instant().toString())
                     .mapTo(Long.class)
                     .one();
@@ -164,10 +245,14 @@ public final class RetirementRepository {
                                 health_inflation_bp = :healthInflationBp, growth_bp = :growthBp, growth_low_bp = :growthLowBp,
                                 growth_high_bp = :growthHighBp, raise_bp = :raiseBp,
                                 extra_monthly_cents = :extraMonthlyCents, extra_into = :extraInto, retire_age = :retireAge,
-                                compared = :compared
+                                compared = :compared, tax_mode = :mode, filing = :filing, medicare_people = :medicarePeople,
+                                state_tax_bp = :stateTaxBp, gains_share_bp = :gainsShareBp, part_d_plan_cents = :partDPlanCents,
+                                supplement_cents = :supplementCents, working_magi_cents = :workingMagiCents,
+                                magi_override_cents = :magiOverrideCents, strategy = :strategy
                             WHERE id = :id
                             """)
                     .bindMethods(fields)
+                    .bindMethods(fields.taxes())
                     .bind("id", id)
                     .execute();
             if (changed == 0) {
@@ -191,8 +276,8 @@ public final class RetirementRepository {
     private static void writeParts(Handle handle, long id, Fields fields) {
         for (Income income : fields.incomes()) {
             handle.createUpdate("""
-                            INSERT INTO retirement_income (scenario_id, name, yearly_cents, start_age)
-                            VALUES (:id, :name, :yearlyCents, :startAge)
+                            INSERT INTO retirement_income (scenario_id, name, yearly_cents, start_age, social_security, counted_bp)
+                            VALUES (:id, :name, :yearlyCents, :startAge, :socialSecurity, :countedBp)
                             """)
                     .bindMethods(income)
                     .bind("id", id)
@@ -208,10 +293,12 @@ public final class RetirementRepository {
 
     private static Optional<Scenario> read(Handle handle, long id) {
         List<Income> incomes = handle.createQuery("""
-                        SELECT name, yearly_cents, start_age FROM retirement_income WHERE scenario_id = :id ORDER BY start_age, id
+                        SELECT name, yearly_cents, start_age, social_security, counted_bp FROM retirement_income
+                        WHERE scenario_id = :id ORDER BY start_age, id
                         """)
                 .bind("id", id)
-                .map((rs, ctx) -> new Income(rs.getString("name"), rs.getLong("yearly_cents"), rs.getInt("start_age")))
+                .map((rs, ctx) -> new Income(rs.getString("name"), rs.getLong("yearly_cents"), rs.getInt("start_age"),
+                        rs.getInt("social_security") == 1, rs.getInt("counted_bp")))
                 .list();
         List<OneOff> oneOffs = handle.createQuery("""
                         SELECT name, amount_cents, age FROM retirement_one_offs WHERE scenario_id = :id ORDER BY age, id
@@ -238,9 +325,25 @@ public final class RetirementRepository {
                         rs.getString("extra_into"),
                         nullableInt(rs, "retire_age"),
                         rs.getInt("compared") == 1,
+                        new Taxes(
+                                rs.getString("tax_mode"),
+                                rs.getString("filing"),
+                                rs.getInt("medicare_people"),
+                                rs.getInt("state_tax_bp"),
+                                rs.getInt("gains_share_bp"),
+                                rs.getLong("part_d_plan_cents"),
+                                rs.getLong("supplement_cents"),
+                                nullableLong(rs, "working_magi_cents"),
+                                nullableLong(rs, "magi_override_cents"),
+                                rs.getString("strategy")),
                         incomes,
                         oneOffs)))
                 .findOne();
+    }
+
+    private static Long nullableLong(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
     }
 
     private static Integer nullableInt(ResultSet rs, String column) throws SQLException {

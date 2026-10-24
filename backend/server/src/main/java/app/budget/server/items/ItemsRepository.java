@@ -380,27 +380,115 @@ public final class ItemsRepository {
      * is from now on while leaving the old one's history exactly as it was: the old one is archived as of the day the
      * new one starts. Returns the new id. The caller has checked that the item exists.
      */
-    public long replace(long id, Identity identity, Terms terms) {
-        return jdbi.inTransaction(handle -> {
-            handle.createUpdate("UPDATE items SET archived = 1, archived_on = :archivedOn WHERE id = :id")
-                    .bind("id", id)
-                    .bind("archivedOn", terms.schedule().startDate().toString())
-                    .execute();
-            long created = handle.createQuery("""
-                            INSERT INTO items (name, kind, note, archived, created_at)
-                            VALUES (:name, :kind, :note, 0, :now)
-                            RETURNING id
-                            """)
-                    .bind("name", identity.name())
-                    .bind("kind", Inputs.code(identity.kind()))
-                    .bind("note", identity.note())
-                    .bind("now", clock.instant().toString())
-                    .mapTo(Long.class)
+    /**
+     * The archived item that {@code id} was added in place of, by "Archive this and add a new item" (taken out on
+     * 2026-10-24: Rachel chose that a change of type always changes the one item). That left two items for one thing:
+     * the old one archived on the very day the new one starts, under the same name and of another kind. Empty when
+     * {@code id} is not such an item.
+     */
+    public Optional<Item> replaced(long id) {
+        Optional<Item> item = find(id);
+        if (item.isEmpty() || item.get().archived()) {
+            return Optional.empty();
+        }
+        Item added = item.get();
+        LocalDate starts = added.versions().getFirst().effectiveFrom();
+        return jdbi.withHandle(handle -> handle.createQuery("""
+                        SELECT id FROM items
+                        WHERE archived = 1 AND id <> :id AND name = :name COLLATE NOCASE AND kind <> :kind AND archived_on = :starts
+                        ORDER BY id DESC LIMIT 1
+                        """)
+                        .bind("id", id)
+                        .bind("name", added.name())
+                        .bind("kind", Inputs.code(added.kind()))
+                        .bind("starts", starts.toString())
+                        .mapTo(Long.class)
+                        .findOne())
+                .flatMap(this::find);
+    }
+
+    /**
+     * Makes {@code added} and the archived item it replaced one item again, as if the type had been changed in place
+     * (Rachel, 2026-10-24: "make it follow the new flow"). The old item is kept, since its past (paid dates, receipts,
+     * single-date changes) belongs to it; it takes the added one's name, kind, note and tags, is no longer archived,
+     * and its earlier versions take the added one's accounts and buckets, as a change of type does. Everything of the
+     * added one then moves onto it, where the old one had something on the same date the added one's wins, and the
+     * added one is deleted. One transaction, so Undo takes it all back at once.
+     *
+     * @return the item that is left
+     */
+    public long mergeReplaced(long added, long old) {
+        jdbi.useTransaction(handle -> {
+            String starts = handle.createQuery("SELECT MIN(effective_from) FROM item_versions WHERE item_id = :id")
+                    .bind("id", added)
+                    .mapTo(String.class)
                     .one();
-            insertVersion(handle, created, terms.schedule().startDate(), terms);
-            replaceTags(handle, created, identity.tagIds());
-            return created;
+            // Earlier versions follow the change of type, from the added item's newest version.
+            handle.createUpdate("""
+                            UPDATE item_versions
+                            SET pay_from_account_id = n.pay_from_account_id, pay_to_account_id = n.pay_to_account_id,
+                                autopay = n.autopay, placement = n.placement, bucket_id = n.bucket_id,
+                                save_up_bucket_id = n.save_up_bucket_id, from_bucket_id = n.from_bucket_id,
+                                billed_later = n.billed_later, paid_ahead = n.paid_ahead, pack_sessions = n.pack_sessions,
+                                uses_hundredths = n.uses_hundredths, uses_per = n.uses_per
+                            FROM (SELECT * FROM item_versions WHERE item_id = :added ORDER BY effective_from DESC, id DESC LIMIT 1) AS n
+                            WHERE item_versions.item_id = :old
+                            """)
+                    .bind("added", added)
+                    .bind("old", old)
+                    .execute();
+            // The added one's amounts carry on from its start; anything the old one had from then on gives way.
+            for (Version version : versions(handle, old)) {
+                if (!version.effectiveFrom().isBefore(LocalDate.parse(starts))) {
+                    deleteVersion(handle, version.id());
+                }
+            }
+            handle.createUpdate("UPDATE item_versions SET item_id = :old WHERE item_id = :added").bind("old", old).bind("added", added).execute();
+
+            // Rows keyed by a date: the added one's wins over the old one's on the same date.
+            moveByKey(handle, "occurrence_overrides", "original_due_date", added, old);
+            moveByKey(handle, "item_invoices", "due_date", added, old);
+            moveByKey(handle, "item_invoices", "covers_through", added, old);
+            moveByKey(handle, "item_pack_moves", "planned_date", added, old);
+            moveByKey(handle, "plan_year_amounts", "plan_year_id", added, old);
+            for (String table : List.of("item_pauses", "item_prepayments", "attachments")) {
+                handle.createUpdate("UPDATE " + table + " SET item_id = :old WHERE item_id = :added").bind("old", old).bind("added", added).execute();
+            }
+            for (String[] link : new String[][] {
+                {"card_settings", "payment_item_id"}, {"loan_settings", "payment_item_id"}, {"card_promos", "payoff_item_id"}}) {
+                handle.createUpdate("UPDATE " + link[0] + " SET " + link[1] + " = :old WHERE " + link[1] + " = :added")
+                        .bind("old", old)
+                        .bind("added", added)
+                        .execute();
+            }
+            handle.createUpdate("DELETE FROM item_tags WHERE item_id = :old").bind("old", old).execute();
+            handle.createUpdate("UPDATE item_tags SET item_id = :old WHERE item_id = :added").bind("old", old).bind("added", added).execute();
+
+            handle.createUpdate("""
+                            UPDATE items
+                            SET name = n.name, kind = n.kind, note = n.note, archived = 0, archived_on = NULL
+                            FROM (SELECT name, kind, note FROM items WHERE id = :added) AS n
+                            WHERE items.id = :old
+                            """)
+                    .bind("added", added)
+                    .bind("old", old)
+                    .execute();
+            handle.createUpdate("DELETE FROM items WHERE id = :added").bind("added", added).execute();
         });
+        return old;
+    }
+
+    /**
+     * Moves a table's rows from one item to another where the rows are told apart by {@code key} as well: the old
+     * item's row with the same key as one of the added item's goes first. Table and column names are this class's own.
+     */
+    private static void moveByKey(Handle handle, String table, String key, long added, long old) {
+        handle.createUpdate("DELETE FROM " + table + " WHERE item_id = :old AND " + key + " IN (SELECT " + key + " FROM " + table
+                        + " WHERE item_id = :added AND " + key + " IS NOT NULL)")
+                .bind("old", old)
+                .bind("added", added)
+                .execute();
+        handle.createUpdate("UPDATE " + table + " SET item_id = :old WHERE item_id = :added").bind("old", old).bind("added", added).execute();
     }
 
     /** Deletes an item with its versions, schedules, tags and single-occurrence edits. */

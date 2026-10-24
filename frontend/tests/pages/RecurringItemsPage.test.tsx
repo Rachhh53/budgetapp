@@ -868,9 +868,9 @@ describe("recurring items screen", () => {
     ]);
   });
 
-  it("warns that a change of type reaches back, and can archive the item and add a new one instead", async () => {
+  it("warns that a change of type reaches back, and changes the one item rather than adding another", async () => {
     const fetchMock = withItems(undefined, {
-      "POST /api/items/2/replacement": () => ({ status: 201, data: { ...ELECTRIC, id: 9, kind: "budget" }, changed: true }),
+      "PUT /api/items/2": () => ({ status: 200, data: { ...ELECTRIC, kind: "budget" }, changed: true }),
     });
     renderApp("/recurring/2");
 
@@ -883,14 +883,44 @@ describe("recurring items screen", () => {
     expect(warning).toHaveTextContent("Changing the type changes Electric all the way back to when it started.");
     expect(warning).toHaveTextContent("Its earlier dates will count as a budget too");
 
-    await userEvent.click(within(warning).getByRole("button", { name: "Archive this and add a new item" }));
+    // Archiving it and adding a new one left two items for one thing, so it is no longer offered.
+    expect(within(dialog).queryByRole("button", { name: /archive this/i })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    const sent = bodiesSentTo(fetchMock, "POST /api/items/2/replacement")[0] as Record<string, unknown>;
-    expect(sent).toMatchObject({ name: "Electric", kind: "budget", archived: false });
-    expect(sent).not.toHaveProperty("effectiveFrom");
-    // The item itself was not changed.
-    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toEqual([]);
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/2")).toMatchObject([{ name: "Electric", kind: "budget" }]);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/replacement"))).toBe(false);
+  });
+
+  it("offers to merge an item with the archived one it was added in place of, and opens the one that is left", async () => {
+    const added = { ...ELECTRIC, id: 9, kind: "budget" as const };
+    // After the merge the added item is gone, which is what once left the page stuck on "We couldn't find that item".
+    let items: Item[] = [{ ...ELECTRIC, archived: true }, added];
+    const fetchMock = withItems(undefined, {
+      "GET /api/items": () => ({ status: 200, data: items }),
+      "GET /api/items/9/replaced": () => ({ status: 200, data: { replaced: { id: 2, name: "Electric", kind: "bill", archivedOn: "2026-10-01" } } }),
+      "GET /api/items/2/replaced": () => ({ status: 200, data: { replaced: null } }),
+      "POST /api/items/9/merge-replaced": () => {
+        items = [{ ...ELECTRIC, kind: "budget" }];
+        return { status: 200, data: { id: 2 }, changed: true };
+      },
+    });
+    renderApp("/recurring/9");
+
+    const card = (await screen.findByRole("heading", { name: "Merge with the archived one" })).closest("section")!;
+    expect(card).toHaveTextContent("There's also an archived bill or expense called Electric, archived on Oct 1, 2026");
+    await userEvent.click(within(card).getByRole("button", { name: "Merge with the archived bill or expense" }));
+    // It asks first, and keeping them apart is the way out.
+    const ask = within(card).getByRole("alertdialog", { name: "Merge Electric with the archived bill or expense?" });
+    expect(ask).toHaveTextContent("You can undo this straight afterwards.");
+    expect(bodiesSentTo(fetchMock, "POST /api/items/9/merge-replaced")).toEqual([]);
+    await userEvent.click(within(ask).getByRole("button", { name: "Yes, merge them" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/items/9/merge-replaced")).toHaveLength(1));
+    // The page moves to the item that is left.
+    expect(await screen.findByRole("heading", { level: 1, name: /Electric/ })).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't find that item/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Merge with the archived one" })).not.toBeInTheDocument();
   });
 
   it("opens an item's page from a click anywhere on its row", async () => {

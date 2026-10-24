@@ -139,6 +139,57 @@ export const TERMS = {
     about:
       "What you'd pay a year, in today's dollars, once on Medicare: premiums, supplemental plans and what they don't cover, such as $4,000. It's added to what each year from 65 needs, rising by Health costs rise. 0.00 means it isn't counted.",
   },
+  debtOrInvest: {
+    term: "Pay off debt or invest?",
+    about:
+      "Three plans that spend the same each month (your debts' payments and the extra), all measured after the same number of years: invest it all, pay debts off first and then invest, or a split you choose. Each is measured by how much better off it leaves you than today: the new money invested plus the debt paid down, so a debt paid off early and an investment that keeps growing are compared fairly. It isn't your net worth: what you already own isn't in it.",
+  },
+  taxMode: {
+    term: "How taxes are worked out",
+    about:
+      "A flat rate takes one share of traditional money for tax. Worked out by the rules goes year by year: federal brackets, the standard and senior deductions, how much Social Security is taxed, capital gains, state tax and Medicare's premiums, and takes money from each kind of account in the order that costs least.",
+  },
+  stateTax: {
+    term: "State income tax",
+    about: "One rate on the income your state taxes, such as 4.00. 0.00 for a state with no income tax. Most states don't tax Social Security, so it isn't counted here.",
+  },
+  gainsShare: {
+    term: "Growth in taxable withdrawals",
+    about:
+      "Of each dollar taken from a brokerage account, how much is growth (taxed as a capital gain) rather than money you put in. 50.00 to start; higher the longer it has grown.",
+  },
+  medicarePeople: {
+    term: "People on Medicare",
+    about: "Two counts a premium for your spouse too, from their own 65, using the birth date under Accounts counted.",
+  },
+  partDPlan: {
+    term: "Part D plan",
+    about: "What the drug plan itself costs a month a person, before any income-related amount Medicare adds. Around $40 is common.",
+  },
+  medigap: {
+    term: "Medigap or Advantage",
+    about: "A supplement or Medicare Advantage premium a month a person. 0.00 if you won't have one.",
+  },
+  workingMagi: {
+    term: "Income while working",
+    about:
+      "Medicare sets premiums by your income from two years before, so the first years on Medicare can go by what you earned while working. Left empty, the pay Budget knows over the coming year is used.",
+  },
+  magiOverride: {
+    term: "Income for Medicare in retirement",
+    about:
+      "Leave empty to work it out each year from what's taken out and taxed. Type an amount to use it for every year instead, such as from a tax return.",
+  },
+  drawdownStrategy: {
+    term: "Where the money comes from",
+    about:
+      "Budget tries 12 ways of taking money out: each one takes traditional money up to the top of a tax bracket or a Medicare limit, then taxable, then Roth, and moves any room left into Roth. It keeps the one whose money lasts longest and leaves the most after tax. You can choose another.",
+  },
+  irmaa: {
+    term: "Medicare's income-related amounts",
+    about:
+      "Above certain incomes Medicare adds to the Part B and Part D premiums. It goes by modified adjusted gross income from two years before: taxed income plus untaxed interest, but not untaxed benefits or Roth money.",
+  },
   retirementInflation: {
     term: "Inflation",
     about: "How fast prices rise a year. Budget uses it to show every future amount in today's dollars and to raise the extra you save with prices.",

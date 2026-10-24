@@ -200,15 +200,36 @@ export function useSaveItem(id?: number) {
   });
 }
 
+/** The archived item another was added in place of, back when a change of type could archive it and add a new one. */
+export interface ReplacedItem {
+  id: number;
+  name: string;
+  kind: ItemKind;
+  archivedOn: string;
+}
+
+/** The archived item the item with `id` was added in place of, or `null` when there is none. */
+export function useReplacedItem(id: number) {
+  return useQuery({
+    queryKey: [...ITEMS_KEY, id, "replaced"],
+    queryFn: async () => (await api.get<{ replaced: ReplacedItem | null }>(`/api/items/${id}/replaced`)).replaced,
+  });
+}
+
 /**
- * Archives the item with `id` and adds what is sent as a new item that starts today: for
- * turning an item into another kind without changing what it was before.
+ * Makes the item with `id` and the archived one it was added in place of one item again, as if its type had been
+ * changed in place. `onMerged` gets the id of the item that is left (the older one, which keeps its past) before the
+ * items are fetched again: the refetch drops the item with `id`, and with it the page that asked, so a callback passed
+ * to `mutate` would never run.
  */
-export function useReplaceItem(id: number | undefined) {
+export function useMergeReplaced(id: number, onMerged: (left: number) => void) {
   const refresh = useRefreshItems();
   return useMutation({
-    mutationFn: (input: ItemInput) => api.post<Item>(`/api/items/${id}/replacement`, input),
-    onSuccess: refresh,
+    mutationFn: async () => (await api.post<{ id: number }>(`/api/items/${id}/merge-replaced`, {})).id,
+    onSuccess: (left) => {
+      onMerged(left);
+      return refresh();
+    },
   });
 }
 

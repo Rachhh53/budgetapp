@@ -10,6 +10,7 @@ import app.budget.server.income.PayCalendar;
 import app.budget.server.retirement.RetirementRepository.Fields;
 import app.budget.server.retirement.RetirementRepository.Income;
 import app.budget.server.retirement.RetirementRepository.OneOff;
+import app.budget.server.retirement.RetirementRepository.Taxes;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
@@ -18,10 +19,10 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Retirement planning (spec §4.12, §5.11). {@code GET /api/retirement} is the accounts and every
- * scenario worked out; {@code PUT /api/retirement/birth-date} and
- * {@code PUT /api/retirement/accounts/{id}} set what all scenarios share; {@code POST},
- * {@code PUT} and {@code DELETE /api/retirement/scenarios[/{id}]} keep the scenarios.
+ * Retirement planning (spec §4.12, §5.11, §5.12). {@code GET /api/retirement} is the accounts and every
+ * scenario worked out; {@code PUT /api/retirement/birth-date}, {@code /spouse-birth-date},
+ * {@code /accounts/{id}} and {@code PUT}/{@code DELETE /tax-figures} set what all scenarios share;
+ * {@code POST}, {@code PUT} and {@code DELETE /api/retirement/scenarios[/{id}]} keep the scenarios.
  */
 public final class RetirementRoutes {
 
@@ -44,6 +45,9 @@ public final class RetirementRoutes {
     static final int GROWTH_HIGH_BP = 800;
     static final int MOST_GROWTH_BP = 10_000;
     static final int MOST_RAISE_BP = 2000;
+    /** Half of each dollar taken from a taxable account is growth, to start with. */
+    static final int GAINS_SHARE_BP = 5000;
+    static final int MOST_STATE_TAX_BP = 2000;
 
     private final RetirementService service;
     private final RetirementRepository retirement;
@@ -60,6 +64,9 @@ public final class RetirementRoutes {
     public void register(JavalinDefaultRoutingApi routes) {
         routes.get("/api/retirement", ctx -> ApiResponse.ok(ctx, service.view()));
         routes.put("/api/retirement/birth-date", this::setBirthDate);
+        routes.put("/api/retirement/spouse-birth-date", this::setSpouseBirthDate);
+        routes.put("/api/retirement/tax-figures", this::setFigures);
+        routes.delete("/api/retirement/tax-figures", this::resetFigures);
         routes.put("/api/retirement/accounts/{id}", this::setTaxType);
         routes.post("/api/retirement/scenarios", this::create);
         routes.put("/api/retirement/scenarios/{id}", this::update);
@@ -71,7 +78,14 @@ public final class RetirementRoutes {
     /** @param taxType {@code traditional}, {@code roth} or {@code taxable}; {@code null} to stop counting it */
     public record TaxTypeInput(String taxType) {}
 
-    public record IncomeInput(String name, Long yearlyCents, Integer startAge) {}
+    /** @param spouseBirthDate {@code null} for no spouse */
+    public record SpouseInput(LocalDate spouseBirthDate) {}
+
+    /**
+     * @param socialSecurity true for Social Security, taxed by its own formula
+     * @param countedBp      for anything else, how much is taxed income; left out, all of it
+     */
+    public record IncomeInput(String name, Long yearlyCents, Integer startAge, Boolean socialSecurity, Integer countedBp) {}
 
     public record OneOffInput(String name, Long amountCents, Integer age) {}
 
@@ -93,8 +107,28 @@ public final class RetirementRoutes {
             String extraInto,
             Integer retireAge,
             Boolean compared,
+            TaxesInput taxes,
             List<IncomeInput> incomes,
             List<OneOffInput> oneOffs) {}
+
+    /**
+     * How a scenario taxes retirement; left out, the flat rate as before.
+     *
+     * @param mode    {@code flat} or {@code worked_out}
+     * @param filing  {@code single} or {@code joint}
+     * @param strategy {@code none}, {@code bracket:N} or {@code medicare:N}; left out for the cheapest
+     */
+    public record TaxesInput(
+            String mode,
+            String filing,
+            Integer medicarePeople,
+            Integer stateTaxBp,
+            Integer gainsShareBp,
+            Long partDPlanCents,
+            Long supplementCents,
+            Long workingMagiCents,
+            Long magiOverrideCents,
+            String strategy) {}
 
     public record Created(long id) {}
 
@@ -107,6 +141,29 @@ public final class RetirementRoutes {
             throw ApiException.badRequest("Please enter a birth date between " + OLDEST + " and " + YOUNGEST + " years ago.");
         }
         retirement.setBirthDate(input.birthDate());
+        ApiResponse.ok(ctx, new Done(true));
+    }
+
+    private void setSpouseBirthDate(Context ctx) {
+        SpouseInput input = Inputs.body(ctx, SpouseInput.class);
+        LocalDate date = input.spouseBirthDate();
+        if (date != null && (date.isAfter(pay.today().minusYears(YOUNGEST)) || date.isBefore(pay.today().minusYears(OLDEST)))) {
+            throw ApiException.badRequest("Please enter a spouse's birth date between " + OLDEST + " and " + YOUNGEST + " years ago.");
+        }
+        if (!retirement.setSpouseBirthDate(date)) {
+            throw ApiException.conflict("Please enter your own birth date first.");
+        }
+        ApiResponse.ok(ctx, new Done(true));
+    }
+
+    private void setFigures(Context ctx) {
+        service.setFigures(Inputs.body(ctx, FiguresView.class));
+        ApiResponse.ok(ctx, new Done(true));
+    }
+
+    /** Back to the built-in figures. */
+    private void resetFigures(Context ctx) {
+        service.setFigures(null);
         ApiResponse.ok(ctx, new Done(true));
     }
 
@@ -179,7 +236,36 @@ public final class RetirementRoutes {
             throw ApiException.conflict("Three scenarios are already side by side. Please take one out of the comparison first.");
         }
         return new Fields(name, salary, inflation, withdrawal, tax, healthBefore, healthAfter, healthInflation, growth, growthLow, growthHigh,
-                raise, extra, extraInto, retireAge, compared, incomes(input.incomes()), oneOffs(input.oneOffs()));
+                raise, extra, extraInto, retireAge, compared, taxes(input.taxes()), incomes(input.incomes()), oneOffs(input.oneOffs()));
+    }
+
+    private static Taxes taxes(TaxesInput input) {
+        if (input == null) {
+            return Taxes.FLAT;
+        }
+        String mode = input.mode() == null ? "flat" : input.mode();
+        if (!mode.equals("flat") && !mode.equals("worked_out")) {
+            throw ApiException.badRequest("Please choose a flat tax rate, or to work taxes out by the rules.");
+        }
+        String filing = input.filing() == null ? "single" : input.filing();
+        if (!filing.equals("single") && !filing.equals("joint")) {
+            throw ApiException.badRequest("Please choose filing alone or married filing jointly.");
+        }
+        int people = input.medicarePeople() == null ? 1 : input.medicarePeople();
+        if (people != 1 && people != 2) {
+            throw ApiException.badRequest("Please say whether Medicare is for one person or two.");
+        }
+        int state = rate(input.stateTaxBp(), 0, 0, MOST_STATE_TAX_BP, "Please enter a state income tax between 0% and 20%.");
+        int gains = rate(input.gainsShareBp(), GAINS_SHARE_BP, 0, 10_000, "Please enter how much of taxable withdrawals is growth, 0% to 100%.");
+        long partD = input.partDPlanCents() == null ? 0 : Inputs.amount(input.partDPlanCents(), "A Part D plan a month");
+        long supplement = input.supplementCents() == null ? 0 : Inputs.amount(input.supplementCents(), "Medigap or Advantage a month");
+        Long working = input.workingMagiCents() == null ? null : Inputs.amount(input.workingMagiCents(), "Income while working");
+        Long override = input.magiOverrideCents() == null ? null : Inputs.amount(input.magiOverrideCents(), "Income in retirement");
+        String strategy = input.strategy();
+        if (strategy != null && RetirementService.strategy(strategy) == null) {
+            throw ApiException.badRequest("Please choose one of the ways to take money out, or the cheapest.");
+        }
+        return new Taxes(mode, filing, people, state, gains, partD, supplement, working, override, strategy);
     }
 
     /** Basis points as a percentage with two places, the way the form shows them: 600 is "6.00%". */
@@ -205,7 +291,9 @@ public final class RetirementRoutes {
                 throw ApiException.badRequest("Please enter what " + name + " brings a year, more than $0.00.");
             }
             int startAge = age(input.startAge(), "Please enter the age " + name + " starts, between 18 and 100.");
-            incomes.add(new Income(name, yearly, startAge));
+            boolean socialSecurity = Boolean.TRUE.equals(input.socialSecurity());
+            int counted = rate(input.countedBp(), 10_000, 0, 10_000, "Please enter how much of " + name + " is taxed income, 0% to 100%.");
+            incomes.add(new Income(name, yearly, startAge, socialSecurity, counted));
         }
         return incomes;
     }

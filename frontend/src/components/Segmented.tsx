@@ -1,5 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { useId } from "react";
+import type { TermId } from "../help/terms";
+import { InfoTip } from "./help/InfoTip";
 import { LABEL } from "./ui";
 
 interface SegmentedProps<T extends string> {
@@ -11,6 +13,8 @@ interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
   /** Three to a row on a phone, in smaller type: for a switch at the top of a form, where height is short. */
   dense?: boolean;
+  /** An explanation beside the legend. */
+  tip?: TermId;
 }
 
 /**
@@ -21,12 +25,19 @@ interface SegmentedProps<T extends string> {
  * icons stay in one row at every width instead: an odd one left on a row of its own looks
  * like a mistake, and an icon over a short label still makes a comfortable target.
  */
-export function Segmented<T extends string>({ legend, options, value, onChange, dense }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ legend, options, value, onChange, dense, tip }: SegmentedProps<T>) {
   const name = useId();
   const withIcons = options.some((option) => option.icon !== undefined);
   return (
     <fieldset>
-      <legend className={LABEL}>{legend}</legend>
+      {tip ? (
+        <legend className="mb-1 flex items-center gap-1 font-medium">
+          {legend}
+          <InfoTip term={tip} />
+        </legend>
+      ) : (
+        <legend className={LABEL}>{legend}</legend>
+      )}
       <div
         className={`grid gap-1 rounded-lg bg-bg p-1 ${
           withIcons

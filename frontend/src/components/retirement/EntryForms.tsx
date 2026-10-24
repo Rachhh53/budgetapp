@@ -9,8 +9,10 @@ import {
   scenarioAsInput,
   useSaveScenario,
   useSetBirthDate,
+  useSetSpouseBirthDate,
 } from "../../api/retirement";
 import { centsToInput, parseDollars } from "../../lib/money";
+import { parseRate, rateToInput } from "../../lib/rates";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
@@ -52,6 +54,47 @@ export function BirthDateForm({ birthDate, onClose }: { birthDate: string | null
 }
 
 /**
+ * A spouse's birth date, for Medicare from their 65 and the larger deduction for each of you over 65 (spec §5.12).
+ * Removing it plans for you alone.
+ */
+export function SpouseBirthDateForm({ spouseBirthDate, onClose }: { spouseBirthDate: string | null; onClose: () => void }) {
+  const id = useId();
+  const save = useSetSpouseBirthDate();
+  const [date, setDate] = useState(spouseBirthDate ?? "");
+  const [problem, setProblem] = useState<string>();
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (date === "") {
+      setProblem("Please choose their birth date, or Cancel.");
+      return;
+    }
+    setProblem(undefined);
+    save.mutate(date, { onSuccess: onClose });
+  };
+
+  return (
+    <Modal title="Spouse's birth date" icon={CalendarHeart} onClose={onClose}>
+      <form onSubmit={submit} noValidate className="space-y-4">
+        <div>
+          <label htmlFor={`${id}-date`} className={LABEL}>
+            Spouse's birth date
+          </label>
+          <input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} className={INPUT} />
+          <p className={HINT}>For Medicare from their 65 when a scenario counts two people. It stays on this PC.</p>
+        </div>
+        <Footer
+          problem={problem ?? save.error?.message}
+          saving={save.isPending}
+          onClose={onClose}
+          onRemove={spouseBirthDate === null ? undefined : () => save.mutate(null, { onSuccess: onClose })}
+        />
+      </form>
+    </Modal>
+  );
+}
+
+/**
  * Adds or changes one kind of other income on a scenario (Social Security, a pension), or removes
  * it. The scenario is saved whole, with only this entry changed.
  *
@@ -64,6 +107,10 @@ export function IncomeForm({ scenario, index, onClose }: { scenario: RetirementS
   const [name, setName] = useState(current?.name ?? "");
   const [yearly, setYearly] = useState(current ? centsToInput(current.yearlyCents) : "");
   const [age, setAge] = useState(current ? String(current.startAge) : "");
+  // How it is taxed decides how much of it counts toward Medicare's income too (Rachel, 2026-10-23: "some of my income is
+  // not taxable so that needs to be factored in").
+  const [socialSecurity, setSocialSecurity] = useState(current?.socialSecurity ?? false);
+  const [counted, setCounted] = useState(current ? rateToInput(current.countedBp) : "100");
   const [problem, setProblem] = useState<string>();
 
   const saveWith = (incomes: RetirementIncome[]) => save.mutate({ ...scenarioAsInput(scenario), incomes }, { onSuccess: onClose });
@@ -84,8 +131,13 @@ export function IncomeForm({ scenario, index, onClose }: { scenario: RetirementS
       setProblem(`Please enter the age it starts, between ${YOUNGEST} and ${OLDEST}.`);
       return;
     }
+    const countedBp = socialSecurity ? 10_000 : parseRate(counted);
+    if (countedBp === null || countedBp > 10_000) {
+      setProblem("Please enter how much of it is taxed income, from 0 to 100%.");
+      return;
+    }
     setProblem(undefined);
-    const entry = { name: name.trim(), yearlyCents, startAge };
+    const entry = { name: name.trim(), yearlyCents, startAge, socialSecurity, countedBp };
     saveWith(index === undefined ? [...scenario.incomes, entry] : scenario.incomes.map((income, at) => (at === index ? entry : income)));
   };
 
@@ -108,6 +160,43 @@ export function IncomeForm({ scenario, index, onClose }: { scenario: RetirementS
         <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
           <MoneyField label="A year" value={yearly} onChange={setYearly} hint="In today's dollars." />
           <AgeField id={`${id}-age`} label="Starts at age" value={age} onChange={setAge} placeholder="67" />
+        </div>
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor={`${id}-kind`} className={LABEL}>
+              How it's taxed
+            </label>
+            <select
+              id={`${id}-kind`}
+              value={socialSecurity ? "social_security" : "other"}
+              onChange={(event) => setSocialSecurity(event.target.value === "social_security")}
+              className={INPUT}
+            >
+              <option value="social_security">Social Security</option>
+              <option value="other">Other income</option>
+            </select>
+          </div>
+          {socialSecurity ? (
+            <p className={`${HINT} sm:self-end`}>Up to 85% of it is taxed, by Social Security's own formula.</p>
+          ) : (
+            <div>
+              <label htmlFor={`${id}-counted`} className={LABEL}>
+                Taxed income, %
+              </label>
+              <input
+                id={`${id}-counted`}
+                value={counted}
+                onChange={(event) => setCounted(event.target.value)}
+                inputMode="decimal"
+                autoComplete="off"
+                aria-describedby={`${id}-counted-hint`}
+                className={`${INPUT} tabular-nums`}
+              />
+              <p id={`${id}-counted-hint`} className={HINT}>
+                A pension 100, a disability benefit 0.
+              </p>
+            </div>
+          )}
         </div>
         <Footer
           problem={problem ?? save.error?.message}

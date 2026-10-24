@@ -92,7 +92,8 @@ public final class ItemsRoutes {
         routes.get("/api/items/{id}", ctx -> ApiResponse.ok(ctx, view(Inputs.id(ctx, "id"))));
         routes.put("/api/items/{id}", this::update);
         routes.delete("/api/items/{id}", this::delete);
-        routes.post("/api/items/{id}/replacement", this::replace);
+        routes.get("/api/items/{id}/replaced", this::replaced);
+        routes.post("/api/items/{id}/merge-replaced", this::mergeReplaced);
         routes.put("/api/items/{id}/pause", this::pause);
         routes.delete("/api/items/{id}/pause", this::resume);
         routes.put("/api/items/{id}/occurrences/{scheduledDate}", this::editOccurrence);
@@ -310,30 +311,30 @@ public final class ItemsRoutes {
     }
 
     /**
-     * Archives an item and adds what was sent as a new one that starts today: the way to turn
-     * an item into another kind without touching what it was before. A start date that was
-     * sent is ignored, or the new item would repeat the old one's past.
+     * The archived item this one was added in place of, when it changed type the old way (archive it and add a new
+     * one); {@code null} when there is none. See {@link ItemsRepository#replaced}.
      */
-    private void replace(Context ctx) {
+    public record ReplacedView(Replaced replaced) {}
+
+    public record Replaced(long id, String name, ItemKind kind, LocalDate archivedOn) {}
+
+    /** The item merged into. */
+    public record Merged(long id) {}
+
+    private void replaced(Context ctx) {
         long id = Inputs.id(ctx, "id");
-        ItemInput input = Inputs.body(ctx, ItemInput.class);
-        // Everything is checked before anything is written, so a mistake leaves the old item as it was. The new one
-        // takes the old one's place, so it is never archived itself.
-        Identity identity = identity(input, null);
-        // It stands in for the item it replaces, so it may be the same card's own payment.
-        OfCard card = ofCard(input, identity.kind(), terms(input, identity.kind()), id);
-        Terms sent = sized(terms(input, identity.kind()), card);
-        ScheduleRule rule = sent.schedule();
-        Terms terms = sent.withSchedule(new ScheduleRule(
-                rule.frequency(), rule.interval(), rule.day1(), rule.day2(), rule.month(),
-                pay.today(), rule.endDate(), rule.weekendRule(), rule.manualDates()));
-        if (items.find(id).isEmpty()) {
-            throw ApiException.notFound();
-        }
-        long created = items.replace(id, identity, terms);
-        letItsBucketCountFromItsStart(terms);
-        keepItsCardInStep(created, card, terms);
-        ApiResponse.send(ctx, 201, view(created));
+        items.find(id).orElseThrow(ApiException::notFound);
+        ApiResponse.ok(ctx, new ReplacedView(
+                items.replaced(id).map(old -> new Replaced(old.id(), old.name(), old.kind(), old.archivedOn())).orElse(null)));
+    }
+
+    /** Makes an item and the archived one it replaced one item again (Rachel, 2026-10-24). */
+    private void mergeReplaced(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        items.find(id).orElseThrow(ApiException::notFound);
+        Item old = items.replaced(id).orElseThrow(() -> ApiException.conflict(
+                "There is no archived item this one was added in place of, so there is nothing to merge."));
+        ApiResponse.ok(ctx, new Merged(items.mergeReplaced(id, old.id())));
     }
 
     /** A card's own payment: the card's settings as they stand, and how much the payment pays. */

@@ -1,10 +1,12 @@
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Link } from "react-router";
 import {
   PAYOFF_ORDER_LABELS,
   PAYOFF_ORDERS,
   type PayoffOrder,
+  MOST_PLAN_YEARS,
   PLANNER_YEARS,
+  type PlanSettings,
   type PlannerComparison,
   type PlannerYears,
   usePlanner,
@@ -13,6 +15,7 @@ import {
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
 import { AMOUNT_HELP, MoneyField } from "../components/MoneyField";
+import { DebtOrInvestCard } from "../components/planner/DebtOrInvestCard";
 import { DebtOverTimeChart } from "../components/planner/DebtOverTimeChart";
 import { OptionCard } from "../components/planner/OptionCard";
 import { PayoffTimeline } from "../components/planner/PayoffTimeline";
@@ -38,6 +41,26 @@ interface Remembered {
   extraCents: number;
   years: PlannerYears;
   order: PayoffOrder;
+  /** Pay off debt or invest: the account, split, period and where a freed payment goes; never the growth typed. */
+  plans: PlanSettings;
+}
+
+/** A remembered whole number within limits, or nothing. */
+function within(value: unknown, least: number, most: number): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= least && value <= most ? value : undefined;
+}
+
+function rememberedPlans(kept: unknown): PlanSettings {
+  if (typeof kept !== "object" || kept === null) {
+    return {};
+  }
+  const { investAccountId, splitBp, years, freedMoves } = kept as Record<string, unknown>;
+  return {
+    investAccountId: within(investAccountId, 1, Number.MAX_SAFE_INTEGER),
+    splitBp: within(splitBp, 0, 10_000),
+    years: within(years, 1, MOST_PLAN_YEARS),
+    freedMoves: typeof freedMoves === "boolean" ? freedMoves : undefined,
+  };
 }
 
 /**
@@ -46,17 +69,18 @@ interface Remembered {
  * changing them is nothing to undo.
  */
 function remembered(): Remembered {
-  const fallback: Remembered = { extraCents: DEFAULT_EXTRA_CENTS, years: DEFAULT_YEARS, order: "highest_rate" };
+  const fallback: Remembered = { extraCents: DEFAULT_EXTRA_CENTS, years: DEFAULT_YEARS, order: "highest_rate", plans: {} };
   try {
     const kept: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null");
     if (typeof kept !== "object" || kept === null) {
       return fallback;
     }
-    const { extraCents, years, order } = kept as Record<string, unknown>;
+    const { extraCents, years, order, plans } = kept as Record<string, unknown>;
     return {
       extraCents: typeof extraCents === "number" && Number.isSafeInteger(extraCents) && extraCents >= 0 ? extraCents : fallback.extraCents,
       years: PLANNER_YEARS.find((choice) => choice === years) ?? fallback.years,
       order: PAYOFF_ORDERS.find((choice) => choice === order) ?? fallback.order,
+      plans: rememberedPlans(plans),
     };
   } catch {
     // Storage switched off, or something else's text under the key: start from the usual.
@@ -86,7 +110,9 @@ export function PlannerPage() {
   const [order, setOrder] = useState<PayoffOrder>(start.order);
   // Rates typed on the cards: for this visit only, and never saved to the accounts.
   const [growthBp, setGrowthBp] = useState<Record<number, number>>({});
+  const [plans, setPlans] = useState<PlanSettings>(start.plans);
   const yearsId = useId();
+  const changePlans = useCallback((change: PlanSettings) => setPlans((current) => ({ ...current, ...change })), []);
 
   const typedCents = parseDollars(extraText);
   const extraValid = typedCents !== null && typedCents >= 0;
@@ -98,9 +124,12 @@ export function PlannerPage() {
     return () => window.clearTimeout(waiting);
   }, [extraValid, typedCents, extraCents]);
 
-  useEffect(() => remember({ extraCents, years, order }), [extraCents, years, order]);
+  useEffect(
+    () => remember({ extraCents, years, order, plans: { investAccountId: plans.investAccountId, splitBp: plans.splitBp, years: plans.years, freedMoves: plans.freedMoves } }),
+    [extraCents, years, order, plans],
+  );
 
-  const planner = usePlanner({ extraCents, years, order, growthBp });
+  const planner = usePlanner({ extraCents, years, order, growthBp, plans });
   const setHidden = useSetPlannerHidden();
 
   const assume = (accountId: number, rateBp: number | null) =>
@@ -176,6 +205,7 @@ export function PlannerPage() {
             order={order}
             onOrderChange={setOrder}
             onGrowthChange={assume}
+            onPlansChange={changePlans}
             onHide={(accountId, hidden) => setHidden.mutate({ accountId, hidden })}
             hiding={setHidden.isPending}
             hideError={setHidden.error?.message}
@@ -196,12 +226,13 @@ interface ComparisonProps {
   order: PayoffOrder;
   onOrderChange: (order: PayoffOrder) => void;
   onGrowthChange: (accountId: number, rateBp: number | null) => void;
+  onPlansChange: (settings: PlanSettings) => void;
   onHide: (accountId: number, hidden: boolean) => void;
   hiding: boolean;
   hideError: string | undefined;
 }
 
-function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, hiding, hideError }: ComparisonProps) {
+function Comparison({ comparison, order, onOrderChange, onGrowthChange, onPlansChange, onHide, hiding, hideError }: ComparisonProps) {
   const { options, payoff, hidden, flags, extraCents, years, today } = comparison;
   const nothingAtAll = options.length === 0 && hidden.length === 0 && payoff.debts.length === 0;
   return (
@@ -280,6 +311,16 @@ function Comparison({ comparison, order, onOrderChange, onGrowthChange, onHide, 
             debtFreeDateBefore={payoff.debtFreeDateBefore}
           />
         </Card>
+      )}
+
+      {!nothingAtAll && (
+        <DebtOrInvestCard
+          view={comparison.debtOrInvest}
+          debts={payoff.debts.filter((debt) => !debt.planned)}
+          extraCents={extraCents}
+          order={order}
+          onChange={onPlansChange}
+        />
       )}
 
       {hidden.length > 0 && (

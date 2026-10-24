@@ -158,6 +158,25 @@ public final class RetirementPlanner {
      */
     public record Result(Integer earliestAge, Integer earliestLow, Integer earliestHigh, int ageNow, List<AgePoint> byAge, Target target) {}
 
+    /** What each kind of money comes to at a birthday, in today's dollars, before any tax: where a drawdown starts. */
+    public record Balances(Money traditional, Money roth, Money taxable) {}
+
+    /**
+     * Each kind of money at the birthday of {@code age}, at the expected growth and with the scenario's own saving; zeros
+     * when the age is past or beyond the plan.
+     */
+    public static Balances balancesAt(LocalDate birthDate, LocalDate today, List<Pot> pots, Scenario scenario, int age) {
+        int monthsOld = (int) ChronoUnit.MONTHS.between(birthDate, today);
+        int ageNow = monthsOld / MONTHS_IN_YEAR;
+        int firstAge = monthsOld % MONTHS_IN_YEAR == 0 ? ageNow : ageNow + 1;
+        if (age < firstAge || age > LAST_AGE) {
+            return new Balances(Money.ZERO, Money.ZERO, Money.ZERO);
+        }
+        Simulation base = new Plan(monthsOld, firstAge, pots, scenario).simulate(BigDecimal.ZERO, scenario.extraInto(), scenario.growth());
+        int at = age - firstAge;
+        return new Balances(cents(base.traditional[at]), cents(base.roth[at]), cents(base.taxable[at]));
+    }
+
     public static Result plan(LocalDate birthDate, LocalDate today, List<Pot> pots, Scenario scenario) {
         int monthsOld = (int) ChronoUnit.MONTHS.between(birthDate, today);
         int ageNow = monthsOld / MONTHS_IN_YEAR;
@@ -199,7 +218,8 @@ public final class RetirementPlanner {
      * Month by month to {@link #LAST_AGE}, at each whole age: after tax and taxable alone in today's dollars, and after tax
      * in the dollars of that year.
      */
-    private record Simulation(int firstAge, BigDecimal[] afterTax, BigDecimal[] taxable, BigDecimal[] afterTaxThen) {
+    private record Simulation(
+            int firstAge, BigDecimal[] afterTax, BigDecimal[] taxable, BigDecimal[] afterTaxThen, BigDecimal[] traditional, BigDecimal[] roth) {
         BigDecimal projected(int age) {
             return afterTax[age - firstAge];
         }
@@ -259,6 +279,8 @@ public final class RetirementPlanner {
             BigDecimal[] afterTax = new BigDecimal[ages];
             BigDecimal[] taxable = new BigDecimal[ages];
             BigDecimal[] afterTaxThen = new BigDecimal[ages];
+            BigDecimal[] traditionalNow = new BigDecimal[ages];
+            BigDecimal[] rothNow = new BigDecimal[ages];
             BigDecimal prices = BigDecimal.ONE;
             // Months 1–12 get the coming year's; each year after gets a raise more than the year before.
             BigDecimal raised = BigDecimal.ONE;
@@ -286,10 +308,18 @@ public final class RetirementPlanner {
                 }
                 BigDecimal total = BigDecimal.ZERO;
                 BigDecimal taxableTotal = BigDecimal.ZERO;
+                BigDecimal traditionalTotal = BigDecimal.ZERO;
+                BigDecimal rothTotal = BigDecimal.ZERO;
                 for (Account account : accounts) {
                     switch (account.type) {
-                        case TRADITIONAL -> total = total.add(account.balance.multiply(afterTaxShare, MATH));
-                        case ROTH -> total = total.add(account.balance);
+                        case TRADITIONAL -> {
+                            total = total.add(account.balance.multiply(afterTaxShare, MATH));
+                            traditionalTotal = traditionalTotal.add(account.balance);
+                        }
+                        case ROTH -> {
+                            total = total.add(account.balance);
+                            rothTotal = rothTotal.add(account.balance);
+                        }
                         case TAXABLE -> {
                             total = total.add(account.balance);
                             taxableTotal = taxableTotal.add(account.balance);
@@ -299,8 +329,10 @@ public final class RetirementPlanner {
                 afterTax[age - firstAge] = total.divide(prices, MATH);
                 taxable[age - firstAge] = taxableTotal.divide(prices, MATH);
                 afterTaxThen[age - firstAge] = total;
+                traditionalNow[age - firstAge] = traditionalTotal.divide(prices, MATH);
+                rothNow[age - firstAge] = rothTotal.divide(prices, MATH);
             }
-            return new Simulation(firstAge, afterTax, taxable, afterTaxThen);
+            return new Simulation(firstAge, afterTax, taxable, afterTaxThen, traditionalNow, rothNow);
         }
 
         /** One year's need at an age, in today's cents: salary + health − other income already started. */

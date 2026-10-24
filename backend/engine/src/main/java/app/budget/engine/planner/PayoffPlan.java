@@ -216,7 +216,7 @@ public final class PayoffPlan {
     }
 
     /** The debt the spare money goes to this month, among those with a payment in it; -1 when there is none. */
-    private static int next(List<Debt> debts, Money[] owed, LocalDate[] days, Order order) {
+    static int next(List<Debt> debts, Money[] owed, LocalDate[] days, Order order) {
         int best = -1;
         for (int i = 0; i < owed.length; i++) {
             if (owed[i].isZero() || days[i] == null) {

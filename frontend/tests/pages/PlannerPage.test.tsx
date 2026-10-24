@@ -1,7 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PayoffDebt, PlannerComparison, PlannerFlag, PlannerOption } from "../../src/api/planner";
+import type { DebtOrInvest, PayoffDebt, PlanOutcome, PlannerComparison, PlannerFlag, PlannerOption } from "../../src/api/planner";
 import { bodiesSentTo, calls, fakeBackend, NOTHING_TO_COMPARE, renderApp } from "../helpers";
 
 /** One option; only what its kind uses is filled in. */
@@ -117,6 +117,74 @@ const BROKERAGE = option({
   matchPerMonthCents: 0,
 });
 
+function planOutcome(kind: PlanOutcome["kind"], fields: Partial<PlanOutcome>): PlanOutcome {
+  return {
+    kind,
+    debtShareBp: kind === "invest_all" ? 0 : kind === "pay_off_first" ? 10_000 : 5_000,
+    betterOffCents: 0,
+    paidDownCents: 0,
+    investedCents: 0,
+    putInCents: 0,
+    matchCents: 0,
+    growthCents: 0,
+    owedCents: 0,
+    interestCents: 0,
+    debtFreeDate: null,
+    ...fields,
+  };
+}
+
+/** Five years of $712.00 a month against the car loan and the mortgage, invested in the brokerage at 6%. */
+const DEBT_OR_INVEST: DebtOrInvest = {
+  reason: null,
+  investAccountId: 4,
+  growthBp: 600,
+  accountGrowthBp: 600,
+  years: 5,
+  splitBp: 5_000,
+  freedMoves: true,
+  owedTodayCents: 28_600_000,
+  monthlyCents: 281_200,
+  choices: [
+    { accountId: 3, name: "Brightwater 401(k)", color: "#7c3aed", kind: "invest", growthBp: 700 },
+    { accountId: 4, name: "Brokerage", color: "#0f766e", kind: "invest", growthBp: 600 },
+  ],
+  plans: [
+    planOutcome("invest_all", { betterOffCents: 3_684_500, paidDownCents: 1_600_000, investedCents: 2_084_500, putInCents: 1_800_000, growthCents: 284_500, owedCents: 27_000_000, interestCents: 9_100_000 }),
+    planOutcome("pay_off_first", { betterOffCents: 3_840_000, paidDownCents: 2_600_000, investedCents: 1_240_000, putInCents: 1_190_000, growthCents: 50_000, owedCents: 26_000_000, interestCents: 8_900_000 }),
+    planOutcome("split", { betterOffCents: 3_600_000, paidDownCents: 2_100_000, investedCents: 1_500_000, putInCents: 1_400_000, growthCents: 100_000, owedCents: 26_500_000, interestCents: 9_000_000 }),
+  ],
+  best: "pay_off_first",
+  bestSplitBp: 10_000,
+  bestSplitNetDiffCents: 100_000,
+  points: [
+    {
+      month: "2026-10-01",
+      investAllCents: 30_000,
+      payOffFirstCents: 30_000,
+      splitCents: 30_000,
+      investAllInvestedCents: 30_000,
+      payOffFirstInvestedCents: 0,
+      splitInvestedCents: 15_000,
+      investAllOwedCents: 28_600_000,
+      payOffFirstOwedCents: 28_570_000,
+      splitOwedCents: 28_585_000,
+    },
+    {
+      month: "2031-09-01",
+      investAllCents: 3_684_500,
+      payOffFirstCents: 3_840_000,
+      splitCents: 3_600_000,
+      investAllInvestedCents: 2_084_500,
+      payOffFirstInvestedCents: 1_240_000,
+      splitInvestedCents: 1_500_000,
+      investAllOwedCents: 27_000_000,
+      payOffFirstOwedCents: 26_000_000,
+      splitOwedCents: 26_500_000,
+    },
+  ],
+};
+
 /** Nia's comparison on Friday 2026-10-09: $300 a month over five years. */
 const COMPARISON: PlannerComparison = {
   today: "2026-10-09",
@@ -162,6 +230,7 @@ const COMPARISON: PlannerComparison = {
     ],
   },
   hidden: [{ accountId: 2, name: "Rainy Day Savings", type: "savings" }],
+  debtOrInvest: DEBT_OR_INVEST,
 };
 
 function withComparison(comparison: PlannerComparison = COMPARISON, more: Parameters<typeof fakeBackend>[0] = {}) {
@@ -182,7 +251,7 @@ describe("Debt & decisions", () => {
     expect(screen.getByLabelText("Extra each month")).toHaveValue("300.00");
     expect(screen.getByLabelText("Compare over")).toHaveValue("5");
     await waitFor(() =>
-      expect(bodiesSentTo(backend, "POST /api/planner")[0]).toEqual({ extraCents: 30_000, years: 5, order: "highest_rate", growthBp: {} }),
+      expect(bodiesSentTo(backend, "POST /api/planner")[0]).toEqual({ extraCents: 30_000, years: 5, order: "highest_rate", growthBp: {}, plans: {} }),
     );
     expect(screen.getByText(/Estimates for comparing options, not financial advice/)).toBeInTheDocument();
   });
@@ -373,6 +442,69 @@ describe("Debt & decisions", () => {
     expect(discover).toHaveTextContent(
       "At $25.00 a month this is never paid off: the interest is more than the payment. With the extra it is gone by Jun 2027.",
     );
+  });
+
+  it("weighs paying off against investing, every plan measured on the same day", async () => {
+    withComparison();
+    renderApp("/planner");
+
+    const card = await screen.findByRole("region", { name: "Pay off debt or invest?" });
+    expect(card).toHaveTextContent("Every plan spends the same $2,812.00 a month: your debts' payments and the extra.");
+    const plans = within(within(card).getByRole("list", { name: "The three plans" })).getAllByRole("listitem");
+    expect(plans).toHaveLength(3);
+    expect(plans[0]).toHaveTextContent("Invest it allDebts stay on their own payments.Better off after 5 years by$36,845.00");
+    expect(plans[1]).toHaveTextContent("Pay off debt, then investHighest rate first, then everything invested.Comes to the most");
+    expect(plans[2]).toHaveTextContent("Your split: 50% to debts");
+    expect(plans[1]).toHaveTextContent(
+      "Better off after 5 years by$38,400.00 (estimate)New money invested$12,400.00put in$11,900.00growth$500.00Debt paid down$26,000.00Still owed at the end$260,000.00",
+    );
+    // What the chart is, in words: better off than today, not net worth, from these debts.
+    expect(card).toHaveTextContent("How to read this");
+    expect(card).toHaveTextContent("It isn't your net worth: what you already own (your home, savings, investments) isn't in it.");
+    expect(card).toHaveTextContent("The debts are Car loan ($0.00) and Mortgage ($0.00), $286,000.00 today.");
+    expect(within(card).getByRole("status")).toHaveTextContent(
+      "Over 5 years, the most comes from putting 100% of the spare money to debts (paying them off first). That is $1,000.00 more than your split.",
+    );
+  });
+
+  it("asks again as each slider and choice moves", async () => {
+    const backend = withComparison();
+    renderApp("/planner");
+
+    const card = await screen.findByRole("region", { name: "Pay off debt or invest?" });
+    fireEvent.change(within(card).getByLabelText("Your split: to debts"), { target: { value: "7500" } });
+    expect(within(card).getByText("75% to debts · 25% invested")).toBeInTheDocument();
+    expect(card).toHaveTextContent("$225.00 of the extra to debts and $75.00 invested");
+    fireEvent.change(within(card).getByLabelText("Measured after"), { target: { value: "12" } });
+    fireEvent.change(within(card).getByLabelText("Growth of Brokerage a year"), { target: { value: "825" } });
+    await waitFor(() =>
+      expect(bodiesSentTo(backend, "POST /api/planner").at(-1)).toMatchObject({ plans: { splitBp: 7_500, years: 12, growthBp: 825 } }),
+    );
+
+    await userEvent.selectOptions(within(card).getByLabelText("Invest in"), "3");
+    await waitFor(() => expect(bodiesSentTo(backend, "POST /api/planner").at(-1)).toMatchObject({ plans: { investAccountId: 3 } }));
+    await userEvent.click(within(card).getByLabelText("Difference from investing it all"));
+    expect(within(card).getByText("How far each plan is ahead of investing it all")).toBeInTheDocument();
+    await userEvent.click(within(card).getByLabelText("Goes back to your budget"));
+    await waitFor(() => expect(bodiesSentTo(backend, "POST /api/planner").at(-1)).toMatchObject({ plans: { freedMoves: false } }));
+  });
+
+  it("tries the best split in one tap", async () => {
+    const backend = withComparison();
+    renderApp("/planner");
+
+    const card = await screen.findByRole("region", { name: "Pay off debt or invest?" });
+    await userEvent.click(within(card).getByRole("button", { name: "Try 100%" }));
+
+    await waitFor(() => expect(bodiesSentTo(backend, "POST /api/planner").at(-1)).toMatchObject({ plans: { splitBp: 10_000 } }));
+  });
+
+  it("says what is needed before paying off can be weighed against investing", async () => {
+    withComparison({ ...COMPARISON, debtOrInvest: { ...DEBT_OR_INVEST, reason: "no_debts", plans: [], points: [] } });
+    renderApp("/planner");
+
+    const card = await screen.findByRole("region", { name: "Pay off debt or invest?" });
+    expect(card).toHaveTextContent("Once a loan with its monthly payment, or a card carrying a balance, is here");
   });
 
   it("says so when there is nothing to compare yet", async () => {
