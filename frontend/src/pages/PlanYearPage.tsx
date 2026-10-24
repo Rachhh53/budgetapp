@@ -166,7 +166,8 @@ function StartAPlan({
       <>
         <p className="font-medium">Plan {overview.nextYear} before it starts.</p>
         <p className="mt-1 text-muted">
-          Budget suggests an amount for every bill and budget from what the last 12 months came to. Accept them or type your own. Nothing
+          Every bill and budget starts at what it will be on {formatDate(overview.nextStartsOn)}, beside a suggestion from what the
+          last 12 months came to. Use the suggestions, keep the amounts or type your own. Nothing
           changes until {formatDate(overview.nextStartsOn)}, and a draft can be deleted and redone any time before then.
         </p>
         <button type="button" disabled={pending} onClick={() => onStart("next_year")} className={`${BUTTON_PRIMARY} mt-4`}>
@@ -237,6 +238,11 @@ function Wizard({ detail, current }: { detail: PlanDetail; current: WizardStep }
 
   const setAmount = useSetPlanAmount(plan.id);
   const setBasis = useSetPlanBasis(plan.id);
+  const sources = useIncomeSources();
+  const accounts = useAccounts();
+  // The income line whose whole paycheck for the plan's year is open; it is kept with the plan only.
+  const [editingPay, setEditingPay] = useState<PlanRow>();
+  const payingSource = editingPay && sources.data?.find((source) => source.id === editingPay.id);
   const accept = useAcceptSuggestions(plan.id);
   const failed = setAmount.error ?? setBasis.error ?? accept.error;
   const saving = setAmount.isPending || setBasis.isPending || accept.isPending;
@@ -303,7 +309,8 @@ function Wizard({ detail, current }: { detail: PlanDetail; current: WizardStep }
                     <strong>
                       {monthOf(detail.historyFrom)} – {monthOf(detail.historyTo)}
                     </strong>
-                    {plan.basis === "last_12_trend" && " and each one's price trend"}. Accept them or type your own.{" "}
+                    {plan.basis === "last_12_trend" && " and each one's price trend"}. Each amount starts at what it will be on{" "}
+                    {formatDate(plan.startsOn)}: use the suggestion, keep it or type your own.{" "}
                     <InfoTip term="suggestionBasis" />
                   </p>
                   <div className="lg:w-96 lg:shrink-0">
@@ -338,21 +345,19 @@ function Wizard({ detail, current }: { detail: PlanDetail; current: WizardStep }
                 step={stepView}
                 saving={saving}
                 onAmount={planning ? (row: PlanRow, amountCents) => setAmount.mutate({ kind: row.kind, id: row.id, amountCents }) : undefined}
+                onEditPay={planning ? setEditingPay : undefined}
               />
-              {plan.setup && plan.status === "draft" ? (
-                <SetupAdd step={stepView} />
-              ) : (
-                planning && (
-                  <p className="mt-3 text-sm text-muted">
-                    Something new next year?{" "}
-                    <Link to={stepView.step === "income" ? "/income" : "/recurring"} className="font-semibold text-accent-ink underline">
-                      Add it under {stepView.step === "income" ? "Income" : "Recurring items"}
-                    </Link>{" "}
-                    with the day it starts, and it shows here.
-                  </p>
-                )
-              )}
+              {plan.setup && plan.status === "draft" && <SetupAdd step={stepView} />}
             </Card>
+            {editingPay?.pay && payingSource && (
+              <IncomeSourceForm
+                source={payingSource}
+                plan={{ id: plan.id, year: plan.year, startsOn: plan.startsOn, pay: editingPay.pay }}
+                isFirst={false}
+                accounts={accounts.data ?? []}
+                onClose={() => setEditingPay(undefined)}
+              />
+            )}
           </>
         ) : (
           <Review detail={detail} />
@@ -371,7 +376,7 @@ function Wizard({ detail, current }: { detail: PlanDetail; current: WizardStep }
                 ? "Saved as you go. You can stop here and carry on later."
                 : `Saved as you go. Nothing changes until ${formatDate(plan.startsOn)}. A draft can be deleted and redone any time before it starts.`}
           </p>
-          {planning && stepView && stepView.yours > 0 && (
+          {planning && stepView && stepView.rows.some((row) => row.reason !== "fixed" && row.chosenCents !== row.suggestedCents) && (
             <button type="button" disabled={saving} onClick={() => accept.mutate(stepView.step)} className={BUTTON_SECONDARY}>
               Accept all suggestions
             </button>

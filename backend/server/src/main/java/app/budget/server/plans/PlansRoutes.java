@@ -4,15 +4,20 @@ import app.budget.engine.plans.PlanSuggestions.Basis;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
+import app.budget.server.income.IncomeRoutes.DeductionInput;
+import app.budget.server.income.IncomeRoutes.MatchInput;
+import app.budget.server.income.PayInputs;
 import app.budget.server.items.ItemsRepository;
 import app.budget.server.plans.PlanService.Step;
+import app.budget.server.plans.PlansRepository.Raise;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
+import java.util.List;
 
 /**
  * Plan next year (spec §8): {@code /api/plans} for the plans themselves, the amounts typed into a
- * draft, and first-time setup; {@code GET /api/items/{id}/plan-suggestion} for what a plan would
- * suggest for one bill or budget.
+ * draft, a whole paycheck planned for next year, and first-time setup; {@code GET
+ * /api/items/{id}/plan-suggestion} for what a plan would suggest for one bill or budget.
  */
 public final class PlansRoutes {
 
@@ -21,10 +26,12 @@ public final class PlansRoutes {
 
     private final PlanService service;
     private final ItemsRepository items;
+    private final PayInputs payInputs;
 
-    public PlansRoutes(PlanService service, ItemsRepository items) {
+    public PlansRoutes(PlanService service, ItemsRepository items, PayInputs payInputs) {
         this.service = service;
         this.items = items;
+        this.payInputs = payInputs;
     }
 
     public void register(JavalinDefaultRoutingApi routes) {
@@ -34,6 +41,7 @@ public final class PlansRoutes {
         routes.put("/api/plans/{id}", this::update);
         routes.delete("/api/plans/{id}", this::delete);
         routes.put("/api/plans/{id}/amounts", this::setAmount);
+        routes.put("/api/plans/{id}/income/{sourceId}/pay", this::setPay);
         routes.post("/api/plans/{id}/accept-suggestions", this::acceptSuggestions);
         routes.post("/api/plans/{id}/finish", this::finish);
         routes.get("/api/items/{id}/plan-suggestion", this::suggestion);
@@ -54,6 +62,22 @@ public final class PlansRoutes {
      * @param amountCents the amount for the year (an item) or one paycheck (income); {@code null} to follow the suggestion again
      */
     public record AmountInput(String kind, Long id, Long amountCents) {}
+
+    /**
+     * A whole paycheck for the plan's year, read as an income source's amounts are: whole cents, a
+     * deduction as dollars or a share of gross, and the match left out for none. To go back to the
+     * pay as it stands, the amount is cleared ({@code PUT /amounts} with {@code amountCents: null}).
+     */
+    public record PayInput(
+            Long grossCents, Long netCents, Boolean netIsEstimate, List<DeductionInput> deductions, MatchInput match, RaiseInput raise) {}
+
+    /**
+     * A raise partway through the plan's year; left out for none.
+     *
+     * @param from the first day of the raise
+     * @param bp   the raise in basis points, 300 for 3%
+     */
+    public record RaiseInput(String from, Integer bp) {}
 
     /** @param step the step to take the typed amounts out of; left out for every step */
     public record AcceptInput(String step) {}
@@ -97,6 +121,25 @@ public final class PlansRoutes {
             Inputs.amount(input.amountCents(), "The amount");
         }
         service.setAmount(id, input.kind(), input.id(), input.amountCents());
+        ApiResponse.ok(ctx, service.find(id).orElseThrow(ApiException::notFound));
+    }
+
+    private void setPay(Context ctx) {
+        long id = Inputs.id(ctx, "id");
+        long sourceId = Inputs.id(ctx, "sourceId");
+        PayInput input = Inputs.body(ctx, PayInput.class);
+        RaiseInput raise = input.raise();
+        if (raise != null && raise.from() == null) {
+            throw ApiException.badRequest("Please choose the day the raise starts.");
+        }
+        if (raise != null && raise.bp() == null) {
+            throw ApiException.badRequest("Please enter the raise as a percent above 0% and up to 100%.");
+        }
+        service.setPay(
+                id,
+                sourceId,
+                payInputs.read(input.grossCents(), input.netCents(), input.netIsEstimate(), input.deductions(), input.match()),
+                raise == null ? null : new Raise(Inputs.date(raise.from()), raise.bp()));
         ApiResponse.ok(ctx, service.find(id).orElseThrow(ApiException::notFound));
     }
 

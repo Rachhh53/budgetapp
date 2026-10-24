@@ -7,5 +7,14 @@
     "check-dependency-age.ps1 fails the build once an entry's version is 14 days old (it is no",
     "longer an exception: delete the entry) or is no longer used at all."
   ],
-  "exceptions": []
+  "exceptions": [
+    {
+      "ecosystem": "Cargo",
+      "package": "tokio",
+      "version": "1.53.3",
+      "fixes": "RUSTSEC-2026-0386",
+      "reason": "Every version from 0.3.2 has the vulnerability until 1.51.6 and 1.53.3, both published 2026-10-13, and Tauri runs on tokio, so it cannot be dropped or replaced. 1.53.3 is the smallest step from the 1.53.1 we had.",
+      "added": "2026-10-23"
+    }
+  ]
 }

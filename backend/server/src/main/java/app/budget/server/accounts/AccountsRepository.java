@@ -115,7 +115,10 @@ public final class AccountsRepository {
                 .execute()) > 0;
     }
 
-    /** True when a paycheck is deposited to, or a deduction or employer match goes into, this account. */
+    /**
+     * True when a paycheck is deposited to, or a deduction or employer match goes into, this account; a paycheck
+     * planned for next year in a draft plan counts too.
+     */
     public boolean isUsedByIncome(long id) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
@@ -124,6 +127,9 @@ public final class AccountsRepository {
                             OR EXISTS (SELECT 1 FROM one_off_paycheck_deductions WHERE to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM income_pay_changes WHERE match_to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM plan_year_pay p JOIN plan_years y ON y.id = p.plan_year_id
+                                       WHERE y.status = 'draft' AND (p.match_to_account_id = :id OR EXISTS (
+                                           SELECT 1 FROM plan_year_pay_deductions d WHERE d.plan_year_pay_id = p.id AND d.to_account_id = :id)))
                         """)
                 .bind("id", id)
                 .mapTo(Boolean.class)
@@ -208,12 +214,14 @@ public final class AccountsRepository {
         });
     }
 
-    /** True when an employer match is paid into this account. */
+    /** True when an employer match is paid into this account, or is planned to be in a draft plan. */
     public boolean receivesEmployerMatch(long id) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
                         SELECT EXISTS (SELECT 1 FROM employer_match WHERE to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM income_pay_changes WHERE match_to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM plan_year_pay p JOIN plan_years y ON y.id = p.plan_year_id
+                                       WHERE y.status = 'draft' AND p.match_to_account_id = :id)
                         """)
                 .bind("id", id)
                 .mapTo(Boolean.class)

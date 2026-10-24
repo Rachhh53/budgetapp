@@ -42,6 +42,7 @@ import app.budget.server.income.IncomeRoutes;
 import app.budget.server.income.OneOffPaychecksRepository;
 import app.budget.server.income.OneOffPaychecksRoutes;
 import app.budget.server.income.PayCalendar;
+import app.budget.server.income.PayInputs;
 import app.budget.server.items.ItemCalendar;
 import app.budget.server.items.InvoicesRepository;
 import app.budget.server.items.InvoicesRoutes;
@@ -264,7 +265,7 @@ public final class BudgetServer {
                     .register(routes);
             new AnnualCostsRoutes(annualCosts, items, savedCopies).register(routes);
             new DashboardRoutes(dashboard).register(routes);
-            new PlansRoutes(plans, items).register(routes);
+            new PlansRoutes(plans, items, new PayInputs(accounts)).register(routes);
             new PlannerRoutes(planner, plannerHidden, accounts).register(routes);
             new RetirementRoutes(retirement, retirementPlans, accounts, payCalendar).register(routes);
             new SearchRoutes(entries, items, itemCalendar, payCalendar).register(routes);

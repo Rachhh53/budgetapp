@@ -1,8 +1,12 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import type { IncomeSource } from "../../src/api/income";
 import type { PlanDetail, PlanRow, PlanStepView, PlanSummary, PlansOverview } from "../../src/api/plans";
 import { bodiesSentTo, calls, DEFAULT_SETTINGS, EMPTY_DASHBOARD, fakeBackend, NO_PLANS, renderApp } from "../helpers";
+
+/** A planned paycheck that stays the same all year. */
+const NO_RAISE = { raiseFrom: null, raiseBp: null, raisedGrossCents: null, raisedNetCents: null, raisedPaychecks: 0 };
 
 const DRAFT: PlanSummary = {
   id: 7,
@@ -35,6 +39,8 @@ function row(overrides: Partial<PlanRow> & Pick<PlanRow, "id" | "name">): PlanRo
     savedUpFor: false,
     yearCents: 0,
     currentYearCents: 0,
+    pay: null,
+    historyMonths: null,
     ...overrides,
   };
 }
@@ -55,7 +61,32 @@ const PAY = row({
   occurrences: 24,
   yearCents: 5_966_880,
   currentYearCents: 5_966_880,
+  pay: { grossCents: 360_000, netCents: 248_620, netIsEstimate: false, deductions: [], match: null, planned: false, ...NO_RAISE },
 });
+
+/** The real income source behind the PAY line. The plan never sends anything to it. */
+const CLINIC: IncomeSource = {
+  id: 1,
+  name: "Riverside Clinic",
+  depositAccountId: 1,
+  grossCents: 360_000,
+  netCents: 248_620,
+  netIsEstimate: false,
+  primary: true,
+  schedule: {
+    frequency: "semi_monthly",
+    day1: 1,
+    day2: 15,
+    startDate: "2026-01-01",
+    endDate: null,
+    weekendRule: "previous_business_day",
+    manualDates: [],
+  },
+  deductions: [],
+  match: null,
+  matchFigures: null,
+  payHistory: [],
+};
 
 const RENT = row({
   id: 11,
@@ -165,9 +196,10 @@ function withDraft(overrides: Parameters<typeof fakeBackend>[0] = {}) {
  * A draft that remembers: it opens as `before`, and once `change` has been sent it answers with
  * `after`, to that request and to every look at the plan from then on, as the real backend does.
  */
-function draftThatChanges(before: PlanDetail, change: string, after: PlanDetail) {
+function draftThatChanges(before: PlanDetail, change: string, after: PlanDetail, more: Parameters<typeof fakeBackend>[0] = {}) {
   let current = before;
   return withDraft({
+    ...more,
     "GET /api/plans/7": () => ({ status: 200, data: current }),
     [change]: () => {
       current = after;
@@ -226,7 +258,9 @@ describe("Plan next year", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "Bills for 2027" })).toBeInTheDocument();
     expect(screen.getByText("Oct 2025 – Sep 2026")).toBeInTheDocument();
-    const rent = screen.getByRole("link", { name: "Rent" }).closest("li");
+    // A plan changes nothing real, so a line does not lead to the real bill.
+    expect(screen.queryByRole("link", { name: "Rent" })).not.toBeInTheDocument();
+    const rent = screen.getByText("Rent").closest("li");
     expect(rent).not.toBeNull();
     const inRent = within(rent as HTMLElement);
     expect(inRent.getByText("$18,450.00")).toBeInTheDocument();
@@ -257,16 +291,65 @@ describe("Plan next year", () => {
     expect(screen.getByRole("button", { name: "Accept all suggestions" })).toBeInTheDocument();
   });
 
-  it("goes back to the suggestion when asked", async () => {
-    const user = userEvent.setup();
-    const typed = { ...RENT, chosenCents: 1_920_000, yours: true, yearCents: 1_920_000 };
-    const fetchMock = draftThatChanges(detail(DRAFT, [typed, CAR_LOAN, PHONE]), "PUT /api/plans/7/amounts", detail(DRAFT));
+  it("says how many times a year a line comes round when it is not every week or every month", async () => {
+    // Weekly in two months of the year only, and $25 each time billed by use though billed monthly.
+    const plowing = row({ id: 21, name: "Snow plowing", frequency: "weekly", perOccurrenceCents: 10_000, chosenCents: 86_667, yearCents: 86_667, occurrences: 9 });
+    const lessons = row({ id: 22, name: "Pottery class", frequency: "monthly", perOccurrenceCents: 2_500, chosenCents: 130_000, yearCents: 130_000 });
+    const weekly = row({ id: 23, name: "Groceries", frequency: "weekly", perOccurrenceCents: 15_000, chosenCents: 780_000, yearCents: 780_000, occurrences: 52 });
+    withDraft({ "GET /api/plans/7": () => ({ status: 200, data: detail(DRAFT, [plowing, lessons, weekly]) }) });
     renderApp("/plan/7/bills");
 
-    await user.click(await screen.findByRole("button", { name: "Use suggestion" }));
+    expect(await screen.findByText("$100.00 each time · 9 times a year")).toBeInTheDocument();
+    expect(screen.getByText("$25.00 each time · 52 times a year")).toBeInTheDocument();
+    expect(screen.getByText("$150.00 a week")).toBeInTheDocument();
+  });
+
+  it("works an amount out on the calculator and saves it", async () => {
+    const user = userEvent.setup();
+    const typed = { ...RENT, chosenCents: 1_920_000, yours: true, perOccurrenceCents: 160_000, yearCents: 1_920_000 };
+    const fetchMock = draftThatChanges(detail(DRAFT), "PUT /api/plans/7/amounts", detail(DRAFT, [typed, CAR_LOAN, PHONE]));
+    renderApp("/plan/7/bills");
+
+    await user.click(await screen.findByRole("button", { name: "Calculator for Your 2027 amount for Rent" }));
+    const calculator = within(screen.getByRole("group", { name: "Calculator for Your 2027 amount for Rent" }));
+    // It starts from what the box holds, the suggestion of $19,059.00.
+    await user.keyboard("+141");
+    await user.click(calculator.getByRole("button", { name: "Use $19,200.00" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/plans/7/amounts")).toEqual([{ kind: "item", id: 11, amountCents: 1_920_000 }]));
+    expect(screen.queryByRole("group", { name: "Calculator for Your 2027 amount for Rent" })).not.toBeInTheDocument();
+  });
+
+  it("opens on the amount set now and takes the suggestion when asked", async () => {
+    const user = userEvent.setup();
+    // What the backend sends now: a line not typed in holds what it will be on Jan 1, beside its suggestion.
+    const setNow = { ...RENT, chosenCents: 1_860_000, yearCents: 1_860_000 };
+    const taken = { ...RENT, yours: true };
+    const fetchMock = draftThatChanges(detail(DRAFT, [setNow, CAR_LOAN, PHONE]), "PUT /api/plans/7/amounts", detail(DRAFT, [taken, CAR_LOAN, PHONE]));
+    renderApp("/plan/7/bills");
+
+    expect(await screen.findByRole("textbox", { name: "Your 2027 amount for Rent" })).toHaveValue("18600.00");
+    // A fixed payment and a line already at its suggestion offer nothing.
+    expect(screen.getAllByRole("button", { name: "Use suggestion" })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Use suggestion" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/plans/7/amounts")).toEqual([{ kind: "item", id: 11, amountCents: 1_905_900 }]));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Your 2027 amount for Rent" })).toHaveValue("19059.00"));
+    expect(screen.getByText("Suggestion")).toBeInTheDocument();
+  });
+
+  it("goes back to the amount set now when asked", async () => {
+    const user = userEvent.setup();
+    const typed = { ...RENT, chosenCents: 1_920_000, yours: true, yearCents: 1_920_000 };
+    const setNow = { ...RENT, chosenCents: 1_860_000, yearCents: 1_860_000 };
+    const fetchMock = draftThatChanges(detail(DRAFT, [typed, CAR_LOAN, PHONE]), "PUT /api/plans/7/amounts", detail(DRAFT, [setNow, CAR_LOAN, PHONE]));
+    renderApp("/plan/7/bills");
+
+    expect(await screen.findByText("Yours")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Keep $18,600.00, the amount set now, for Rent" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/plans/7/amounts")).toEqual([{ kind: "item", id: 11, amountCents: null }]));
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Your 2027 amount for Rent" })).toHaveValue("19059.00"));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Your 2027 amount for Rent" })).toHaveValue("18600.00"));
     expect(screen.queryByText("Yours")).not.toBeInTheDocument();
   });
 
@@ -342,12 +425,108 @@ describe("Plan next year", () => {
     expect(screen.getByText("save $52.67 per paycheck")).toBeInTheDocument();
   });
 
-  it("types take-home pay for one paycheck and says what it comes to over the year", async () => {
+  it("shows take-home pay for one paycheck and what it comes to over the year, with no way into the real income", async () => {
     withDraft();
     renderApp("/plan/7");
 
-    expect(await screen.findByRole("textbox", { name: "2027 take-home, a paycheck for Riverside Clinic" })).toHaveValue("2486.20");
+    expect(await screen.findByRole("button", { name: "Edit Riverside Clinic's pay in 2027" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Riverside Clinic" })).not.toBeInTheDocument();
     expect(screen.getByText("$59,668.80 a year · 24 paychecks")).toBeInTheDocument();
+    expect(screen.queryByText(/Add it under/)).not.toBeInTheDocument();
+  });
+
+  it("plans next year's whole paycheck in the plan only, never in the real income", async () => {
+    const user = userEvent.setup();
+    const planned = {
+      ...PAY,
+      chosenCents: 260_000,
+      yours: true,
+      yearCents: 6_240_000,
+      pay: { grossCents: 380_000, netCents: 260_000, netIsEstimate: true, deductions: [], match: null, planned: true, ...NO_RAISE },
+    };
+    const after = { ...detail(DRAFT), steps: detail(DRAFT).steps.map((step) => (step.step === "income" ? stepView("income", [planned]) : step)) };
+    const fetchMock = draftThatChanges(detail(DRAFT), "PUT /api/plans/7/income/1/pay", after, {
+      "GET /api/income-sources": () => ({ status: 200, data: [CLINIC] }),
+    });
+    renderApp("/plan/7");
+
+    await user.click(await screen.findByRole("button", { name: "Edit Riverside Clinic's pay in 2027" }));
+    const dialog = screen.getByRole("dialog", { name: "Riverside Clinic: pay in 2027" });
+    expect(within(dialog).getByText(/Only your 2027 plan changes/)).toBeInTheDocument();
+    // It opens on the pay as it stands, marked as an estimate: next year's pay is a guess until a stub says otherwise.
+    expect(within(dialog).getByRole("checkbox", { name: "Estimate, not final yet" })).toBeChecked();
+    const takeHome = within(dialog).getByRole("textbox", { name: "Take-home per paycheck" });
+    expect(takeHome).toHaveValue("2486.20");
+    await user.clear(takeHome);
+    await user.type(takeHome, "2600");
+    const gross = within(dialog).getByRole("textbox", { name: "Gross per paycheck (optional)" });
+    await user.clear(gross);
+    await user.type(gross, "3800");
+    await user.click(within(dialog).getByRole("button", { name: "Next" }));
+    // Whether it goes up during the year is asked next; left empty, the pay stays the same all year.
+    expect(within(dialog).getByRole("textbox", { name: "Raise, %" })).toHaveValue("");
+    await user.click(within(dialog).getByRole("button", { name: "Save to the 2027 plan" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/plans/7/income/1/pay")).toEqual([
+      { grossCents: 380_000, netCents: 260_000, netIsEstimate: true, deductions: [], match: null, raise: null },
+    ]);
+    expect(calls(fetchMock).filter((call) => call.includes("/api/income-sources") && !call.startsWith("GET "))).toEqual([]);
+    expect(await screen.findByText("Yours")).toBeInTheDocument();
+  });
+
+  it("plans a raise as a percent from a day partway through the year", async () => {
+    const user = userEvent.setup();
+    const raised = {
+      ...PAY,
+      yours: true,
+      yearCents: 6_043_000,
+      pay: {
+        ...PAY.pay!,
+        planned: true,
+        netIsEstimate: true,
+        raiseFrom: "2027-06-01",
+        raiseBp: 300,
+        raisedGrossCents: 370_800,
+        raisedNetCents: 256_079,
+        raisedPaychecks: 14,
+      },
+    };
+    const after = { ...detail(DRAFT), steps: detail(DRAFT).steps.map((step) => (step.step === "income" ? stepView("income", [raised]) : step)) };
+    const fetchMock = draftThatChanges(detail(DRAFT), "PUT /api/plans/7/income/1/pay", after, {
+      "GET /api/income-sources": () => ({ status: 200, data: [CLINIC] }),
+    });
+    renderApp("/plan/7");
+
+    await user.click(await screen.findByRole("button", { name: "Edit Riverside Clinic's pay in 2027" }));
+    const dialog = screen.getByRole("dialog", { name: "Riverside Clinic: pay in 2027" });
+    await user.click(within(dialog).getByRole("button", { name: "Next" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Raise, %" }), "3");
+    // A percent with no day is not enough.
+    await user.click(within(dialog).getByRole("button", { name: "Save to the 2027 plan" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Please choose the day the raise starts.");
+    await user.type(within(dialog).getByLabelText("From"), "2027-06-01");
+    expect(within(dialog).getByText(/From Jun 1, 2027: about/)).toHaveTextContent("From Jun 1, 2027: about $2,560.79 take-home per paycheck, $3,708.00 gross");
+    await user.click(within(dialog).getByRole("button", { name: "Save to the 2027 plan" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/plans/7/income/1/pay")).toEqual([
+      { grossCents: 360_000, netCents: 248_620, netIsEstimate: true, deductions: [], match: null, raise: { from: "2027-06-01", bp: 300 } },
+    ]);
+    // The line says what it goes up to, and from when.
+    expect(await screen.findByText(/from Jun 1, 2027 · 3\.00% raise/)).toBeInTheDocument();
+  });
+
+  it("goes back to today's pay when asked", async () => {
+    const user = userEvent.setup();
+    const planned = { ...PAY, chosenCents: 260_000, yours: true, yearCents: 6_240_000 };
+    const before = { ...detail(DRAFT), steps: detail(DRAFT).steps.map((step) => (step.step === "income" ? stepView("income", [planned]) : step)) };
+    const fetchMock = draftThatChanges(before, "PUT /api/plans/7/amounts", detail(DRAFT));
+    renderApp("/plan/7");
+
+    await user.click(await screen.findByRole("button", { name: "Use today's pay" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/plans/7/amounts")).toEqual([{ kind: "income", id: 1, amountCents: null }]));
   });
 
   it("has words for a step with nothing in it", async () => {
@@ -355,7 +534,8 @@ describe("Plan next year", () => {
     renderApp("/plan/7/budgets");
 
     expect(await screen.findByText("No spending budgets.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Add it under Recurring items" })).toHaveAttribute("href", "/recurring");
+    // Nothing in a plan leads off to change the real recurring items.
+    expect(screen.queryByRole("link", { name: /Add it under/ })).not.toBeInTheDocument();
   });
 
   it("moves between the steps by address, so Back and a refresh keep the step", async () => {

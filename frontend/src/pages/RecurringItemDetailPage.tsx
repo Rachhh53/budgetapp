@@ -1,4 +1,5 @@
-import { type ReactNode, useState } from "react";
+import { TriangleAlert } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { useCameFrom } from "../lib/cameFrom";
 import { useAccounts } from "../api/accounts";
@@ -16,7 +17,7 @@ import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
 import { describeItemSchedule, describeKind, ITEM_FREQUENCY_LABELS, KIND_LABELS } from "../components/items/labels";
 import { PauseControls } from "../components/items/PauseItem";
-import { BUTTON_LINK, BUTTON_PRIMARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
+import { BUTTON_DANGER, BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, DETAIL_HEADER, PAGE_TITLE } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import { formatCents } from "../lib/money";
 import { HelpLink } from "../components/help/HelpLink";
@@ -289,30 +290,43 @@ function nextNote(item: Item): string {
 
 /** What the item has been set to, version by version, newest first. "Amount", not "price": a budget or a bucket move has no price. */
 function AmountHistory({ item }: { item: Item }) {
-  // One put in by mistake can be removed; the one before it then carries on. The last one always stays.
+  // One put in by mistake can be removed; the one before it then carries on. The last one always stays. It asks first:
+  // an amount carries its own schedule, so removing one changes the dates it covered (Rachel, 2026-10-22: "I deleted
+  // an estimate from a recurring bill and it deleted all my real payments").
   const remove = useRemoveVersion(item.id);
+  const [confirming, setConfirming] = useState<number | null>(null);
   return (
     <Card title="Amount history">
       <ul className="divide-y divide-line">
         {[...item.history].reverse().map((point) => (
-          <li key={point.effectiveFrom} className="flex flex-wrap items-center justify-between gap-x-3 py-2">
-            <span className="text-muted">From {formatDate(point.effectiveFrom)}</span>
-            <span className="flex items-center gap-2">
-              <span data-amount className="tabular-nums">
-                {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
+          <li key={point.effectiveFrom} className="py-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-3">
+              <span className="text-muted">From {formatDate(point.effectiveFrom)}</span>
+              <span className="flex items-center gap-2">
+                <span data-amount className="tabular-nums">
+                  {formatCents(point.perOccurrenceCents)} · <span className="font-semibold">{formatCents(point.perYearCents)}</span> a year
+                </span>
+                {item.history.length > 1 && confirming !== point.versionId && (
+                  <button
+                    type="button"
+                    disabled={remove.isPending}
+                    onClick={() => setConfirming(point.versionId)}
+                    aria-label={`Remove the amount from ${formatDate(point.effectiveFrom)}`}
+                    className={BUTTON_LINK}
+                  >
+                    Remove
+                  </button>
+                )}
               </span>
-              {item.history.length > 1 && (
-                <button
-                  type="button"
-                  disabled={remove.isPending}
-                  onClick={() => remove.mutate(point.versionId)}
-                  aria-label={`Remove the amount from ${formatDate(point.effectiveFrom)}`}
-                  className={BUTTON_LINK}
-                >
-                  Remove
-                </button>
-              )}
-            </span>
+            </div>
+            {confirming === point.versionId && (
+              <ConfirmRemove
+                from={point.effectiveFrom}
+                pending={remove.isPending}
+                onKeep={() => setConfirming(null)}
+                onRemove={() => remove.mutate(point.versionId, { onSuccess: () => setConfirming(null) })}
+              />
+            )}
           </li>
         ))}
       </ul>
@@ -327,6 +341,32 @@ function AmountHistory({ item }: { item: Item }) {
           : "Each date uses the newest amount set on or before it."}
       </p>
     </Card>
+  );
+}
+
+/** Asks before an amount is removed, saying what changes and that payments stay. Keeping it is the default. */
+function ConfirmRemove({ from, pending, onKeep, onRemove }: { from: string; pending: boolean; onKeep: () => void; onRemove: () => void }) {
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => keep.current?.focus(), []);
+  return (
+    <div role="alertdialog" aria-label={`Remove the amount from ${formatDate(from)}?`} className="mt-2 rounded-lg border border-danger p-3">
+      <p className="flex items-center gap-2 font-semibold">
+        <TriangleAlert aria-hidden className="size-5 shrink-0 text-danger" />
+        Remove the amount from {formatDate(from)}?
+      </p>
+      <p className="mt-1 text-sm text-muted">
+        The dates it covered go back to the amount before it, with that amount's schedule. Bills already paid stay paid, on
+        their own dates. You can undo this straight afterwards.
+      </p>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <button ref={keep} type="button" disabled={pending} onClick={onKeep} className={BUTTON_SECONDARY}>
+          Keep it
+        </button>
+        <button type="button" disabled={pending} onClick={onRemove} className={BUTTON_DANGER}>
+          {pending ? "Removing…" : "Yes, remove it"}
+        </button>
+      </div>
+    </div>
   );
 }
 

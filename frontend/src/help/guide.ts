@@ -305,8 +305,10 @@ export const TOPICS: readonly Topic[] = [
       {
         heading: "Planning a year",
         body: [
-          "Start a plan and Budget suggests an amount for every bill and budget from what the last 12 months came to. Accept them or type your own, step by step.",
-          "Nothing changes until the plan's year starts. A draft can be deleted and redone any time before then.",
+          "Start a plan and every bill and budget opens on what it will be on the plan's first day, beside a suggestion from what the last 12 months came to. Use a suggestion, keep the amount or type your own, step by step. The calculator beside each amount works one out.",
+          "A bill with fewer than 12 months behind it is scaled up from the months it has, once it has 3, and says so. A bill that runs only some months, or comes every few months, is suggested at today's amount until it has a year.",
+          "For a paycheck, press Edit on its line to plan next year's take-home, gross pay, deductions and employer match, and a raise as a percent from any day of the year. That is kept with the plan only: your income stays as it is.",
+          "Nothing real changes until the plan's year starts. On its first day, the plan's amounts become your bills and pay from that day on. A draft can be deleted and redone any time before then.",
         ],
       },
       {
