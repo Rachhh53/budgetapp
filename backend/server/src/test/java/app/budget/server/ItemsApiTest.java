@@ -363,48 +363,77 @@ class ItemsApiTest extends ApiTestBase {
             assertThat(september.get("amountCents").asLong()).isEqualTo(43000);
         }
 
-        @Test
-        void replacingArchivesTheOldItemAndAddsANewOneFromToday() throws Exception {
-            long id = created("/api/items", carLoan());
-
-            Reply reply = server.post("/api/items/" + id + "/replacement", transferToSavings(45000), cookie);
-
-            assertThat(reply.status()).isEqualTo(201);
-            JsonNode added = reply.data();
-            assertThat(added.get("id").asLong()).isNotEqualTo(id);
-            assertThat(added.get("kind").asText()).isEqualTo("transfer");
-            assertThat(added.get("archived").asBoolean()).isFalse();
-            // Whatever start was sent, the new one begins today, so it does not repeat the old one's past.
-            assertThat(added.get("schedule").get("startDate").asText()).isEqualTo("2026-10-01");
-            assertThat(added.get("history").findValuesAsText("effectiveFrom")).containsExactly("2026-10-01");
-            // The old one is untouched apart from being archived.
-            JsonNode old = server.get("/api/items/" + id, cookie).data();
-            assertThat(old.get("archived").asBoolean()).isTrue();
-            assertThat(old.get("kind").asText()).isEqualTo("bill");
-            assertThat(old.get("amountCents").asLong()).isEqualTo(41200);
+        /**
+         * What "Archive this and add a new item" left until 2026-10-24: the bill archived today, and a transfer of the
+         * same name that starts today. Returns the two ids, old first.
+         */
+        private long[] aPairLeftTheOldWay() throws Exception {
+            long old = created("/api/items", carLoan());
+            Reply archived = server.put("/api/items/" + old,
+                    bill("Car loan", 41200, MONTHLY_5TH, "\"autopay\":true,\"archived\":true,\"archivedOn\":\"2026-10-01\""), cookie);
+            assertThat(archived.status()).as(archived.body().toString()).isEqualTo(200);
+            long added = created("/api/items", transferToSavings(45000).replace(MONTHLY_5TH, MONTHLY_5TH.replace("2026-01-01", "2026-10-01")));
+            return new long[] {old, added};
         }
 
         @Test
-        void aReplacementThatIsNotValidLeavesTheOldItemAsItWas() throws Exception {
-            long id = created("/api/items", carLoan());
+        void anItemAddedTheOldWayIsMergedBackIntoTheOneItHasThePastOf() throws Exception {
+            long[] pair = aPairLeftTheOldWay();
+            long old = pair[0];
+            long added = pair[1];
+            assertThat(server.get("/api/items/" + added + "/replaced", cookie).data().get("replaced").get("id").asLong()).isEqualTo(old);
 
-            Reply reply = server.post("/api/items/" + id + "/replacement",
-                    "{\"name\":\"Car loan\",\"kind\":\"transfer\",\"amountCents\":45000,\"payFromAccountId\":%d,\"schedule\":%s}"
-                            .formatted(checking, MONTHLY_5TH),
-                    cookie);
+            Reply reply = server.post("/api/items/" + added + "/merge-replaced", "{}", cookie);
 
-            assertThat(reply.status()).isEqualTo(400);
+            assertThat(reply.status()).as(reply.body().toString()).isEqualTo(200);
+            assertThat(reply.data().get("id").asLong()).isEqualTo(old);
             assertThat(server.get("/api/items", cookie).data()).hasSize(1);
-            assertThat(server.get("/api/items/" + id, cookie).data().get("archived").asBoolean()).isFalse();
+            assertThat(server.get("/api/items/" + added, cookie).status()).isEqualTo(404);
+            JsonNode item = server.get("/api/items/" + old, cookie).data();
+            assertThat(item.get("archived").asBoolean()).isFalse();
+            assertThat(item.get("kind").asText()).isEqualTo("transfer");
+            assertThat(item.get("amountCents").asLong()).isEqualTo(45000);
+            assertThat(item.get("history").findValuesAsText("effectiveFrom")).containsExactly("2026-01-01", "2026-10-01");
+            // As if the type had been changed in place: earlier dates are the new kind too, at what they cost then.
+            JsonNode september = septemberOccurrence();
+            assertThat(september.get("kind").asText()).isEqualTo("transfer");
+            assertThat(september.get("payToAccountId").asLong()).isEqualTo(savings);
+            assertThat(september.get("amountCents").asLong()).isEqualTo(41200);
+            assertThat(server.get("/api/items/" + old + "/replaced", cookie).data().get("replaced").isNull()).isTrue();
         }
 
         @Test
-        void replacingNeedsASessionAndAnItemThatExists() throws Exception {
-            long id = created("/api/items", carLoan());
+        void undoSeparatesThemAgain() throws Exception {
+            long[] pair = aPairLeftTheOldWay();
+            server.post("/api/items/" + pair[1] + "/merge-replaced", "{}", cookie);
 
-            assertThat(server.post("/api/items/" + id + "/replacement", transferToSavings(45000), null).status()).isEqualTo(401);
-            assertThat(server.post("/api/items/9999/replacement", transferToSavings(45000), cookie).status()).isEqualTo(404);
-            assertThat(server.get("/api/items", cookie).data()).hasSize(1);
+            assertThat(server.post("/api/undo", "", cookie).status()).isEqualTo(200);
+
+            assertThat(server.get("/api/items", cookie).data()).hasSize(2);
+            assertThat(server.get("/api/items/" + pair[0], cookie).data().get("archived").asBoolean()).isTrue();
+        }
+
+        @Test
+        void anItemThatWasNotAddedThatWayHasNothingToMerge() throws Exception {
+            long id = created("/api/items", carLoan());
+            // Archived on another day than the new one starts: two items that only share a name.
+            long other = created("/api/items", bill("Car loan", 30000, MONTHLY_5TH, "\"autopay\":true"));
+            server.put("/api/items/" + other,
+                    bill("Car loan", 30000, MONTHLY_5TH, "\"autopay\":true,\"archived\":true,\"archivedOn\":\"2026-09-01\""), cookie);
+
+            assertThat(server.get("/api/items/" + id + "/replaced", cookie).data().get("replaced").isNull()).isTrue();
+            assertThat(server.post("/api/items/" + id + "/merge-replaced", "{}", cookie).status()).isEqualTo(409);
+            assertThat(server.get("/api/items/9999/replaced", cookie).status()).isEqualTo(404);
+            assertThat(server.get("/api/items", cookie).data()).hasSize(2);
+        }
+
+        @Test
+        void mergingNeedsASession() throws Exception {
+            long[] pair = aPairLeftTheOldWay();
+
+            assertThat(server.get("/api/items/" + pair[1] + "/replaced", null).status()).isEqualTo(401);
+            assertThat(server.post("/api/items/" + pair[1] + "/merge-replaced", "{}", null).status()).isEqualTo(401);
+            assertThat(server.get("/api/items", cookie).data()).hasSize(2);
         }
     }
 

@@ -7,6 +7,7 @@ import {
   SCENARIO_DEFAULTS,
   type ScenarioInput,
   TAX_TYPE_LABELS,
+  type TaxSettings,
   TAX_TYPES,
   type TaxType,
   YOUNGEST,
@@ -16,7 +17,7 @@ import {
   useSaveScenario,
 } from "../../api/retirement";
 import type { TermId } from "../../help/terms";
-import { centsToInput, parseDollars } from "../../lib/money";
+import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { parseRate, rateToInput } from "../../lib/rates";
 import { ConfirmDelete } from "../ConfirmDelete";
 import { FormSection } from "../FormSection";
@@ -28,15 +29,26 @@ import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /**
  * The parts of a scenario, each opened from the card that shows it, so no form is taller than
- * the window. A new scenario asks the goal only; the rest start at their defaults.
+ * the window. A new scenario asks the goal only; the rest start at their defaults. `medicare` is
+ * only for a scenario whose taxes are worked out by the rules (spec §5.12).
  */
-export type ScenarioPart = "goal" | "health" | "growth";
+export type ScenarioPart = "goal" | "health" | "medicare" | "growth";
 
 const TITLES: Record<ScenarioPart, string> = {
   goal: "Goal",
   health: "Taxes & health",
+  medicare: "Medicare & income",
   growth: "Growth & saving",
 };
+
+const MODE_OPTIONS: { value: TaxSettings["mode"]; label: string }[] = [
+  { value: "flat", label: "A flat rate" },
+  { value: "worked_out", label: "By the rules" },
+];
+
+
+/** The strategy select's value for the cheapest, whichever that turns out to be. */
+const CHEAPEST = "";
 
 const NAME_MAX = 80;
 
@@ -69,6 +81,7 @@ export function ScenarioForm({
   part,
   suggestedName,
   comparedCount,
+  payAYearCents,
   onClose,
   onSaved,
 }: {
@@ -76,6 +89,8 @@ export function ScenarioForm({
   part: ScenarioPart;
   suggestedName?: string;
   comparedCount: number;
+  /** The pay Budget knows over the coming year, shown as what income while working is when left empty. */
+  payAYearCents?: number;
   onClose: () => void;
   onSaved?: (id: number) => void;
 }) {
@@ -103,7 +118,20 @@ export function ScenarioForm({
   const [raise, setRaise] = useState(rateToInput(base.raiseBp));
   const [extra, setExtra] = useState(centsToInput(base.extraMonthlyCents));
   const [extraInto, setExtraInto] = useState<TaxType>(base.extraInto);
+  const taxes = base.taxes;
+  const [mode, setMode] = useState(taxes.mode);
+  const [filing, setFiling] = useState(taxes.filing);
+  const [people, setPeople] = useState(String(taxes.medicarePeople));
+  const [stateTax, setStateTax] = useState(rateToInput(taxes.stateTaxBp));
+  const [gainsShare, setGainsShare] = useState(rateToInput(taxes.gainsShareBp));
+  const [partD, setPartD] = useState(centsToInput(taxes.partDPlanCents));
+  const [supplement, setSupplement] = useState(centsToInput(taxes.supplementCents));
+  const [workingMagi, setWorkingMagi] = useState(taxes.workingMagiCents === null ? "" : centsToInput(taxes.workingMagiCents));
+  const [magiOverride, setMagiOverride] = useState(taxes.magiOverrideCents === null ? "" : centsToInput(taxes.magiOverrideCents));
+  const [strategy, setStrategy] = useState(taxes.strategy ?? CHEAPEST);
   const [problem, setProblem] = useState<string>();
+  // The ways tried last time, best first, to choose from; none until the scenario is worked out by the rules.
+  const strategies = scenario?.taxes?.strategies ?? [];
   // Room for this one beside the others: always when it is already there.
   const roomToCompare = base.compared || comparedCount < MAX_COMPARED;
 
@@ -132,20 +160,60 @@ export function ScenarioForm({
       return { ...base, name: name.trim(), salaryCents, retireAge: age, withdrawalBp, inflationBp, compared: compared && roomToCompare };
     }
     if (part === "health") {
-      const taxBp = rateWithin(tax, 0, 6000);
       const before = parseDollars(healthBefore);
-      const after = parseDollars(healthAfter);
       const healthInflationBp = rateWithin(healthInflation, 0, 2000);
-      if (taxBp === null) {
-        return "Please enter a tax rate in retirement between 0% and 60%, like 15.00.";
-      }
-      if (before === null || before < 0 || after === null || after < 0) {
+      if (before === null || before < 0) {
         return AMOUNT_HELP;
       }
       if (healthInflationBp === null) {
         return "Please enter how fast health costs rise between 0% and 20% a year, like 5.00.";
       }
-      return { ...base, taxBp, healthBeforeCents: before, healthAfterCents: after, healthInflationBp };
+      if (mode === "flat") {
+        const taxBp = rateWithin(tax, 0, 6000);
+        const after = parseDollars(healthAfter);
+        if (taxBp === null) {
+          return "Please enter a tax rate in retirement between 0% and 60%, like 15.00.";
+        }
+        if (after === null || after < 0) {
+          return AMOUNT_HELP;
+        }
+        return { ...base, taxBp, healthBeforeCents: before, healthAfterCents: after, healthInflationBp, taxes: { ...taxes, mode } };
+      }
+      // Worked out, the flat rate and health from 65 are kept as they were: the rules and Medicare stand in for them.
+      const stateTaxBp = rateWithin(stateTax, 0, 2000);
+      const gainsShareBp = rateWithin(gainsShare, 0, 10_000);
+      if (stateTaxBp === null) {
+        return "Please enter a state income tax between 0% and 20%, or 0.00 for none.";
+      }
+      if (gainsShareBp === null) {
+        return "Please enter how much of taxable withdrawals is growth, from 0% to 100%, like 50.00.";
+      }
+      const medicarePeople = Number(people);
+      return {
+        ...base,
+        healthBeforeCents: before,
+        healthInflationBp,
+        taxes: { ...taxes, mode, filing, medicarePeople, stateTaxBp, gainsShareBp },
+      };
+    }
+    if (part === "medicare") {
+      const partDPlanCents = parseDollars(partD);
+      const supplementCents = parseDollars(supplement);
+      // Left empty, each of these is worked out instead.
+      const workingMagiCents = workingMagi.trim() === "" ? null : parseDollars(workingMagi);
+      const magiOverrideCents = magiOverride.trim() === "" ? null : parseDollars(magiOverride);
+      if (partDPlanCents === null || partDPlanCents < 0 || supplementCents === null || supplementCents < 0) {
+        return AMOUNT_HELP;
+      }
+      const badWorking = workingMagi.trim() !== "" && (workingMagiCents === null || workingMagiCents < 0);
+      const badOverride = magiOverride.trim() !== "" && (magiOverrideCents === null || magiOverrideCents < 0);
+      if (badWorking || badOverride) {
+        return "Please enter an amount a year, like 85,000.00, or leave it empty to have it worked out.";
+      }
+      return {
+        ...base,
+        taxes: { ...taxes, partDPlanCents, supplementCents, workingMagiCents, magiOverrideCents, strategy: strategy === CHEAPEST ? null : strategy },
+      };
     }
     const growthBp = rateWithin(growth, 0, 10_000);
     const growthLowBp = rateWithin(growthLow, 0, 10_000);
@@ -257,18 +325,86 @@ export function ScenarioForm({
 
         {part === "health" && (
           <FormSection title="Taxes & health">
-            <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-              <RateField
-                id={`${id}-tax`}
-                label="Tax in retirement (%)"
-                value={tax}
-                onChange={setTax}
-                hint="On traditional (pre-tax) money as it comes out. Roth and taxable count in full."
-                tip="retirementTax"
-              />
-              <RateField id={`${id}-health-inflation`} label="Health costs rise (%)" value={healthInflation} onChange={setHealthInflation} hint="A year; usually faster than prices." tip="retirementHealth" />
-              <MoneyField label="Health insurance a year before 65" value={healthBefore} onChange={setHealthBefore} hint="0.00 if not counted." tip="healthBefore65" />
-              <MoneyField label="Health costs a year from 65" value={healthAfter} onChange={setHealthAfter} hint="Medicare premiums and the rest." tip="healthFrom65" />
+            <Segmented legend="How taxes are worked out" options={MODE_OPTIONS} value={mode} onChange={setMode} tip="taxMode" />
+            {mode === "flat" ? (
+              // Two to a row even on a phone, for the short fields, so the form fits one screen there (§6).
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <RateField id={`${id}-tax`} label="Tax (%)" value={tax} onChange={setTax} hint="On traditional money." tip="retirementTax" />
+                <RateField id={`${id}-health-inflation`} label="Health costs rise (%)" value={healthInflation} onChange={setHealthInflation} hint="A year." tip="retirementHealth" />
+                <div className="col-span-2 sm:col-span-1">
+                  <MoneyField label="Health insurance a year before 65" value={healthBefore} onChange={setHealthBefore} hint="0.00 if not counted." tip="healthBefore65" />
+                </div>
+                <div className="col-span-2 sm:col-span-1">
+                  <MoneyField label="Health costs a year from 65" value={healthAfter} onChange={setHealthAfter} hint="Medicare premiums and the rest." tip="healthFrom65" />
+                </div>
+              </div>
+            ) : (
+              // Two to a row even on a phone, for the short fields, so the form fits one screen there (§6).
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                {/* Selects rather than segments: side by side they fit a phone, and the form one screen there (§6). */}
+                <div>
+                  <label htmlFor={`${id}-filing`} className={LABEL}>
+                    Filing
+                  </label>
+                  <select id={`${id}-filing`} value={filing} onChange={(event) => setFiling(event.target.value as TaxSettings["filing"])} className={INPUT}>
+                    <option value="single">Single</option>
+                    <option value="joint">Married, jointly</option>
+                  </select>
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center gap-1">
+                    <label htmlFor={`${id}-people`} className="font-medium">
+                      Medicare for
+                    </label>
+                    <InfoTip term="medicarePeople" />
+                  </div>
+                  <select id={`${id}-people`} value={people} onChange={(event) => setPeople(event.target.value)} className={INPUT}>
+                    <option value="1">Just me</option>
+                    <option value="2">Me and my spouse</option>
+                  </select>
+                </div>
+                <RateField id={`${id}-state`} label="State tax (%)" value={stateTax} onChange={setStateTax} hint="0.00 for none." tip="stateTax" />
+                <RateField id={`${id}-gains`} label="Gains share (%)" value={gainsShare} onChange={setGainsShare} hint="Of taxable money." tip="gainsShare" />
+                <RateField id={`${id}-health-inflation`} label="Health costs rise (%)" value={healthInflation} onChange={setHealthInflation} hint="A year." tip="retirementHealth" />
+                <MoneyField label="Insurance a year before 65" value={healthBefore} onChange={setHealthBefore} hint="Medicare from 65." tip="healthBefore65" />
+              </div>
+            )}
+          </FormSection>
+        )}
+
+        {part === "medicare" && (
+          <FormSection title="Medicare & income">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <MoneyField label="Part D plan a month" value={partD} onChange={setPartD} hint="A person." tip="partDPlan" />
+              <MoneyField label="Medigap or Advantage" value={supplement} onChange={setSupplement} hint="A month, a person." tip="medigap" />
+              <div className="col-span-2 sm:col-span-1">
+                <MoneyField
+                  label="Income while working"
+                  value={workingMagi}
+                  onChange={setWorkingMagi}
+                  hint={payAYearCents === undefined ? "A year. Empty for the pay Budget knows." : `A year. Empty for ${formatCents(payAYearCents)}, the pay Budget knows.`}
+                  tip="workingMagi"
+                />
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <MoneyField label="Income in retirement" value={magiOverride} onChange={setMagiOverride} hint="A year. Empty to work it out." tip="magiOverride" />
+              </div>
+              <div className="col-span-2">
+                <div className="mb-1 flex items-center gap-1">
+                  <label htmlFor={`${id}-strategy`} className="font-medium">
+                    Where the money comes from
+                  </label>
+                  <InfoTip term="drawdownStrategy" />
+                </div>
+                <select id={`${id}-strategy`} value={strategy} onChange={(event) => setStrategy(event.target.value)} className={INPUT}>
+                  <option value={CHEAPEST}>The cheapest, whichever it is</option>
+                  {strategies.map((outcome) => (
+                    <option key={outcome.code} value={outcome.code}>
+                      {outcome.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </FormSection>
         )}

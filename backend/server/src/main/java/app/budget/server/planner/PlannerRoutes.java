@@ -43,8 +43,12 @@ public final class PlannerRoutes {
      * @param order      {@code highest_rate} (the default) or {@code smallest_balance}
      * @param growthBp   a yearly rate to assume for an investment or savings account in place of its own,
      *                   by account id, in basis points (7% is 700)
+     * @param plans      how "Pay off debt or invest?" is worked out; left out, the usual
      */
-    public record CompareInput(Long extraCents, Integer years, String order, Map<String, Integer> growthBp) {}
+    public record CompareInput(Long extraCents, Integer years, String order, Map<String, Integer> growthBp, PlansInput plans) {}
+
+    /** See {@link PlannerService.PlanSettings}; every field may be left out. */
+    public record PlansInput(Long investAccountId, Integer splitBp, Integer growthBp, Integer years, Boolean freedMoves) {}
 
     public record Done(boolean done) {}
 
@@ -59,7 +63,22 @@ public final class PlannerRoutes {
         if (input.growthBp() != null) {
             input.growthBp().forEach((accountId, rateBp) -> growth.put(accountId(accountId), growthRate(rateBp)));
         }
-        ApiResponse.ok(ctx, service.compare(extra, input.years(), order, growth));
+        ApiResponse.ok(ctx, service.compare(extra, input.years(), order, growth, plans(input.plans())));
+    }
+
+    private static PlannerService.PlanSettings plans(PlansInput input) {
+        if (input == null) {
+            return PlannerService.PlanSettings.USUAL;
+        }
+        if (input.splitBp() != null && (input.splitBp() < 0 || input.splitBp() > 10_000)) {
+            throw ApiException.badRequest("Please choose how much of the extra goes to debts, from 0% to 100%.");
+        }
+        if (input.years() != null && (input.years() < 1 || input.years() > PlannerService.MOST_PLAN_YEARS)) {
+            throw ApiException.badRequest("Please choose from 1 to 30 years.");
+        }
+        return new PlannerService.PlanSettings(
+                input.investAccountId(), input.splitBp(), input.growthBp() == null ? null : growthRate(input.growthBp()), input.years(),
+                input.freedMoves());
     }
 
     private static long accountId(String text) {

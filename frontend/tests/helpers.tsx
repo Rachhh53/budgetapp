@@ -90,6 +90,22 @@ export const NOTHING_TO_COMPARE = {
   options: [],
   payoff: { order: "highest_rate", debts: [], debtFreeDate: null, debtFreeDateBefore: null, interestSavedCents: null, owedOverTime: [] },
   hidden: [],
+  debtOrInvest: {
+    reason: "no_debts",
+    investAccountId: null,
+    growthBp: null,
+    accountGrowthBp: null,
+    years: null,
+    splitBp: null,
+    freedMoves: null,
+    monthlyCents: null,
+    choices: [],
+    plans: [],
+    best: null,
+    bestSplitBp: null,
+    bestSplitNetDiffCents: null,
+    points: [],
+  },
 };
 
 /** The dashboard before anything is entered. */

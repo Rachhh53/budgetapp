@@ -5,7 +5,7 @@ import { useCameFrom } from "../lib/cameFrom";
 import { useAccounts } from "../api/accounts";
 import { useBuckets } from "../api/buckets";
 import { useCategories, useTags } from "../api/categories";
-import { type Item, useItems, useRemoveVersion } from "../api/items";
+import { type Item, type ReplacedItem, useItems, useMergeReplaced, useRemoveVersion, useReplacedItem } from "../api/items";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
 import { EditButton, EditPageButton } from "../components/EditButton";
@@ -114,6 +114,7 @@ export function RecurringItemDetailPage() {
       </div>
 
       <div className="space-y-4">
+        {!item.archived && <MergeReplaced item={item} onMerged={(merged) => navigate(`/recurring/${merged}`, { replace: true })} />}
         <Card>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
@@ -340,6 +341,59 @@ function AmountHistory({ item }: { item: Item }) {
           ? "No changes yet. When the amount changes, choose Change the amount: everything dated before that day keeps this amount."
           : "Each date uses the newest amount set on or before it."}
       </p>
+    </Card>
+  );
+}
+
+/**
+ * Offers to make this item one with the archived item it was added in place of. Changing an item's type used to offer
+ * "Archive this and add a new item", which left two items for one thing, the old one archived with its past and the
+ * new one current (Rachel, 2026-10-24). A change of type now always changes the one item, and this puts a pair left
+ * the old way back together the same way. Shows nothing when there is no such pair.
+ */
+function MergeReplaced({ item, onMerged }: { item: Item; onMerged: (id: number) => void }) {
+  const replaced = useReplacedItem(item.id);
+  const merge = useMergeReplaced(item.id, onMerged);
+  const [confirming, setConfirming] = useState(false);
+  const old: ReplacedItem | null | undefined = replaced.data;
+  if (!old) {
+    return null;
+  }
+  const oldKind = KIND_LABELS[old.kind].toLowerCase();
+  return (
+    <Card title="Merge with the archived one">
+      <p>
+        There's also an archived {oldKind} called {old.name}, archived on {formatDate(old.archivedOn)}, the day this one
+        starts. That's what changing the type used to do. Merge them to make one {KIND_LABELS[item.kind].toLowerCase()} with
+        all of its history.
+      </p>
+      {confirming ? (
+        <div role="alertdialog" aria-label={`Merge ${item.name} with the archived ${oldKind}?`} className="mt-3 rounded-lg border border-line p-3">
+          <p className="font-semibold">Merge {item.name} with the archived {oldKind}?</p>
+          <p className="mt-1 text-sm text-muted">
+            You'll have one item, as if you had changed its type: its earlier dates count as a {KIND_LABELS[item.kind].toLowerCase()} too,
+            with the amounts they had then, and paid dates and receipts stay where they are. From {formatDate(old.archivedOn)} on, this
+            one's amounts and dates are used. You can undo this straight afterwards.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <button type="button" disabled={merge.isPending} onClick={() => setConfirming(false)} className={BUTTON_SECONDARY}>
+              Not now
+            </button>
+            <button type="button" disabled={merge.isPending} onClick={() => merge.mutate()} className={BUTTON_PRIMARY}>
+              {merge.isPending ? "Merging…" : "Yes, merge them"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setConfirming(true)} className={`${BUTTON_SECONDARY} mt-3`}>
+          Merge with the archived {oldKind}
+        </button>
+      )}
+      {merge.isError && (
+        <p role="alert" className="mt-2 text-danger">
+          {merge.error.message}
+        </p>
+      )}
     </Card>
   );
 }

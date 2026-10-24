@@ -22,8 +22,10 @@ import { EditButton } from "../components/EditButton";
 import { HelpLink } from "../components/help/HelpLink";
 import { InfoTip } from "../components/help/InfoTip";
 import { ByAgeChart } from "../components/retirement/ByAgeChart";
-import { BirthDateForm, IncomeForm, OneOffForm } from "../components/retirement/EntryForms";
+import { BirthDateForm, IncomeForm, OneOffForm, SpouseBirthDateForm } from "../components/retirement/EntryForms";
+import { FiguresForm } from "../components/retirement/FiguresForm";
 import { type ScenarioPart, ScenarioForm } from "../components/retirement/ScenarioForm";
+import { TaxesSection } from "../components/retirement/TaxesSection";
 import { BUTTON_LINK, BUTTON_PRIMARY, BUTTON_SECONDARY, INPUT, LABEL, PAGE_TITLE } from "../components/ui";
 import type { TermId } from "../help/terms";
 import { formatDate } from "../lib/dates";
@@ -37,6 +39,8 @@ type Open =
   | { kind: "income"; index?: number }
   | { kind: "oneOff"; index?: number }
   | { kind: "birthDate" }
+  | { kind: "spouseBirthDate" }
+  | { kind: "figures" }
   | null;
 
 const NAME_MAX = 80;
@@ -169,13 +173,21 @@ export function RetirementPage() {
                   </Card>
                 )}
 
-                <ScenarioCards scenario={chosen} onOpen={setOpen} />
+                <ScenarioCards scenario={chosen} payAYearCents={view.payAYearCents} onOpen={setOpen} />
+
+                {chosen.taxes && (
+                  <TaxesSection scenario={chosen} taxes={chosen.taxes} figures={view.figures} onFigures={() => setOpen({ kind: "figures" })} />
+                )}
               </>
             )}
           </>
         )}
 
-        <AccountsCounted view={view} onBirthDate={() => setOpen({ kind: "birthDate" })} />
+        <AccountsCounted
+          view={view}
+          onBirthDate={() => setOpen({ kind: "birthDate" })}
+          onSpouseBirthDate={() => setOpen({ kind: "spouseBirthDate" })}
+        />
       </div>
 
       {open?.kind === "new" && (
@@ -188,11 +200,19 @@ export function RetirementPage() {
         />
       )}
       {open?.kind === "part" && chosen && (
-        <ScenarioForm scenario={chosen} part={open.part} comparedCount={comparedCount} onClose={() => setOpen(null)} />
+        <ScenarioForm
+          scenario={chosen}
+          part={open.part}
+          comparedCount={comparedCount}
+          payAYearCents={view.payAYearCents}
+          onClose={() => setOpen(null)}
+        />
       )}
       {open?.kind === "income" && chosen && <IncomeForm scenario={chosen} index={open.index} onClose={() => setOpen(null)} />}
       {open?.kind === "oneOff" && chosen && <OneOffForm scenario={chosen} index={open.index} onClose={() => setOpen(null)} />}
       {open?.kind === "birthDate" && <BirthDateForm birthDate={view.birthDate} onClose={() => setOpen(null)} />}
+      {open?.kind === "spouseBirthDate" && <SpouseBirthDateForm spouseBirthDate={view.spouseBirthDate} onClose={() => setOpen(null)} />}
+      {open?.kind === "figures" && <FiguresForm figures={view.figures} builtIn={view.builtInFigures} onClose={() => setOpen(null)} />}
     </>
   );
 }
@@ -409,8 +429,10 @@ function Stat({ label, cents, tip, children }: { label: string; cents: number | 
 }
 
 /** A card per topic of the chosen scenario, each with its own pencil (§6). */
-function ScenarioCards({ scenario, onOpen }: { scenario: RetirementScenario; onOpen: (open: Open) => void }) {
+function ScenarioCards({ scenario, payAYearCents, onOpen }: { scenario: RetirementScenario; payAYearCents: number; onOpen: (open: Open) => void }) {
   const part = (name: ScenarioPart) => () => onOpen({ kind: "part", part: name });
+  const settings = scenario.taxSettings;
+  const workedOut = settings.mode === "worked_out";
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <Card title="Goal" action={<EditButton name="goal" onClick={part("goal")} />}>
@@ -430,8 +452,17 @@ function ScenarioCards({ scenario, onOpen }: { scenario: RetirementScenario; onO
 
       <Card title="Taxes & health" action={<EditButton name="taxes and health" onClick={part("health")} />}>
         <dl className="grid grid-cols-2 gap-4">
-          <Fact term="Tax on traditional" tip="retirementTax">
-            {formatRate(scenario.taxBp)}
+          <Fact term="Taxes" tip="taxMode">
+            {workedOut ? (
+              <>
+                By the rules
+                <span className="block text-sm font-normal text-muted">
+                  {settings.filing === "joint" ? "married, jointly" : "single"} · state {formatRate(settings.stateTaxBp)}
+                </span>
+              </>
+            ) : (
+              <>{formatRate(scenario.taxBp)} on traditional</>
+            )}
           </Fact>
           <Fact term="Health costs rise" tip="retirementHealth">
             {formatRate(scenario.healthInflationBp)} a year
@@ -439,11 +470,40 @@ function ScenarioCards({ scenario, onOpen }: { scenario: RetirementScenario; onO
           <Fact term="Before 65" tip="healthBefore65">
             {scenario.healthBeforeCents === 0 ? "Not counted" : <span data-amount>{formatCents(scenario.healthBeforeCents)} a year</span>}
           </Fact>
-          <Fact term="From 65" tip="healthFrom65">
-            {scenario.healthAfterCents === 0 ? "Not counted" : <span data-amount>{formatCents(scenario.healthAfterCents)} a year</span>}
-          </Fact>
+          {workedOut ? (
+            <Fact term="Growth in taxable withdrawals" tip="gainsShare">
+              {formatRate(settings.gainsShareBp)}
+            </Fact>
+          ) : (
+            <Fact term="From 65" tip="healthFrom65">
+              {scenario.healthAfterCents === 0 ? "Not counted" : <span data-amount>{formatCents(scenario.healthAfterCents)} a year</span>}
+            </Fact>
+          )}
         </dl>
       </Card>
+
+      {workedOut && (
+        <Card title="Medicare & income" action={<EditButton name="Medicare and income" onClick={part("medicare")} />}>
+          <dl className="grid grid-cols-2 gap-4">
+            <Fact term="Medicare for" tip="medicarePeople">
+              {settings.medicarePeople === 2 ? "You and your spouse" : "You"}
+            </Fact>
+            <Fact term="Plans a month, each" tip="medigap">
+              <span data-amount>{formatCents(settings.partDPlanCents + settings.supplementCents)}</span>
+              <span className="block text-sm font-normal text-muted">
+                Part D <span data-amount>{formatCents(settings.partDPlanCents)}</span> · Medigap <span data-amount>{formatCents(settings.supplementCents)}</span>
+              </span>
+            </Fact>
+            <Fact term="Income while working" tip="workingMagi">
+              <span data-amount>{formatCents(settings.workingMagiCents ?? payAYearCents)}</span>
+              {settings.workingMagiCents === null && <span className="block text-sm font-normal text-muted">the pay Budget knows</span>}
+            </Fact>
+            <Fact term="Income in retirement" tip="magiOverride">
+              {settings.magiOverrideCents === null ? "Worked out" : <span data-amount>{formatCents(settings.magiOverrideCents)} a year</span>}
+            </Fact>
+          </dl>
+        </Card>
+      )}
 
       <Card title="Growth & saving" action={<EditButton name="growth and saving" onClick={part("growth")} />}>
         <dl className="grid grid-cols-2 gap-4">
@@ -534,7 +594,15 @@ function Fact({ term, tip, children }: { term: string; tip?: TermId; children: R
 }
 
 /** Shared by every scenario: the birth date, and how each investment or savings account is counted. */
-function AccountsCounted({ view, onBirthDate }: { view: RetirementView; onBirthDate: () => void }) {
+function AccountsCounted({
+  view,
+  onBirthDate,
+  onSpouseBirthDate,
+}: {
+  view: RetirementView;
+  onBirthDate: () => void;
+  onSpouseBirthDate: () => void;
+}) {
   return (
     <Card title="Accounts counted" tip="retirementTaxType">
       <div className="flex min-h-11 items-center gap-3 border-b border-line pb-2">
@@ -543,6 +611,14 @@ function AccountsCounted({ view, onBirthDate }: { view: RetirementView; onBirthD
           <span className="block font-medium">{view.birthDate === null ? "Not added yet" : formatDate(view.birthDate)}</span>
         </span>
         <EditButton name="birth date" onClick={onBirthDate} />
+      </div>
+      <div className="flex min-h-11 items-center gap-3 border-b border-line py-2">
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm text-muted">Spouse's birth date</span>
+          <span className="block font-medium">{view.spouseBirthDate === null ? "None" : formatDate(view.spouseBirthDate)}</span>
+        </span>
+        {/* Kept with yours, so it can only be added once yours is there. */}
+        {view.birthDate !== null && <EditButton name="spouse's birth date" onClick={onSpouseBirthDate} />}
       </div>
       {view.accounts.length === 0 ? (
         <p className="mt-3 text-muted">Add an investment or savings account under Accounts, and it can be counted here.</p>

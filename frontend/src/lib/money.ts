@@ -10,13 +10,18 @@ export function formatCents(cents: number): string {
   return DOLLARS.format(cents / 100);
 }
 
-/** `24000000` → `"$240k"`, `125000000` → `"$1.25M"`: short enough for a chart's axis, for figures that can run to millions. */
+/**
+ * `24000000` → `"$240k"`, `125000000` → `"$1.25M"`: short enough for a chart's axis, for figures that can run to
+ * millions. Below zero the minus sign comes first, as `formatCents` writes it: `"-$20k"`, never `"$-20k"`.
+ */
 export function shortDollars(cents: number): string {
-  const dollars = cents / 100;
-  if (Math.abs(dollars) >= 1_000_000) {
-    return `$${(dollars / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
+  const sign = cents < 0 ? "-" : "";
+  const dollars = Math.abs(cents) / 100;
+  if (dollars >= 1_000_000) {
+    return `${sign}$${(dollars / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
   }
-  return Math.abs(dollars) >= 1000 ? `$${Math.round(dollars / 1000)}k` : `$${Math.round(dollars)}`;
+  const short = dollars >= 1000 ? `$${Math.round(dollars / 1000)}k` : `$${Math.round(dollars)}`;
+  return short === "$0" ? short : `${sign}${short}`;
 }
 
 /** `170510` → `"1705.10"`: the plain form that goes back into an amount field. */
