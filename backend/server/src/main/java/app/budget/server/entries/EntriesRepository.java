@@ -5,6 +5,7 @@ import app.budget.engine.reports.Reimbursement;
 import app.budget.engine.reports.Reimbursement.Share;
 import app.budget.engine.reports.Reimbursement.Status;
 import app.budget.server.api.Inputs;
+import app.budget.server.items.ReimbursementsRepository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -22,7 +23,9 @@ public final class EntriesRepository {
 
     private static final String SELECT = """
             SELECT id, kind, date, amount, is_estimate, description, payee, category_id, account_id, to_account_id, note,
-                   check_number, reimbursement_status, reimbursement_submitted_on, reimbursement_to, reimburses_entry_id
+                   check_number, reimbursement_status, reimbursement_submitted_on, reimbursement_to, reimburses_entry_id,
+                   reimburses_payment_id, reimbursement_amount, reimbursement_into_account_id, reimbursement_expected_on,
+                   reimbursement_from_account_id
             FROM entries
             """;
 
@@ -47,6 +50,8 @@ public final class EntriesRepository {
      * @param checkNumber  the check it was paid with, when it left a checking account that way; {@code null} otherwise
      * @param reimbursement where money going out stands on being paid back; {@code null} for money in and transfers
      * @param reimbursesEntryId the expense this money coming in pays back; {@code null} otherwise
+     * @param reimbursesPaymentId the payment of a recurring item this money coming in pays back (migration V46); {@code null}
+     *                     otherwise. It pays back one or the other, never both.
      * @param fileCount    how many receipts and documents are attached
      */
     public record Entry(
@@ -66,24 +71,56 @@ public final class EntriesRepository {
             String checkNumber,
             Repayment reimbursement,
             Long reimbursesEntryId,
+            Long reimbursesPaymentId,
             int fileCount) {}
 
     /**
-     * Where an expense stands on being paid back (spec §4.7).
+     * Where an expense stands on being paid back (spec §4.7), and when what is still owed is planned to come back.
      *
      * @param submittedOn     the day it was sent in; {@code null} when not said
      * @param to              who pays it back ("HSA", "Work"); {@code null} when not said
      * @param paidBackCents   what the money-in entries that pay it back add up to
-     * @param reimbursedCents how much of the expense counts as having come back
+     * @param reimbursedCents how much of what comes back counts as having come back
      * @param owedCents       how much is still to come, sent in or not
+     * @param amountCents     what comes back: all of the expense unless less was set (Rachel, 2026-10-24: "partials are
+     *                        possible")
+     * @param intoAccountId   the account it is planned to come back into; {@code null} when it is not planned
+     * @param expectedOn      about when it is planned to come back; {@code null} when it is not planned
      */
     public record Repayment(
-            Status status, LocalDate submittedOn, String to, long paidBackCents, long reimbursedCents, long owedCents) {
+            Status status,
+            LocalDate submittedOn,
+            String to,
+            long paidBackCents,
+            long reimbursedCents,
+            long owedCents,
+            long amountCents,
+            Long intoAccountId,
+            LocalDate expectedOn,
+            Long fromAccountId) {
 
         /** The same, as the shares a report adds up. */
-        public Share share(long amountCents) {
+        public Share share() {
             return Reimbursement.of(status, Money.ofCents(amountCents), Money.ofCents(paidBackCents));
         }
+
+        /** True when what is still owed is planned to come in somewhere on some day. */
+        public boolean planned() {
+            return intoAccountId != null && expectedOn != null;
+        }
+    }
+
+    /**
+     * How an expense is planned to be paid back.
+     *
+     * @param amountCents   what comes back; {@code null} for all of it
+     * @param intoAccountId the account it comes back into; with {@code expectedOn}, {@code null} for not planned
+     * @param expectedOn    about when
+     * @param fromAccountId the account it comes out of, like an FSA; {@code null} from outside (migration V48)
+     */
+    public record Plan(Long amountCents, Long intoAccountId, LocalDate expectedOn, Long fromAccountId) {
+
+        public static final Plan NONE = new Plan(null, null, null, null);
     }
 
     /**
@@ -92,6 +129,7 @@ public final class EntriesRepository {
      * @param reimbursementStatus for money going out: where it stands on being paid back; {@code null}
      *                            leaves that as it is (not paid back by anyone, when new)
      * @param reimbursesEntryId   for money coming in: the expense it pays back
+     * @param reimbursesPaymentId for money coming in: the flagged recurring payment it pays back, instead
      */
     public record Fields(
             EntryKind kind,
@@ -108,7 +146,8 @@ public final class EntriesRepository {
             List<Split> bucketSplits,
             String checkNumber,
             Status reimbursementStatus,
-            Long reimbursesEntryId) {}
+            Long reimbursesEntryId,
+            Long reimbursesPaymentId) {}
 
     /** Entries dated within {@code from}–{@code to}, oldest first. */
     public List<Entry> between(LocalDate from, LocalDate to) {
@@ -163,12 +202,21 @@ public final class EntriesRepository {
         return distinct("payee");
     }
 
-    /** Everyone an expense was sent to for paying back, by name, each once. */
+    /** Everyone an expense or a recurring payment was sent to for paying back, by name, each once. */
     public List<String> reimbursers() {
-        return distinct("reimbursement_to");
+        return jdbi.withHandle(handle -> handle
+                .createQuery("""
+                        SELECT min(name) FROM (
+                            SELECT reimbursement_to AS name FROM entries WHERE reimbursement_to IS NOT NULL
+                            UNION ALL SELECT reimbursement_to FROM payment_reimbursements WHERE reimbursement_to IS NOT NULL
+                            UNION ALL SELECT reimbursed_by FROM item_reimbursement_settings WHERE reimbursed_by IS NOT NULL)
+                        GROUP BY name COLLATE NOCASE ORDER BY min(name) COLLATE NOCASE
+                        """)
+                .mapTo(String.class)
+                .list());
     }
 
-    /** {@code column} is one of two names written above, never anything a request sent. */
+    /** {@code column} is a name written above, never anything a request sent. */
     private List<String> distinct(String column) {
         return jdbi.withHandle(handle -> handle
                 // "CVS pharmacy" and "CVS Pharmacy" are one name: the picker offers it once.
@@ -182,6 +230,27 @@ public final class EntriesRepository {
     public List<Entry> withBucketSplits() {
         return jdbi.withHandle(handle -> complete(handle, handle
                 .createQuery(SELECT + "WHERE id IN (SELECT entry_id FROM entry_bucket_splits) ORDER BY date, id")
+                .map((rs, ctx) -> entry(rs))
+                .list()));
+    }
+
+    /** Expenses still being paid back with a plan for the rest: what is planned to come back, and when. */
+    public List<Entry> plannedBack() {
+        return jdbi.withHandle(handle -> complete(handle, handle
+                .createQuery(SELECT + """
+                        WHERE kind = 'money_out' AND reimbursement_status IN ('to_submit', 'submitted')
+                          AND reimbursement_into_account_id IS NOT NULL AND reimbursement_expected_on IS NOT NULL
+                        ORDER BY reimbursement_expected_on, id
+                        """)
+                .map((rs, ctx) -> entry(rs))
+                .list()));
+    }
+
+    /** The money that came in to pay back the flagged recurring payment {@code paymentId}, oldest first. */
+    public List<Entry> paybacksOfPayment(long paymentId) {
+        return jdbi.withHandle(handle -> complete(handle, handle
+                .createQuery(SELECT + "WHERE reimburses_payment_id = :id ORDER BY date, id")
+                .bind("id", paymentId)
                 .map((rs, ctx) -> entry(rs))
                 .list()));
     }
@@ -208,9 +277,11 @@ public final class EntriesRepository {
             long id = bind(handle.createQuery("""
                             INSERT INTO entries
                                 (kind, date, amount, is_estimate, description, payee, category_id, account_id,
-                                 to_account_id, note, check_number, reimbursement_status, reimburses_entry_id, created_at)
+                                 to_account_id, note, check_number, reimbursement_status, reimburses_entry_id,
+                                 reimburses_payment_id, created_at)
                             VALUES (:kind, :date, :amount, :estimate, :description, :payee, :categoryId, :accountId,
-                                    :toAccountId, :note, :checkNumber, coalesce(:status, 'none'), :reimbursesEntryId, :now)
+                                    :toAccountId, :note, :checkNumber, coalesce(:status, 'none'), :reimbursesEntryId,
+                                    :reimbursesPaymentId, :now)
                             RETURNING id
                             """), fields)
                     .bind("now", clock.instant().toString())
@@ -219,6 +290,7 @@ public final class EntriesRepository {
             replaceTags(handle, id, fields.tagIds());
             replaceSplits(handle, id, fields.bucketSplits());
             settle(handle, fields.reimbursesEntryId());
+            ReimbursementsRepository.settle(handle, fields.reimbursesPaymentId());
             return id;
         });
     }
@@ -231,6 +303,11 @@ public final class EntriesRepository {
                     .mapTo(Long.class)
                     .findOne()
                     .orElse(null);
+            Long paymentBefore = handle.createQuery("SELECT reimburses_payment_id FROM entries WHERE id = :id")
+                    .bind("id", id)
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElse(null);
             // Only money going out can be paid back: an entry changed into anything else stops being owed.
             int changed = bind(handle.createUpdate("""
                             UPDATE entries
@@ -238,6 +315,7 @@ public final class EntriesRepository {
                                 description = :description, payee = :payee, category_id = :categoryId,
                                 account_id = :accountId, to_account_id = :toAccountId, note = :note,
                                 check_number = :checkNumber, reimburses_entry_id = :reimbursesEntryId,
+                                reimburses_payment_id = :reimbursesPaymentId,
                                 reimbursement_status = CASE WHEN :kind <> 'money_out' THEN 'none'
                                                             ELSE coalesce(:status, reimbursement_status) END
                             WHERE id = :id
@@ -247,9 +325,13 @@ public final class EntriesRepository {
             if (changed > 0) {
                 // Without a status there is no day it was sent in and nobody it was sent to.
                 handle.createUpdate("""
-                                UPDATE entries SET reimbursement_submitted_on = NULL, reimbursement_to = NULL
+                                UPDATE entries SET reimbursement_submitted_on = NULL, reimbursement_to = NULL,
+                                    reimbursement_amount = NULL, reimbursement_into_account_id = NULL,
+                                    reimbursement_expected_on = NULL, reimbursement_from_account_id = NULL
                                 WHERE id = :id AND reimbursement_status = 'none'
-                                  AND (reimbursement_submitted_on IS NOT NULL OR reimbursement_to IS NOT NULL)
+                                  AND (reimbursement_submitted_on IS NOT NULL OR reimbursement_to IS NOT NULL
+                                       OR reimbursement_amount IS NOT NULL OR reimbursement_into_account_id IS NOT NULL
+                                       OR reimbursement_expected_on IS NOT NULL OR reimbursement_from_account_id IS NOT NULL)
                                 """)
                         .bind("id", id)
                         .execute();
@@ -264,24 +346,41 @@ public final class EntriesRepository {
                 if (paidBackBefore != null && !paidBackBefore.equals(fields.reimbursesEntryId())) {
                     settle(handle, paidBackBefore);
                 }
+                ReimbursementsRepository.settle(handle, fields.reimbursesPaymentId());
+                if (paymentBefore != null && !paymentBefore.equals(fields.reimbursesPaymentId())) {
+                    ReimbursementsRepository.settle(handle, paymentBefore);
+                }
             }
             return changed > 0;
         });
     }
 
-    /** Sets where an expense stands on being paid back. @return false when there is no such expense */
-    public boolean setReimbursement(long id, Status status, LocalDate submittedOn, String to) {
-        return jdbi.withHandle(handle -> handle
-                .createUpdate("""
-                        UPDATE entries
-                        SET reimbursement_status = :status, reimbursement_submitted_on = :submittedOn, reimbursement_to = :to
-                        WHERE id = :id AND kind = 'money_out'
-                        """)
-                .bind("status", Inputs.code(status))
-                .bind("submittedOn", submittedOn == null ? null : submittedOn.toString())
-                .bind("to", to)
-                .bind("id", id)
-                .execute()) > 0;
+    /**
+     * Sets where an expense stands on being paid back, and how it is planned to come back. A smaller amount may now be all
+     * paid back, so the status is moved along to match. @return false when there is no such expense
+     */
+    public boolean setReimbursement(long id, Status status, LocalDate submittedOn, String to, Plan plan) {
+        return jdbi.inTransaction(handle -> {
+            boolean found = handle
+                    .createUpdate("""
+                            UPDATE entries
+                            SET reimbursement_status = :status, reimbursement_submitted_on = :submittedOn, reimbursement_to = :to,
+                                reimbursement_amount = :amount, reimbursement_into_account_id = :into,
+                                reimbursement_expected_on = :expected, reimbursement_from_account_id = :from
+                            WHERE id = :id AND kind = 'money_out'
+                            """)
+                    .bind("status", Inputs.code(status))
+                    .bind("submittedOn", submittedOn == null ? null : submittedOn.toString())
+                    .bind("to", to)
+                    .bind("amount", plan.amountCents())
+                    .bind("into", plan.intoAccountId())
+                    .bind("expected", plan.expectedOn() == null ? null : plan.expectedOn().toString())
+                    .bind("from", plan.fromAccountId())
+                    .bind("id", id)
+                    .execute() > 0;
+            settle(handle, id);
+            return found;
+        });
     }
 
     public boolean delete(long id) {
@@ -317,7 +416,11 @@ public final class EntriesRepository {
         if (expenseId == null) {
             return;
         }
-        handle.createQuery("SELECT amount, reimbursement_status FROM entries WHERE id = :id AND kind = 'money_out'")
+        // What comes back, which may be less than the expense.
+        handle.createQuery("""
+                        SELECT coalesce(reimbursement_amount, amount) AS amount, reimbursement_status FROM entries
+                        WHERE id = :id AND kind = 'money_out'
+                        """)
                 .bind("id", expenseId)
                 .map((rs, ctx) -> new Owed(rs.getLong("amount"), status(rs.getString("reimbursement_status"))))
                 .findOne()
@@ -361,7 +464,8 @@ public final class EntriesRepository {
                 .bind("note", fields.note())
                 .bind("checkNumber", fields.checkNumber())
                 .bind("status", fields.reimbursementStatus() == null ? null : Inputs.code(fields.reimbursementStatus()))
-                .bind("reimbursesEntryId", fields.reimbursesEntryId());
+                .bind("reimbursesEntryId", fields.reimbursesEntryId())
+                .bind("reimbursesPaymentId", fields.reimbursesPaymentId());
     }
 
     private static void replaceTags(Handle handle, long entryId, List<Long> tagIds) {
@@ -404,31 +508,37 @@ public final class EntriesRepository {
                     .one();
             Repayment repayment = row.reimbursement() == null
                     ? null
-                    : repayment(row.reimbursement(), row.amountCents(), paidBack(handle, row.id()));
+                    : repayment(row.reimbursement(), paidBack(handle, row.id()));
             entries.add(new Entry(
                     row.id(), row.kind(), row.date(), row.amountCents(), row.estimate(), row.description(), row.payee(),
                     row.categoryId(), row.accountId(), row.toAccountId(), row.note(), tagIds, splits, row.checkNumber(),
-                    repayment, row.reimbursesEntryId(), fileCount));
+                    repayment, row.reimbursesEntryId(), row.reimbursesPaymentId(), fileCount));
         }
         return entries;
     }
 
     /** {@code stored} with the figures that follow from the money that has come back. */
-    private static Repayment repayment(Repayment stored, long amountCents, long paidBackCents) {
-        Share share = Reimbursement.of(stored.status(), Money.ofCents(amountCents), Money.ofCents(paidBackCents));
-        return new Repayment(
-                stored.status(), stored.submittedOn(), stored.to(), paidBackCents, share.reimbursed().cents(), share.owed().cents());
+    private static Repayment repayment(Repayment stored, long paidBackCents) {
+        Share share = Reimbursement.of(stored.status(), Money.ofCents(stored.amountCents()), Money.ofCents(paidBackCents));
+        return new Repayment(stored.status(), stored.submittedOn(), stored.to(), paidBackCents, share.reimbursed().cents(),
+                share.owed().cents(), stored.amountCents(), stored.intoAccountId(), stored.expectedOn(), stored.fromAccountId());
     }
 
     /** A row of {@code entries}, before its tags, splits and figures are attached. */
     private static Entry entry(ResultSet rs) throws SQLException {
         EntryKind kind = EntryKind.valueOf(rs.getString("kind").toUpperCase(Locale.ROOT));
         String submittedOn = rs.getString("reimbursement_submitted_on");
+        String expectedOn = rs.getString("reimbursement_expected_on");
+        Long partOf = nullableLong(rs, "reimbursement_amount");
         Repayment stored = kind != EntryKind.MONEY_OUT ? null : new Repayment(
                 status(rs.getString("reimbursement_status")),
                 submittedOn == null ? null : LocalDate.parse(submittedOn),
                 rs.getString("reimbursement_to"),
-                0, 0, 0);
+                0, 0, 0,
+                partOf == null ? rs.getLong("amount") : partOf,
+                nullableLong(rs, "reimbursement_into_account_id"),
+                expectedOn == null ? null : LocalDate.parse(expectedOn),
+                nullableLong(rs, "reimbursement_from_account_id"));
         return new Entry(
                 rs.getLong("id"),
                 kind,
@@ -446,6 +556,7 @@ public final class EntriesRepository {
                 rs.getString("check_number"),
                 stored,
                 nullableLong(rs, "reimburses_entry_id"),
+                nullableLong(rs, "reimburses_payment_id"),
                 0);
     }
 

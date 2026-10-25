@@ -189,6 +189,44 @@ class ScheduleGeneratorTest {
         assertThatIllegalArgumentException().isThrownBy(() -> ScheduleRule.manual(List.of(), WeekendRule.NONE));
     }
 
+    @Test
+    void everySixWeeksCountedFromADayRunsSixWeeksOnFromIt() {
+        ScheduleRule sixWeeks = new ScheduleRule(Frequency.WEEKLY, 6, null, null, null, START, null, WeekendRule.NONE, List.of());
+
+        // Paid on a Tuesday instead of the Thursday it was due: the next is six weeks after the Tuesday.
+        assertThat(dates(sixWeeks.countedFrom(date("2026-02-17")), "2026-02-18", "2026-06-30"))
+                .containsExactly(date("2026-03-31"), date("2026-05-12"), date("2026-06-23"));
+    }
+
+    @Test
+    void aMonthlyOrYearlyRuleCountedFromADayTakesThatDayOfTheMonth() {
+        assertThat(dates(ScheduleRule.monthly(1, START, WeekendRule.NONE).countedFrom(date("2026-03-10")), "2026-03-11", "2026-05-31"))
+                .containsExactly(date("2026-04-10"), date("2026-05-10"));
+        ScheduleRule everyThree = new ScheduleRule(Frequency.EVERY_N_MONTHS, 3, 1, null, null, START, null, WeekendRule.NONE, List.of());
+        assertThat(dates(everyThree.countedFrom(date("2026-02-20")), "2026-02-21", "2026-12-31"))
+                .containsExactly(date("2026-05-20"), date("2026-08-20"), date("2026-11-20"));
+        ScheduleRule yearly = new ScheduleRule(Frequency.YEARLY, 1, 15, null, 4, START, null, WeekendRule.NONE, List.of());
+        assertThat(dates(yearly.countedFrom(date("2026-05-02")), "2026-05-03", "2028-12-31"))
+                .containsExactly(date("2027-05-02"), date("2028-05-02"));
+    }
+
+    @Test
+    void onlyARuleWithASteadyStepCanBeCountedFromADay() {
+        assertThat(ScheduleRule.biweekly(START, WeekendRule.NONE).canCountFromPaid()).isTrue();
+        assertThat(ScheduleRule.semiMonthly(1, 15, START, WeekendRule.NONE).canCountFromPaid()).isFalse();
+        assertThat(ScheduleRule.manual(List.of(START), WeekendRule.NONE).canCountFromPaid()).isFalse();
+        ScheduleRule twiceAWeek = ScheduleRule.weekly(START, WeekendRule.NONE).onWeekdays(EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.THURSDAY));
+        assertThat(twiceAWeek.canCountFromPaid()).isFalse();
+        assertThat(twiceAWeek.countedFrom(date("2026-03-03"))).isEqualTo(twiceAWeek);
+    }
+
+    @Test
+    void anEndBeforeTheDayItIsCountedFromNamesNothingAfterIt() {
+        ScheduleRule ended = new ScheduleRule(Frequency.MONTHLY, 1, 1, null, null, START, date("2026-03-01"), WeekendRule.NONE, List.of());
+
+        assertThat(dates(ended.countedFrom(date("2026-03-20")), "2026-03-21", "2026-12-31")).isEmpty();
+    }
+
     private static ScheduleGenerator generator() {
         return new ScheduleGenerator(new BusinessCalendar(List.of()));
     }

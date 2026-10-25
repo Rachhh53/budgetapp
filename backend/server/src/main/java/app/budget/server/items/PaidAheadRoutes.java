@@ -1,18 +1,22 @@
 package app.budget.server.items;
 
 import app.budget.engine.items.PaidAhead;
+import app.budget.engine.reports.Reimbursement.Status;
 import app.budget.server.accounts.Account;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
 import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
 import app.budget.server.entries.EntriesRepository;
+import app.budget.server.entries.EntriesRepository.Plan;
 import app.budget.server.entries.EntryKind;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.items.ItemCalendar.Occurrence;
 import app.budget.server.items.ItemCalendar.Standing;
 import app.budget.server.items.ItemsRepository.Item;
 import app.budget.server.items.ItemsRepository.Terms;
+import app.budget.server.items.ReimbursementsRepository.PackFlag;
+import app.budget.server.items.ReimbursementsRepository.Settings;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.LocalDate;
@@ -38,6 +42,7 @@ public final class PaidAheadRoutes {
     private final PrepaymentsRepository prepayments;
     private final AccountsRepository accounts;
     private final PayCalendar pay;
+    private final ReimbursementsRepository reimbursements;
 
     public PaidAheadRoutes(
             ItemsRepository items,
@@ -45,7 +50,9 @@ public final class PaidAheadRoutes {
             EntriesRepository entries,
             PrepaymentsRepository prepayments,
             AccountsRepository accounts,
-            PayCalendar pay) {
+            PayCalendar pay,
+            ReimbursementsRepository reimbursements) {
+        this.reimbursements = reimbursements;
         this.items = items;
         this.calendar = calendar;
         this.entries = entries;
@@ -137,9 +144,28 @@ public final class PaidAheadRoutes {
         // A one-off like any other, named and filed as its item, so reports and receipts treat it as spending.
         long entryId = entries.create(new EntriesRepository.Fields(
                 EntryKind.MONEY_OUT, input.date(), amount, false, item.name(), null, terms.categoryId(), account.id(), null,
-                Inputs.optionalText(input.note(), "the note", ItemsRoutes.NOTE_MAX), item.tagIds(), List.of(), null, null, null));
+                Inputs.optionalText(input.note(), "the note", ItemsRoutes.NOTE_MAX), item.tagIds(), List.of(), null, null, null, null));
         prepayments.link(entryId, item.id());
+        if (terms.pack().isPresent()) {
+            packBought(item, entryId, amount, input.date());
+        }
         ApiResponse.send(ctx, 201, view(item));
+    }
+
+    /**
+     * Buying a pack buys the next one in line: when that one was flagged to be paid back, the flag goes onto the payment,
+     * planned on the item's way back from the day it was paid, and the packs after it move up one.
+     */
+    private void packBought(Item item, long entryId, long paidCents, LocalDate paidOn) {
+        Optional<PackFlag> flagged = reimbursements.packBought(item.id());
+        Optional<Settings> settings = reimbursements.settings(item.id());
+        if (flagged.isEmpty() || settings.isEmpty()) {
+            return;
+        }
+        long back = Math.min(flagged.get().amountCents(), paidCents);
+        entries.setReimbursement(entryId, Status.TO_SUBMIT, null, settings.get().reimbursedBy(), new Plan(
+                back == paidCents ? null : back, settings.get().intoAccountId(), paidOn.plusDays(settings.get().daysAfter()),
+                flagged.get().fromAccountId()));
     }
 
     private PaidAheadView view(Item item) {

@@ -3,7 +3,16 @@ import { useId, useState } from "react";
 import { Link } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
-import { type Entry, REIMBURSEMENT_LABELS, REIMBURSEMENT_STATUSES, type ReimbursementStatus, useEntries, useExpenseYears } from "../api/entries";
+import {
+  type Entry,
+  REIMBURSEMENT_LABELS,
+  REIMBURSEMENT_STATUSES,
+  type Reimbursement,
+  type ReimbursementStatus,
+  useEntries,
+  useExpenseYears,
+} from "../api/entries";
+import { type FlaggedPayment, paymentPath, usePaymentReimbursements } from "../api/reimbursements";
 import { useAddItem } from "../components/add/AddItem";
 import { Amount, EstimateKey } from "../components/Amount";
 import { Card } from "../components/Card";
@@ -27,6 +36,60 @@ const ROW = "-mx-2 block min-h-11 cursor-pointer rounded-lg px-2 py-3 hover:bg-b
 type Standing = ReimbursementStatus | "all";
 
 /**
+ * One row of the list: a one-off expense, or a recurring payment flagged to be paid back (Rachel, 2026-10-24: "same as
+ * one-off expenses"), each opening its own page.
+ */
+interface Spent {
+  key: string;
+  to: string;
+  date: string;
+  title: string;
+  /** Under the title: a one-off's description when it has a payee, or that it is a recurring payment. */
+  subtitle: string | null;
+  categoryId: number | null;
+  tagIds: number[];
+  accountId: number;
+  amountCents: number;
+  estimate: boolean;
+  fileCount: number;
+  reimbursement: Reimbursement | null;
+}
+
+function fromEntry(entry: Entry): Spent {
+  return {
+    key: `expense-${entry.id}`,
+    to: `/expenses/${entry.id}`,
+    date: entry.date,
+    title: entry.payee ?? entry.description,
+    subtitle: entry.payee !== null ? entry.description : null,
+    categoryId: entry.categoryId,
+    tagIds: entry.tagIds,
+    accountId: entry.accountId,
+    amountCents: entry.amountCents,
+    estimate: entry.estimate,
+    fileCount: entry.fileCount,
+    reimbursement: entry.reimbursement,
+  };
+}
+
+function fromPayment(payment: FlaggedPayment): Spent {
+  return {
+    key: `payment-${payment.id}`,
+    to: paymentPath(payment.itemId, payment.scheduledDate),
+    date: payment.date,
+    title: payment.name,
+    subtitle: "Recurring payment",
+    categoryId: payment.categoryId,
+    tagIds: payment.tagIds,
+    accountId: payment.accountId,
+    amountCents: payment.paymentCents,
+    estimate: payment.estimate,
+    fileCount: payment.fileCount,
+    reimbursement: payment.reimbursement,
+  };
+}
+
+/**
  * Expenses & receipts (design/expenses.png), as an overview like the Accounts screen: a year
  * of one-off spending, what it comes to and what is still owed back, narrowed by tag or by
  * where the reimbursement stands. A row opens the expense's own page, where its receipts and
@@ -41,6 +104,7 @@ export function ExpensesPage() {
   const yearChoices = [...new Set([thisYear, ...(years.data ?? [])])].sort((a, b) => b - a);
 
   const entries = useEntries(`${year}-01-01`, `${year}-12-31`);
+  const payments = usePaymentReimbursements(year);
   const accounts = useAccounts();
   const tags = useTags();
   const { add } = useAddItem();
@@ -54,11 +118,14 @@ export function ExpensesPage() {
   const standingId = useId();
   const headingId = useId();
 
-  // Newest first: what was just added is at the top.
-  const expenses = (entries.data ?? []).filter((entry) => entry.kind === "money_out").reverse();
+  // Newest first: what was just added is at the top. A recurring payment is listed once it is flagged to be paid back.
+  const expenses = [
+    ...(entries.data ?? []).filter((entry) => entry.kind === "money_out").map(fromEntry),
+    ...(payments.data ?? []).filter((payment) => !payment.skipped).map(fromPayment),
+  ].sort((a, b) => b.date.localeCompare(a.date));
   // A category takes in its sub-categories, as everywhere else.
   const allCategories = categories.data ?? [];
-  const inCategory = (expense: Entry, id: number) =>
+  const inCategory = (expense: Spent, id: number) =>
     expense.categoryId === id || allCategories.some((category) => category.id === expense.categoryId && category.parentId === id);
   const usedCategories = allCategories.filter((category) => expenses.some((expense) => inCategory(expense, category.id)));
   // A category chosen in one year may not be used in another: then it filters nothing.
@@ -82,7 +149,7 @@ export function ExpensesPage() {
     <>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between md:mb-6">
         <div>
-          <p className="text-sm font-semibold tracking-wide text-muted uppercase">One-off spending</p>
+          <p className="text-sm font-semibold tracking-wide text-muted uppercase">One-off spending, and payments paid back</p>
           <div className="flex min-w-0 items-center gap-1">
             <h1 className={PAGE_TITLE}>Expenses &amp; receipts</h1>
             <HelpLink />
@@ -221,7 +288,7 @@ export function ExpensesPage() {
               </div>
               <ul className="divide-y divide-line">
                 {shown.map((expense) => (
-                  <ExpenseRow key={expense.id} expense={expense} accounts={accounts.data ?? []} tags={tags.data ?? []} />
+                  <ExpenseRow key={expense.key} expense={expense} accounts={accounts.data ?? []} tags={tags.data ?? []} />
                 ))}
               </ul>
               {shown.some((expense) => expense.estimate) && (
@@ -279,19 +346,19 @@ function TagFilter({ tags, value, onChange }: { tags: readonly Tag[]; value: num
  * One expense on the overview. The row only opens the expense's page; editing, receipts and
  * the reimbursement are there.
  */
-function ExpenseRow({ expense, accounts, tags }: { expense: Entry; accounts: readonly Account[]; tags: readonly Tag[] }) {
+function ExpenseRow({ expense, accounts, tags }: { expense: Spent; accounts: readonly Account[]; tags: readonly Tag[] }) {
   const account = accounts.find((candidate) => candidate.id === expense.accountId)?.name ?? "An account that was removed";
   const status = expense.reimbursement?.status ?? "none";
   const files = expense.fileCount === 1 ? "1 file" : `${expense.fileCount} files`;
 
   return (
     <li>
-      <Link to={`/expenses/${expense.id}`} className={`${ROW} ${COLUMNS}`}>
+      <Link to={expense.to} className={`${ROW} ${COLUMNS}`}>
         <span className="flex items-baseline justify-between gap-3 md:contents">
           <span className="text-muted md:text-ink">{formatDay(expense.date)}</span>
           <span className="order-first min-w-0 flex-1 md:order-none">
-            <span className="block font-semibold md:truncate">{expense.payee ?? expense.description}</span>
-            {expense.payee !== null && <span className="block text-sm text-muted md:truncate">{expense.description}</span>}
+            <span className="block font-semibold md:truncate">{expense.title}</span>
+            {expense.subtitle !== null && <span className="block text-sm text-muted md:truncate">{expense.subtitle}</span>}
           </span>
         </span>
         <span className="mt-1 block min-w-0 md:mt-0">

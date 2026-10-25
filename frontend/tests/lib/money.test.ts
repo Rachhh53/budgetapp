@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculate, centsToInput, formatCents, isSum, parseDollars } from "../../src/lib/money";
+import { calculate, centsToInput, formatCents, isSum, parseDollars, shortDollars } from "../../src/lib/money";
 
 describe("formatCents", () => {
   it("shows dollars with separators and two decimals", () => {
@@ -106,5 +106,15 @@ describe("calculate", () => {
     expect(calculate(30000, "×", "")).toBeNull();
     expect(calculate(30000, "+", "1.234")).toBeNull();
     expect(calculate(30000, "×", "abc")).toBeNull();
+  });
+});
+
+describe("shortDollars", () => {
+  it("keeps a tenth under $10k, so ticks a few hundred apart read apart", () => {
+    expect([80000, 160000, 240000, 300000].map(shortDollars)).toEqual(["$800", "$1.6k", "$2.4k", "$3k"]);
+    expect(shortDollars(2400000)).toBe("$24k");
+    expect(shortDollars(125000000)).toBe("$1.25M");
+    expect(shortDollars(-2000000)).toBe("-$20k");
+    expect(shortDollars(0)).toBe("$0");
   });
 });

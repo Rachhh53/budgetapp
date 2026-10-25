@@ -57,6 +57,8 @@ export interface PayStub {
   status: "review" | "saved";
   /** What saving it changed; `null` while in review. */
   applied: StubApply | null;
+  /** True while a saved stub is being edited: Cancel editing puts it back as it was saved. */
+  editingSaved: boolean;
   pages: number;
   sizeBytes: number;
   lines: StubLine[];
@@ -171,6 +173,21 @@ export function useReopenStub(stubId: number) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.post<PayStub>(`/api/pay-stubs/${stubId}/reopen`, undefined),
+    onSuccess: (stub) => {
+      queryClient.setQueryData([...STUBS_KEY, stubId], stub);
+      return queryClient.invalidateQueries({ queryKey: [...STUBS_KEY, "source"] });
+    },
+  });
+}
+
+/**
+ * Stops editing a saved stub without saving: its lines, date and what saving it changed go back to how they were
+ * (Rachel, 2026-10-24: "if I go in to edit it and just want to not save those edits, there's no option for that").
+ */
+export function useCancelStubEdit(stubId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<PayStub>(`/api/pay-stubs/${stubId}/cancel-edit`, undefined),
     onSuccess: (stub) => {
       queryClient.setQueryData([...STUBS_KEY, stubId], stub);
       return queryClient.invalidateQueries({ queryKey: [...STUBS_KEY, "source"] });

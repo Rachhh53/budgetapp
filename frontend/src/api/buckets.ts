@@ -238,9 +238,11 @@ export interface MoveOut {
   tagIds: number[];
   /** The expense it pays yourself back for (Rachel, 2026-10-21); `null` when it pays none back. */
   reimbursesEntryId: number | null;
+  /** The flagged recurring payment it pays yourself back for instead (Rachel, 2026-10-24); `null` when none. */
+  reimbursesPaymentId: number | null;
 }
 
-export type MoveOutInput = Pick<MoveOut, "date" | "amountCents" | "note" | "categoryId" | "tagIds" | "reimbursesEntryId">;
+export type MoveOutInput = Pick<MoveOut, "date" | "amountCents" | "note" | "categoryId" | "tagIds" | "reimbursesEntryId" | "reimbursesPaymentId">;
 
 /** Moves money out of a bucket, or with `changeId` changes a move made before. */
 export function useSaveMoveOut() {

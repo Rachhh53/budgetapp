@@ -27,7 +27,7 @@ const VISA: Account = { ...CHECKING, id: 2, name: "Visa", type: "credit_card", c
 const OUT_OF_POCKET: Tag = { id: 1, name: "Medical – out of pocket", color: "#be185d", itemCount: 0, perYearCents: 0 };
 const HOME_REPAIR: Tag = { id: 2, name: "Home repair", color: "#a16207", itemCount: 0, perYearCents: 0 };
 
-const NOT_REPAID = { status: "none", submittedOn: null, to: null, paidBackCents: 0, reimbursedCents: 0, owedCents: 0 } as const;
+const NOT_REPAID = { status: "none", submittedOn: null, to: null, paidBackCents: 0, reimbursedCents: 0, owedCents: 0, amountCents: 0, intoAccountId: null, expectedOn: null, fromAccountId: null } as const;
 
 /** Sent in, with $60.00 of $85.00 back so far. */
 const PEDS: Entry = {
@@ -45,8 +45,9 @@ const PEDS: Entry = {
   checkNumber: null,
   tagIds: [1],
   bucketSplits: [],
-  reimbursement: { status: "submitted", submittedOn: `${YEAR}-09-29`, to: "HSA", paidBackCents: 6000, reimbursedCents: 6000, owedCents: 2500 },
+  reimbursement: { status: "submitted", submittedOn: `${YEAR}-09-29`, to: "HSA", paidBackCents: 6000, reimbursedCents: 6000, owedCents: 2500, amountCents: 8500, intoAccountId: null, expectedOn: null, fromAccountId: null },
   reimbursesEntryId: null,
+  reimbursesPaymentId: null,
   fileCount: 2,
 };
 const ROOF: Entry = {
@@ -229,6 +230,7 @@ describe("Expenses & receipts", () => {
       accountId: 1,
       reimbursementStatus: "to_submit",
       reimbursesEntryId: null,
+      reimbursesPaymentId: null,
     });
   });
 
@@ -537,6 +539,36 @@ describe("One expense", () => {
     expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")[0]).toMatchObject({ status: "to_submit" });
   });
 
+  // Rachel, 2026-10-25: "there is no way to plan for the reimbursement in that account"; "partials are possible".
+  it("plans part of an expense coming back into another account on another day", async () => {
+    const waiting: Entry = {
+      ...PEDS,
+      reimbursement: { ...NOT_REPAID, status: "to_submit", owedCents: 8500, amountCents: 8500, intoAccountId: 1, expectedOn: `${YEAR}-10-28`, fromAccountId: null },
+    };
+    const fetchMock = withExpenses({
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: waiting, paybacks: [], reimburses: null, movesOut: [] } }),
+      "PUT /api/entries/9/reimbursement": () => ({ status: 200, data: waiting, changed: true }),
+    });
+    renderApp("/expenses/9");
+
+    const card = await screen.findByRole("region", { name: "Coming back" });
+    expect(card).toHaveTextContent("all of it");
+    expect(card).toHaveTextContent("Everyday Checking");
+    await userEvent.click(within(card).getByRole("button", { name: "Edit what comes back" }));
+    const dialog = await screen.findByRole("dialog", { name: "What comes back" });
+    const amount = within(dialog).getByRole("textbox", { name: "Comes back" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "60");
+    fireEvent.change(within(dialog).getByLabelText("About when"), { target: { value: `${YEAR}-11-02` } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/entries/9/reimbursement")).toEqual([
+        { status: "to_submit", submittedOn: null, to: null, amountCents: 6000, intoAccountId: 1, expectedOn: `${YEAR}-11-02`, fromAccountId: null },
+      ]),
+    );
+  });
+
   it("marking something sent in with no day given means today", async () => {
     const waiting: Entry = { ...PEDS, reimbursement: { ...NOT_REPAID, status: "to_submit", owedCents: 8500 } };
     const fetchMock = withExpenses({
@@ -573,6 +605,41 @@ describe("One expense", () => {
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
     expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({ kind: "money_in", amountCents: 2500, reimbursesEntryId: 9 });
+  });
+
+  // Rachel, 2026-10-25: "there is not option to take it out of the fsa"; she chose a transfer, from the same card.
+  it("records money paid back out of the FSA as a transfer into the account it comes back into", async () => {
+    const fsa: Account = { ...CHECKING, id: 5, name: "Flexible Spending", type: "savings" };
+    const waiting: Entry = {
+      ...PEDS,
+      reimbursement: { ...NOT_REPAID, status: "submitted", owedCents: 8500, amountCents: 8500, intoAccountId: 1, expectedOn: `${YEAR}-10-28`, fromAccountId: 5 },
+    };
+    const fetchMock = withExpenses({
+      "GET /api/accounts": () => ({ status: 200, data: [CHECKING, VISA, fsa] }),
+      "GET /api/entries/9": () => ({ status: 200, data: { entry: waiting, paybacks: [], reimburses: null, movesOut: [] } }),
+      "POST /api/entries": () => ({ status: 201, data: HSA_PAYOUT, changed: true }),
+    });
+    renderApp("/expenses/9");
+
+    expect(await screen.findByRole("region", { name: "Coming back" })).toHaveTextContent("Flexible Spending");
+    await userEvent.click(screen.getByRole("button", { name: "+ Add money that came back" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("textbox", { name: "Amount" })).toHaveValue("85.00");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect(within(dialog).getByRole<HTMLInputElement>("combobox", { name: "From" }).value).toBe("Flexible Spending");
+    expect(within(dialog).getByRole<HTMLInputElement>("combobox", { name: "To" }).value).toBe("Everyday Checking");
+    await userEvent.click(within(dialog).getByRole("button", { name: "More options" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/entries")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "POST /api/entries")[0]).toMatchObject({
+      kind: "transfer",
+      accountId: 5,
+      toAccountId: 1,
+      amountCents: 8500,
+      reimbursesEntryId: 9,
+    });
   });
 
   it("says what to do when what was dropped is a link from a web page, not a file", async () => {

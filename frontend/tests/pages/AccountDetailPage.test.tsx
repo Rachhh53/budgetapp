@@ -81,6 +81,26 @@ describe("account detail screen", () => {
     expect(rows[1]).toHaveTextContent("—");
   });
 
+  it("marks a balance for a day still to come as planned, and lets one be entered", async () => {
+    fakeBackend({
+      "GET /api/accounts/1": () => ({
+        status: 200,
+        data: { ...DETAIL, balances: [{ id: 12, date: "2999-01-01", amountCents: 300000, note: null }, ...DETAIL.balances] },
+      }),
+    });
+    renderApp("/accounts/1");
+
+    const rows = within(await screen.findByRole("region", { name: "Balances you entered" })).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Jan 1, 2999Planned");
+    expect(rows[1]).not.toHaveTextContent("Planned");
+
+    // The date can be any day: one still to come is planned.
+    await userEvent.click(within(rows[0]!).getByRole("button", { name: "Edit the balance from Jan 1, 2999" }));
+    const date = within(screen.getByRole("dialog")).getByLabelText("As of");
+    expect(date).not.toHaveAttribute("max");
+    expect(screen.getByRole("dialog")).toHaveTextContent("A day still to come is planned");
+  });
+
   it("lists what moved the account, saying what is upcoming or not paid yet", async () => {
     fakeBackend({
       "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
@@ -543,6 +563,59 @@ describe("account detail screen", () => {
 
     await userEvent.selectOptions(range, "Everything");
     expect(within(heading).getByRole("figure")).toHaveTextContent("the projection, which reaches $4,125.00 by Oct 31, 2026");
+  });
+
+  it("shows what went out each pay period by category under the chart, with the average of the ones that are over", async () => {
+    const fetchMock = fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+      "GET /api/accounts/1/projection": () => ({ status: 200, data: PROJECTION }),
+      "GET /api/categories": () => ({
+        status: 200,
+        data: [
+          { id: 2, name: "Housing", color: "#b45309", parentId: null, itemCount: 1, perYearCents: 0 },
+          { id: 3, name: "Food", color: "#0f766e", parentId: null, itemCount: 0, perYearCents: 0 },
+          { id: 5, name: "Groceries", color: "#15803d", parentId: 3, itemCount: 1, perYearCents: 0 },
+        ],
+      }),
+      // The same dates as the chart above: from the first balance entered to the end of the projection.
+      "GET /api/accounts/1/spending?from=2026-09-01&to=2026-11-01": () => ({
+        status: 200,
+        data: [
+          { start: "2026-09-01", end: "2026-09-14", outCents: 160000, categories: [{ categoryId: 2, cents: 160000 }] },
+          {
+            start: "2026-09-15",
+            end: "2026-09-30",
+            outCents: 20000,
+            categories: [{ categoryId: null, cents: 12000 }, { categoryId: 5, cents: 8000 }],
+          },
+          // Still to come, so it is not in the average.
+          { start: "2099-01-01", end: "2099-01-14", outCents: 999900, categories: [{ categoryId: 2, cents: 999900 }] },
+        ],
+      }),
+    });
+    renderApp("/accounts/1");
+
+    const spending = await screen.findByRole("region", { name: "Going out each pay period" });
+    expect(calls(fetchMock)).toContain("GET /api/accounts/1/spending?from=2026-09-01&to=2026-11-01");
+    // A sub-category counts toward the one above it; what has no category is a stack of its own.
+    const key = within(spending).getByRole("list", { name: "Categories" });
+    expect(within(key).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Housing", "Food", "No category", "Average"]);
+    expect(spending).toHaveTextContent("On average $900.00 went out each pay period, over the 2 pay periods shown that are over (the dashed line)");
+    expect(spending).toHaveTextContent("the biggest category is Housing, at $800.00 a pay period");
+    expect(spending).toHaveTextContent("Paler bars are pay periods still to come");
+  });
+
+  it("says kindly when what went out cannot be loaded, and leaves the balance chart as it is", async () => {
+    fakeBackend({
+      "GET /api/accounts/1": () => ({ status: 200, data: DETAIL }),
+      "GET /api/accounts/1/projection": () => ({ status: 200, data: PROJECTION }),
+      "GET /api/accounts/1/spending?from=2026-09-01&to=2026-11-01": () => ({ status: 500, error: "Something went wrong on our side. Please try again." }),
+    });
+    renderApp("/accounts/1");
+
+    const heading = await screen.findByRole("region", { name: "Where it's heading" });
+    expect(await within(heading).findByRole("alert")).toHaveTextContent("Something went wrong on our side. Please try again.");
+    expect(within(heading).getByRole("figure")).toHaveTextContent("which reaches $4,125.00 by Oct 31, 2026");
   });
 
   it("draws an account nothing was entered for, once money moves through it", async () => {

@@ -3,11 +3,10 @@ import { type FormEvent, useId, useState } from "react";
 import { useAccounts } from "../../api/accounts";
 import { type MoveOut, useBuckets, useDeleteBucketChange, useSaveMoveOut } from "../../api/buckets";
 import { useCategories, useTags } from "../../api/categories";
-import type { Entry } from "../../api/entries";
 import { todayIso } from "../../lib/dates";
 import { centsToInput, formatCents, parseDollars } from "../../lib/money";
 import { CategoryField, TagsField } from "../categories/LabelFields";
-import { useOwedExpenses } from "../add/owedExpenses";
+import { choiceFor, choiceOf, owedOn, type PaysBackTarget, paysBackIds, targetName, useOwedExpenses } from "../add/owedExpenses";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker } from "../Picker";
@@ -25,7 +24,8 @@ const NOTE_MAX = 200;
  *
  * @param move     the move to change; left out to add one
  * @param date     the day a new one opens on
- * @param paysBack the expense a new one pays back, when opened from it: what is still owed is the likely amount
+ * @param paysBack the expense or flagged payment a new one pays back, when opened from it: what is still owed is the
+ *                 likely amount
  */
 export function MoveOutForm({
   move,
@@ -35,7 +35,7 @@ export function MoveOutForm({
 }: {
   move?: MoveOut;
   date?: string;
-  paysBack?: Entry;
+  paysBack?: PaysBackTarget;
   onClose: () => void;
 }) {
   const id = useId();
@@ -46,12 +46,12 @@ export function MoveOutForm({
   const save = useSaveMoveOut();
   const [bucketId, setBucketId] = useState(move ? String(move.bucketId) : "");
   const remove = useDeleteBucketChange(Number(bucketId));
-  const owed = paysBack?.reimbursement?.owedCents;
+  const owed = owedOn(paysBack);
   const [amount, setAmount] = useState(move ? centsToInput(move.amountCents) : owed ? centsToInput(owed) : "");
   const [date, setDate] = useState(move?.date ?? startDate ?? todayIso());
-  const [note, setNote] = useState(move?.note ?? (paysBack ? `Reimbursement: ${paysBack.payee ?? paysBack.description}` : ""));
+  const [note, setNote] = useState(move?.note ?? (paysBack ? `Reimbursement: ${targetName(paysBack)}` : ""));
   const [paysBackId, setPaysBackId] = useState<string | null>(
-    move?.reimbursesEntryId != null ? String(move.reimbursesEntryId) : paysBack ? String(paysBack.id) : null,
+    move ? choiceOf(move.reimbursesEntryId, move.reimbursesPaymentId) : paysBack ? choiceFor(paysBack) : null,
   );
   const owedExpenses = useOwedExpenses(true, paysBackId, paysBack);
   const [categoryId, setCategoryId] = useState<number | null>(move?.categoryId ?? null);
@@ -91,7 +91,7 @@ export function MoveOutForm({
         note: note.trim(),
         categoryId,
         tagIds,
-        reimbursesEntryId: paysBackId === null ? null : Number(paysBackId),
+        ...paysBackIds(paysBackId),
       },
       { onSuccess: onClose },
     );

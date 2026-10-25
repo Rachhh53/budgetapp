@@ -159,8 +159,9 @@ const VET: Entry = {
   checkNumber: null,
   tagIds: [],
   bucketSplits: [],
-  reimbursement: { status: "none", submittedOn: null, to: null, paidBackCents: 0, reimbursedCents: 0, owedCents: 0 },
+  reimbursement: { status: "none", submittedOn: null, to: null, paidBackCents: 0, reimbursedCents: 0, owedCents: 0, amountCents: 0, intoAccountId: null, expectedOn: null, fromAccountId: null },
   reimbursesEntryId: null,
+  reimbursesPaymentId: null,
   fileCount: 0,
 };
 const BONUS: Entry = {
@@ -200,7 +201,7 @@ const ELECTRIC_ITEM: Item = {
   perOccurrenceCents: 14000,
   perYearCents: 168000,
   next: { scheduledDate: "2026-10-16", dueDate: "2026-10-16", periodStart: "2026-10-01", early: true },
-  history: [{ versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000 }],
+  history: [{ versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 14000, perYearCents: 168000, categoryId: null }],
   paused: false,
   pausedUntil: null,
   fromBucketId: null,
@@ -1082,6 +1083,7 @@ describe("+ Add item", () => {
         tagIds: [],
         bucketSplits: [],
         reimbursesEntryId: null,
+        reimbursesPaymentId: null,
       },
     ]);
   });
@@ -1196,11 +1198,12 @@ describe("+ Add item", () => {
       categoryId: null,
       tagIds: [],
       reimbursesEntryId: null,
+      reimbursesPaymentId: null,
     });
   });
 
   it("lists money moved out of a bucket under Income, and opens it to change", async () => {
-    const moved = { id: 31, bucketId: 7, accountId: 1, date: "2026-10-03", amountCents: 12000, note: "Back to spending", categoryId: null, tagIds: [], reimbursesEntryId: null };
+    const moved = { id: 31, bucketId: 7, accountId: 1, date: "2026-10-03", amountCents: 12000, note: "Back to spending", categoryId: null, tagIds: [], reimbursesEntryId: null, reimbursesPaymentId: null };
     const fetchMock = withPeriod({ ...OCTOBER, movesOut: [moved] }, {
       "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
       "PUT /api/buckets/7/moves-out/31": () => ({ status: 200, data: { id: 31 }, changed: true }),
@@ -1890,6 +1893,70 @@ describe("pay period screen: paid ahead", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/12/paid-ahead/packs/2026-10-12")).toEqual([{ date: "2026-10-16" }]));
+  });
+
+  // Rachel, 2026-10-25: "there is no way to plan for the reimbursement in that account as well"; "partials are possible".
+  it("flags part of the next pack to be paid back, asking where it comes back into the first time", async () => {
+    const fetchMock = withPeriod(
+      { ...OCTOBER, occurrences: [NEXT_PACK] },
+      { "PUT /api/items/12/paid-ahead/packs/2026-10-12/reimbursement": () => ({ status: 200, data: {}, changed: true }) },
+    );
+    renderApp();
+
+    const manual = await panel("Pay manually & one-offs");
+    await userEvent.click(within(manual).getByRole("button", { name: "Paid back?" }));
+    const dialog = await screen.findByRole("dialog", { name: "Paid back: Climbing classes" });
+    const amount = within(dialog).getByRole("textbox", { name: "Comes back" });
+    expect(amount).toHaveValue("1275.00");
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "1000");
+    await userEvent.type(within(dialog).getByLabelText("Who pays it back (optional)"), "FSA");
+    // Rachel, 2026-10-25: "take it out of the fsa".
+    expect(within(dialog).getByRole("combobox", { name: "Comes out of" })).toHaveValue("");
+    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Comes out of" }), "Rainy Day Savings");
+    await userEvent.click(within(dialog).getByRole("button", { name: "It'll be paid back" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/12/paid-ahead/packs/2026-10-12/reimbursement")).toEqual([
+        { amountCents: 100000, intoAccountId: 1, daysAfter: 30, reimbursedBy: "FSA", fromAccountId: 2 },
+      ]),
+    );
+  });
+
+  it("refuses more back than the pack costs", async () => {
+    const fetchMock = withPeriod({ ...OCTOBER, occurrences: [NEXT_PACK] });
+    renderApp();
+
+    await userEvent.click(within(await panel("Pay manually & one-offs")).getByRole("button", { name: "Paid back?" }));
+    const dialog = await screen.findByRole("dialog", { name: "Paid back: Climbing classes" });
+    const amount = within(dialog).getByRole("textbox", { name: "Comes back" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "1300");
+    await userEvent.click(within(dialog).getByRole("button", { name: "It'll be paid back" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("no more than the pack");
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/12/paid-ahead/packs/2026-10-12/reimbursement")).toEqual([]);
+  });
+
+  it("lists money planned back for a one-off expense under Income, opening the expense", async () => {
+    withPeriod({
+      ...OCTOBER,
+      moneyBack: [
+        {
+          name: "Copay",
+          expectedOn: "2026-10-05",
+          intoAccountId: 1,
+          owedCents: 6000,
+          fromAccountId: null,
+          source: { type: "paid_back", entryId: 9, itemId: null, scheduledDate: null, dueDate: null, periodStart: null },
+        },
+      ],
+    });
+    renderApp();
+
+    const income = await panel("Income");
+    expect(within(income).getByRole("link", { name: "Paid back: Copay" })).toHaveAttribute("href", "/expenses/9");
+    expect(income).toHaveTextContent("Oct 5 → Everyday Checking");
   });
 });
 

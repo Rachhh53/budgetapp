@@ -11,6 +11,7 @@ import {
   type StubApply,
   type StubLineInput,
   stubPreviewUrl,
+  useCancelStubEdit,
   useChangeStub,
   useDeleteStub,
   usePayStub,
@@ -49,6 +50,7 @@ export function PayStubPage() {
   const change = useChangeStub(stubId);
   const remove = useDeleteStub();
   const reopen = useReopenStub(stubId);
+  const cancelEdit = useCancelStubEdit(stubId);
   // What the stub changed the last time it was saved, kept while it is open again so the save
   // dialog starts on the same choice.
   const [lastApplied, setLastApplied] = useState<StubApply>();
@@ -81,6 +83,8 @@ export function PayStubPage() {
 
   const data: PayStub = sent ? { ...stub.data, lines: sent.map((line, index) => ({ ...line, id: stub.data.lines[index]?.id ?? null })) } : stub.data;
   const inReview = data.status === "review";
+  // A saved stub opened again: leaving it goes back to how it was saved, never removing it (Discard is for a new one).
+  const editingSaved = inReview && data.editingSaved;
   const back = `/income/${data.incomeSourceId}`;
   const depositAccountId = sources.find((source) => source.id === data.incomeSourceId)?.depositAccountId;
   const depositAccount = accounts.find((account) => account.id === depositAccountId)?.name;
@@ -117,20 +121,28 @@ export function PayStubPage() {
             <HelpLink />
           </div>
           <p className="text-muted">
-            {inReview
+            {editingSaved
+              ? "Editing the saved stub. Nothing it changed moves until you save it again; Cancel editing puts it back as it was."
+              : inReview
               ? "Nothing changes until you save it."
               : `Saved · ${data.applied ? APPLIED_LABELS[data.applied].toLowerCase() : ""}. Choose Edit stub to change it; what it changed stays until you save it again.`}
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 whitespace-nowrap sm:flex-row">
-          <button
-            type="button"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate(data.id, { onSuccess: () => navigate(back) })}
-            className={BUTTON_SECONDARY}
-          >
-            {remove.isPending ? "Removing…" : inReview ? "Discard" : "Remove stub"}
-          </button>
+          {editingSaved ? (
+            <button type="button" disabled={cancelEdit.isPending} onClick={() => cancelEdit.mutate()} className={BUTTON_SECONDARY}>
+              {cancelEdit.isPending ? "Cancelling…" : "Cancel editing"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(data.id, { onSuccess: () => navigate(back) })}
+              className={BUTTON_SECONDARY}
+            >
+              {remove.isPending ? "Removing…" : inReview ? "Discard" : "Remove stub"}
+            </button>
+          )}
           {inReview ? (
             <button type="button" onClick={() => setSaving(true)} className={BUTTON_PRIMARY}>
               Save stub…
@@ -149,9 +161,9 @@ export function PayStubPage() {
 
       <div className="space-y-4">
         <CheckBanner stub={data} />
-        {(remove.isError || change.isError || reopen.isError) && (
+        {(remove.isError || change.isError || reopen.isError || cancelEdit.isError) && (
           <p role="alert" className="text-danger">
-            {remove.error?.message ?? change.error?.message ?? reopen.error?.message}
+            {remove.error?.message ?? change.error?.message ?? reopen.error?.message ?? cancelEdit.error?.message}
           </p>
         )}
 

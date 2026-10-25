@@ -147,7 +147,16 @@ describe("credit cards on the Accounts screen", () => {
 
 describe("a card's page", () => {
   it("shows the balance, the next payment, statements and the promo's progress", async () => {
-    withCard(CARD);
+    withCard(CARD, {
+      "GET /api/accounts/3/projection": () => ({
+        status: 200,
+        data: [{ start: "2026-10-01", end: "2026-10-14", endingCents: 72500, lowestCents: 72500, availableCents: 72500 }],
+      }),
+      "GET /api/accounts/3/spending": () => ({
+        status: 200,
+        data: [{ start: "2026-10-01", end: "2026-10-14", outCents: 4200, categories: [{ categoryId: null, cents: 4200 }] }],
+      }),
+    });
     renderApp("/accounts/3");
 
     expect(await screen.findByRole("heading", { level: 1, name: "Harbor Visa" })).toBeInTheDocument();
@@ -167,8 +176,29 @@ describe("a card's page", () => {
     expect(statements[0]).toHaveTextContent("projected");
     expect(statements[0]).toHaveTextContent("Planned");
     expect(statements[1]).toHaveTextContent("Due Oct 15, 2026 · To pay");
+    // Statements entered are real numbers, drawn solid on the chart like balances entered.
+    const caption = await screen.findByText(/Solid: balances and statements you entered/);
+    // What is owed: the most it comes to is worth knowing, not its low point.
+    expect(caption).toHaveTextContent("The most it owes at the end of a pay period is $725.00, on Oct 14, 2026.");
+    expect(caption).not.toHaveTextContent("lowest point");
+    // What is charged to the card each pay period, in a card's words (Rachel, 2026-10-24: "it needs to be on THOSE too").
+    const charged = await screen.findByRole("region", { name: "Charged each pay period" });
+    expect(charged).toHaveTextContent("On average $42.00 was charged each pay period");
+    expect(charged).toHaveTextContent("payments toward it don't");
     // Far from its end, a promotion has no warning banner.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("draws the chart for a card with statements entered and no balance entered", async () => {
+    withCard({ ...CARD, account: { ...CARD.account, latestBalance: null } }, {
+      "GET /api/accounts/3/projection": () => ({
+        status: 200,
+        data: [{ start: "2026-10-01", end: "2026-10-14", endingCents: 72500, lowestCents: 72500, availableCents: 72500 }],
+      }),
+    });
+    renderApp("/accounts/3");
+
+    expect(await screen.findByRole("region", { name: "Where it's heading" })).toHaveTextContent("Solid: balances and statements you entered");
   });
 
   it("says quietly when a statement and the records differ, and opens what went in to fix it", async () => {
@@ -613,7 +643,7 @@ const PAYMENT: Item = (() => {
     perOccurrenceCents: 0,
     perYearCents: 0,
     next: { scheduledDate: "2026-10-15", dueDate: "2026-10-15", periodStart: "2026-10-15", early: false },
-    history: [{ versionId: 1, effectiveFrom: "2026-10-01", perOccurrenceCents: 0, perYearCents: 0 }],
+    history: [{ versionId: 1, effectiveFrom: "2026-10-01", perOccurrenceCents: 0, perYearCents: 0, categoryId: null }],
     paused: false,
     pausedUntil: null,
     fromBucketId: null,

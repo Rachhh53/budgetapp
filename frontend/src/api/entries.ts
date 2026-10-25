@@ -4,6 +4,7 @@ import { BUCKETS_KEY, type MoveOut } from "./buckets";
 import { CATEGORIES_KEY, TAGS_KEY } from "./categories";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
+import type { FlaggedPayment } from "./reimbursements";
 
 export const ENTRY_KINDS = ["money_out", "money_in", "transfer"] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
@@ -45,6 +46,8 @@ export interface EntryInput {
   reimbursementStatus?: ReimbursementStatus;
   /** Money coming in: the expense it pays back; `null` when it pays none back. */
   reimbursesEntryId: number | null;
+  /** Money coming in: the flagged recurring payment it pays back instead; `null` when it pays none back. */
+  reimbursesPaymentId: number | null;
 }
 
 /** Part of an entry set aside in, or paid out of, one bucket. */
@@ -66,6 +69,28 @@ export interface Reimbursement {
   reimbursedCents: number;
   /** How much is still to come, sent in or not. */
   owedCents: number;
+  /** What comes back: all of the expense unless less was set ("partials are possible"). */
+  amountCents: number;
+  /** The account it is planned to come back into; `null` when it is not planned. */
+  intoAccountId: number | null;
+  /** About when it is planned to come back; `null` when it is not planned. */
+  expectedOn: string | null;
+  /** The account it comes out of, like an FSA, so it is a transfer; `null` when it comes from outside. */
+  fromAccountId: number | null;
+}
+
+/** Where an expense stands on being paid back, and how the rest is planned to come back. */
+export interface ReimbursementInput {
+  status: ReimbursementStatus;
+  submittedOn: string | null;
+  to: string | null;
+  /** What comes back, no more than the expense. Left out, what was set before. */
+  amountCents?: number;
+  /** With `expectedOn`: where and about when it comes back. Both left out, as they were (or the usual plan). */
+  intoAccountId?: number;
+  expectedOn?: string;
+  /** With `intoAccountId`: the account it comes out of; `null` or left out, from outside. */
+  fromAccountId?: number | null;
 }
 
 /** One-off money in, money out or a transfer. */
@@ -86,6 +111,8 @@ export interface EntryDetail {
   reimburses: Entry | null;
   /** An expense: the money moved out of a bucket to pay it back, oldest first. */
   movesOut: MoveOut[];
+  /** Money coming in: the flagged recurring payment it pays back; `null` when it pays none back. */
+  reimbursesPayment: FlaggedPayment | null;
 }
 
 /** Names typed before, for the pickers that offer them again. */
@@ -117,6 +144,7 @@ export function toEntryInput(entry: Entry): EntryInput {
     tagIds: entry.tagIds,
     bucketSplits: entry.bucketSplits,
     reimbursesEntryId: entry.reimbursesEntryId,
+    reimbursesPaymentId: entry.reimbursesPaymentId,
   };
 }
 
@@ -193,8 +221,7 @@ export function useDeleteEntry(id: number) {
 export function useSetReimbursement(id: number) {
   const refresh = useRefreshEntries();
   return useMutation({
-    mutationFn: (input: { status: ReimbursementStatus; submittedOn: string | null; to: string | null }) =>
-      api.put<Entry>(`/api/entries/${id}/reimbursement`, input),
+    mutationFn: (input: ReimbursementInput) => api.put<Entry>(`/api/entries/${id}/reimbursement`, input),
     onSuccess: refresh,
   });
 }

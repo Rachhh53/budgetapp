@@ -253,6 +253,17 @@ class LedgerApiTest extends ApiTestBase {
         }
 
         @Test
+        void aBudgetIsTakenAsSpentOnItsDayAndNeverCarriedAsUnpaid() throws Exception {
+            // A balance entered after this period's groceries: a budget is never ticked, so it is already in that balance.
+            enterBalance(checking, "2026-10-05", 100000);
+
+            JsonNode period = period("2026-10-01");
+
+            assertThat(period.get("carriedOver").findValuesAsText("name")).doesNotContain("Groceries");
+            assertThat(period.get("occurrences").findValuesAsText("name")).contains("Groceries");
+        }
+
+        @Test
         void oneOccurrenceCanBePaidFromAnotherAccountJustThisOnce() throws Exception {
             long checkingOut = account(period("2026-10-01"), checking).get("outCents").asLong();
             long savingsOut = account(period("2026-10-01"), savings).get("outCents").asLong();

@@ -1,10 +1,11 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, PartyPopper, ReceiptText, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, HandCoins, PartyPopper, ReceiptText, TriangleAlert, X } from "lucide-react";
 import { EditName } from "../components/EditButton";
 import { clickRowToEdit, ROW_OPENS } from "../components/rowEdit";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Account, useAccounts } from "../api/accounts";
 import { type Bucket, type MoveOut, useBuckets } from "../api/buckets";
+import { moneyBackPath, useItemReimbursement } from "../api/reimbursements";
 import { type Category, type Tag, useCategories, useTags } from "../api/categories";
 import { type Entry, useEditEntry } from "../api/entries";
 import type { Unbilled } from "../api/invoices";
@@ -17,6 +18,7 @@ import {
   type AccountPeriod,
   type BucketPeriod,
   type InterestLine,
+  type MoneyBack,
   type Occurrence,
   type PeriodDetail,
   useEditOccurrence,
@@ -34,6 +36,8 @@ import { GoToDate } from "../components/period/GoToDate";
 import { foundEntry, foundOccurrence } from "../api/search";
 import { OneOffPaycheckOpener } from "../components/income/OneOffPaychecksCard";
 import { PackDateForm } from "../components/items/PackForms";
+import { Modal } from "../components/Modal";
+import { PaidBackPanel } from "../components/reimbursements/PaidBackPanel";
 import { PrepaymentForm } from "../components/items/PrepaymentForm";
 import { InvoiceForm } from "../components/period/InvoiceForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
@@ -268,6 +272,8 @@ export function PayPeriodPage() {
             moneyIn={lists.moneyIn}
             interest={detail.interest.filter((line) => !context.isInvestment(line.accountId))}
             movesOut={detail.movesOut ?? []}
+            moneyBack={detail.moneyBack ?? []}
+            start={detail.start}
             context={context}
           />
           {/* On a phone, what needs doing by hand comes first (design/phone-pay-period.png). */}
@@ -984,12 +990,17 @@ function IncomePanel({
   moneyIn,
   interest,
   movesOut,
+  moneyBack,
+  start,
   context,
 }: {
   paychecks: readonly Paycheck[];
   moneyIn: readonly Entry[];
   interest: readonly InterestLine[];
   movesOut: readonly MoveOut[];
+  moneyBack: readonly MoneyBack[];
+  /** The period's first day: money due back before it is late. */
+  start: string;
   context: RowContext;
 }) {
   // Which paycheck's own form is open, by its key: a regular one by the date its schedule names, a one-off by its own id.
@@ -998,7 +1009,7 @@ function IncomePanel({
   const { moveOut } = useAddItem();
   return (
     <Panel title="Income">
-      {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 && movesOut.length === 0 ? (
+      {paychecks.length === 0 && moneyIn.length === 0 && interest.length === 0 && movesOut.length === 0 && moneyBack.length === 0 ? (
         <Empty>Nothing is coming in this period.</Empty>
       ) : (
         <ul className="divide-y divide-line">
@@ -1044,6 +1055,30 @@ function IncomePanel({
               amount={<Amount cents={move.amountCents} className="w-28 font-semibold" />}
             />
           ))}
+          {/* What is still owed back on a payment, pack or expense: planned, so an estimate, until the money is recorded
+              on its page. */}
+          {moneyBack.map((back) => {
+            const opens = moneyBackPath(back.source);
+            const title = `Paid back: ${back.name}`;
+            return (
+              <Row
+                key={`paid-back-${back.source.entryId ?? ""}-${back.source.itemId ?? ""}-${back.source.scheduledDate ?? back.source.dueDate ?? ""}`}
+                title={
+                  opens === undefined ? (
+                    title
+                  ) : (
+                    <Link to={opens} className="font-medium text-accent-ink underline">
+                      {title}
+                    </Link>
+                  )
+                }
+                detail={`${back.expectedOn < start ? `Late, due back ${formatDay(back.expectedOn)}` : formatDay(back.expectedOn)} → ${context.accountName(back.intoAccountId)}${
+                  back.fromAccountId === null ? "" : `, out of ${context.accountName(back.fromAccountId)}`
+                }`}
+                amount={<Amount cents={back.owedCents} estimate className="w-28 font-semibold" />}
+              />
+            );
+          })}
         </ul>
       )}
       {opened && opened.oneOffId !== null && (
@@ -1411,6 +1446,10 @@ function RunningOutRow({ item, context }: { item: RunningOut; context: RowContex
 function PlannedPackRow({ pack, context }: { pack: Occurrence; context: RowContext }) {
   const [paying, setPaying] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [payingBack, setPayingBack] = useState(false);
+  // Flagged to be paid back (Rachel, 2026-10-25: the expense was planned "but there is no way to plan for the
+  // reimbursement in that account as well").
+  const flagged = useItemReimbursement(pack.itemId).data?.packs.find((one) => one.plannedDate === pack.scheduledDate);
   const late = pack.dueDate < todayIso();
   const covers = pack.coversThrough ? ` · covers sessions through ${formatDay(pack.coversThrough)}` : "";
   return (
@@ -1446,9 +1485,27 @@ function PlannedPackRow({ pack, context }: { pack: Occurrence; context: RowConte
             >
               Change date
             </button>
+            <button
+              type="button"
+              onClick={() => setPayingBack(true)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-semibold lg:min-h-9"
+            >
+              {flagged ? (
+                <>
+                  Paid back · <span data-amount>{formatCents(flagged.amountCents)}</span>
+                </>
+              ) : (
+                "Paid back?"
+              )}
+            </button>
           </span>
         }
       />
+      {payingBack && (
+        <Modal title={`Paid back: ${pack.name}`} icon={HandCoins} onClose={() => setPayingBack(false)}>
+          <PaidBackPanel occurrence={pack} onBack={() => setPayingBack(false)} />
+        </Modal>
+      )}
       {paying && (
         <PrepaymentForm
           itemId={pack.itemId}

@@ -39,10 +39,14 @@ import app.budget.server.buckets.BucketsRepository.Bucket;
 import app.budget.server.cards.CardsRepository;
 import app.budget.server.entries.EntriesRepository;
 import app.budget.server.entries.EntriesRepository.Entry;
+import app.budget.server.entries.EntriesRepository.Repayment;
 import app.budget.server.entries.EntryKind;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.income.PayCalendar.Paycheck;
 import app.budget.server.items.ItemCalendar;
+import app.budget.server.items.ReimbursementViews;
+import app.budget.server.items.ReimbursementViews.PackView;
+import app.budget.server.items.ReimbursementViews.PaymentView;
 import app.budget.server.items.ItemCalendar.Occurrence;
 import app.budget.server.items.ItemKind;
 import app.budget.server.items.ItemsRepository;
@@ -87,6 +91,8 @@ public final class Ledger {
     private static final String GROWTH_KIND = "growth";
     private static final String BALANCE_LABEL = "Balance you entered";
     private static final String ONE_OFF_LABEL = "One-off entry";
+    /** Money planned to come back for a recurring payment flagged to be paid back (Rachel, 2026-10-24). */
+    public static final String PAID_BACK_KIND = "paid_back";
 
     /** What a transaction's {@code kind} says for the amounts worked out for a credit card or a loan. */
     public static final String CARD_INTEREST_KIND = "card_interest";
@@ -119,6 +125,7 @@ public final class Ledger {
     private final InterestRepository interest;
     private final CardsRepository cards;
     private final LoansRepository loans;
+    private final ReimbursementViews reimbursements;
 
     public Ledger(
             AccountsRepository accounts,
@@ -129,7 +136,9 @@ public final class Ledger {
             BucketsRepository buckets,
             InterestRepository interest,
             CardsRepository cards,
-            LoansRepository loans) {
+            LoansRepository loans,
+            ReimbursementViews reimbursements) {
+        this.reimbursements = reimbursements;
         this.accounts = accounts;
         this.entries = entries;
         this.items = items;
@@ -280,7 +289,23 @@ public final class Ledger {
             List<StatementPaid> statementsPaid,
             List<Unbilled> unbilled,
             List<RunningOut> paidAheadRunningOut,
-            List<BucketsRepository.MoveOut> movesOut) {}
+            List<BucketsRepository.MoveOut> movesOut,
+            List<MoneyBack> moneyBack) {}
+
+    /**
+     * Money planned to come back (Rachel, 2026-10-24/25): for a flagged recurring payment, a planned pack paid ahead flagged
+     * to be paid back, or a one-off expense marked to be paid back. It counts in the account it comes back into on the day
+     * it is planned, and like a bill not marked paid it is outstanding: late, it still counts.
+     *
+     * @param name          what was paid, to name the line
+     * @param owedCents     what is still to come back
+     * @param fromAccountId the account it comes out of, like an FSA, so it is a transfer between the two; {@code null}
+     *                      when it comes from outside (Rachel, 2026-10-25: "take it out of the fsa")
+     * @param source        what to open to change it: a {@code paid_back} source naming the expense ({@code entryId}), the
+     *                      payment ({@code itemId} and {@code scheduledDate}) or the pack ({@code itemId} and the pack's
+     *                      {@code dueDate} only)
+     */
+    public record MoneyBack(String name, LocalDate expectedOn, long intoAccountId, long owedCents, Long fromAccountId, Source source) {}
 
     /**
      * Visits of something billed later that have built up with no invoice yet.
@@ -344,6 +369,11 @@ public final class Ledger {
                 })
                 .toList();
         return new Periods(found.primarySourceId(), primaryAccountId, summaries);
+    }
+
+    /** Today, as the pay calendar sees it: a balance dated after it is planned, not entered yet. */
+    public LocalDate today() {
+        return pay.today();
     }
 
     /** The pay period that opens on {@code start}; empty when no period starts that day. */
@@ -427,7 +457,53 @@ public final class Ledger {
                         .toList(),
                 period.current() ? unbilled(pay.today()) : List.of(),
                 runningOut(period),
-                buckets.movesOut(period.start(), period.end())));
+                buckets.movesOut(period.start(), period.end()),
+                moneyBack(period)));
+    }
+
+    /**
+     * Flagged payments whose money is planned to come back in {@code period}; in the current one, also any that were due back
+     * before it and have not all come yet, as the projection counts them.
+     */
+    /** What a one-off is called on a line: its description, or else its payee. */
+    private static String entryLabel(Entry entry) {
+        return entry.description() != null && !entry.description().isBlank()
+                ? entry.description()
+                : entry.payee() != null && !entry.payee().isBlank() ? entry.payee() : ONE_OFF_LABEL;
+    }
+
+    private List<MoneyBack> moneyBack(PayCalendar.Period period) {
+        return plannedBack().stream()
+                .filter(back -> within(back.expectedOn(), period.start(), period.end())
+                        || period.current() && back.expectedOn().isBefore(period.start()))
+                .toList();
+    }
+
+    /**
+     * Everything with money still planned to come back, and somewhere to come back into, by the day it is planned: flagged
+     * payments not skipped, flagged packs still to buy, and one-off expenses being paid back.
+     */
+    private List<MoneyBack> plannedBack() {
+        List<MoneyBack> all = new ArrayList<>();
+        for (PaymentView payment : reimbursements.all()) {
+            if (!payment.skipped() && payment.expectedOn() != null && payment.reimbursement().owedCents() > 0) {
+                all.add(new MoneyBack(payment.name(), payment.expectedOn(), payment.intoAccountId(),
+                        payment.reimbursement().owedCents(), payment.fromAccountId(), Source.paidBack(payment)));
+            }
+        }
+        for (PackView pack : reimbursements.packs()) {
+            all.add(new MoneyBack(pack.name(), pack.expectedOn(), pack.intoAccountId(), pack.amountCents(), pack.fromAccountId(),
+                    Source.paidBack(pack)));
+        }
+        for (Entry expense : entries.plannedBack()) {
+            Repayment back = expense.reimbursement();
+            if (back.owedCents() > 0) {
+                all.add(new MoneyBack(entryLabel(expense), back.expectedOn(), back.intoAccountId(), back.owedCents(),
+                        back.fromAccountId(), Source.paidBack(expense)));
+            }
+        }
+        all.sort(Comparator.comparing(MoneyBack::expectedOn).thenComparing(MoneyBack::name, String.CASE_INSENSITIVE_ORDER));
+        return all;
     }
 
     /**
@@ -649,30 +725,48 @@ public final class Ledger {
      * statement or balance needs (Rachel, 2026-10-21: "so I could adjust or add/delete things if I wanted to
      * reconcile").
      *
-     * @param type           {@code entry} (a one-off), {@code occurrence} (one date of a recurring item) or
-     *                       {@code paycheck}
+     * @param type           {@code entry} (a one-off), {@code occurrence} (one date of a recurring item),
+     *                       {@code paycheck} or {@code paid_back} (money planned to come back for a flagged payment)
      * @param entryId        the one-off's id
      * @param itemId         the recurring item's or the income source's id
      * @param scheduledDate  the date the item's or paycheck's schedule names
      * @param dueDate        an occurrence's due date, which its row in the pay period is found by
      * @param periodStart    the pay period it is listed in; {@code null} until the list is made
+     * @param categoryId     the one-off's or the occurrence's category; {@code null} for none, and for a paycheck
      */
-    public record Source(String type, Long entryId, Long itemId, LocalDate scheduledDate, LocalDate dueDate, LocalDate periodStart) {
+    public record Source(
+            String type, Long entryId, Long itemId, LocalDate scheduledDate, LocalDate dueDate, LocalDate periodStart, Long categoryId) {
 
-        static Source entry(long id) {
-            return new Source("entry", id, null, null, null, null);
+        static Source entry(Entry entry) {
+            return new Source("entry", entry.id(), null, null, null, null, entry.categoryId());
         }
 
         static Source occurrence(Occurrence occurrence) {
-            return new Source("occurrence", null, occurrence.itemId(), occurrence.scheduledDate(), occurrence.dueDate(), null);
+            return new Source(
+                    "occurrence", null, occurrence.itemId(), occurrence.scheduledDate(), occurrence.dueDate(), null, occurrence.categoryId());
+        }
+
+        /** Money planned to come back for a flagged payment: found by the payment's item and scheduled date. */
+        static Source paidBack(PaymentView payment) {
+            return new Source("paid_back", null, payment.itemId(), payment.scheduledDate(), null, null, null);
+        }
+
+        /** Money planned to come back for a planned pack: found by its item, and its due day to find its row. */
+        static Source paidBack(PackView pack) {
+            return new Source("paid_back", null, pack.itemId(), null, pack.dueDate(), null, null);
+        }
+
+        /** Money planned to come back for a one-off expense: found by the expense. */
+        static Source paidBack(Entry expense) {
+            return new Source("paid_back", expense.id(), null, null, null, null, null);
         }
 
         static Source paycheck(long sourceId, LocalDate scheduledDate) {
-            return new Source("paycheck", null, sourceId, scheduledDate, null, null);
+            return new Source("paycheck", null, sourceId, scheduledDate, null, null, null);
         }
 
         Source in(LocalDate start) {
-            return new Source(type, entryId, itemId, scheduledDate, dueDate, start);
+            return new Source(type, entryId, itemId, scheduledDate, dueDate, start, categoryId);
         }
     }
 
@@ -823,7 +917,8 @@ public final class Ledger {
      */
     public Performance performance(Account account) {
         LocalDate today = pay.today();
-        List<BalanceEntry> entered = accounts.balances(account.id()).reversed();
+        // Only balances entered so far: one planned for a day still to come says nothing about how it has done.
+        List<BalanceEntry> entered = accounts.balances(account.id()).reversed().stream().filter(entry -> !entry.date().isAfter(today)).toList();
         LocalDate yearStart = today.withDayOfYear(1);
         LocalDate earliest = entered.isEmpty() || entered.getFirst().date().isAfter(yearStart) ? yearStart : entered.getFirst().date();
         Workings workings = workings(List.of(new PayPeriod(earliest, today, earliest)));
@@ -1014,6 +1109,52 @@ public final class Ledger {
     /** One account at the end of each pay period overlapping {@code from}–{@code through}; empty until it has a balance. */
     public List<AccountPoint> accountSeries(Account account, LocalDate from, LocalDate through) {
         return points(workings(pay.payPeriods(from, through)), account);
+    }
+
+    /** What one category came to in a pay period; {@code categoryId} is {@code null} for what has none. */
+    public record CategoryCents(Long categoryId, long cents) {}
+
+    /**
+     * Everything that left a checking or savings account in one pay period (Rachel, 2026-10-24: "an average spend line on the
+     * graph", split by category): bills, budgets, one-offs, card payments and transfers out alike, biggest category first.
+     * On a credit card it is everything charged to it ("it needs to be on THOSE too"): spending, bills it pays, its monthly
+     * estimate and interest; a payment to the card or rewards coming off are not spending. Before today it is what happened,
+     * as the account's transactions list it; after, what is scheduled.
+     */
+    public record PeriodSpending(LocalDate start, LocalDate end, long outCents, List<CategoryCents> categories) {}
+
+    /**
+     * What went out of {@code account} in each pay period overlapping {@code from}–{@code through}, from the same lines as its
+     * Transactions, so the two always agree. Empty for a loan or investment: what "going out" means there is another thing.
+     */
+    public List<PeriodSpending> spending(Account account, LocalDate from, LocalDate through) {
+        boolean card = Inputs.code(AccountType.CREDIT_CARD).equals(account.type());
+        if (!AccountType.holdsCash(account) && !card) {
+            return List.of();
+        }
+        // On a card what is charged raises what is owed, so its lines are positive; elsewhere money out is negative.
+        int outward = card ? 1 : -1;
+        List<PayPeriod> periods = pay.payPeriods(from, through);
+        List<Transaction> lines = workings(periods).lines().getOrDefault(account.id(), List.of());
+        List<PeriodSpending> found = new ArrayList<>();
+        for (PayPeriod period : periods) {
+            // A HashMap, as what has no category is kept under a null key.
+            Map<Long, Long> byCategory = new HashMap<>();
+            long out = 0;
+            for (Transaction line : lines) {
+                long cents = outward * line.amountCents();
+                if (cents > 0 && within(line.date(), period.start(), period.end())) {
+                    byCategory.merge(line.source() == null ? null : line.source().categoryId(), cents, Long::sum);
+                    out += cents;
+                }
+            }
+            List<CategoryCents> categories = byCategory.entrySet().stream()
+                    .map(category -> new CategoryCents(category.getKey(), category.getValue()))
+                    .sorted(Comparator.comparingLong(CategoryCents::cents).reversed())
+                    .toList();
+            found.add(new PeriodSpending(period.start(), period.end(), out, categories));
+        }
+        return found;
     }
 
     private static List<AccountPoint> points(Workings workings, Account account) {
@@ -1220,8 +1361,14 @@ public final class Ledger {
         }
 
         Map<Long, StillToPay> stillToPay = new HashMap<>();
+        LocalDate today = pay.today();
         entered.forEach((accountId, forAccount) -> {
-            LocalDate newest = forAccount.getLast().date();
+            // A balance planned for a day still to come settles nothing yet: bills before it are still to pay.
+            Optional<BalanceEntry> newestSoFar = forAccount.stream().filter(entry -> !entry.date().isAfter(today)).reduce((earlier, later) -> later);
+            if (newestSoFar.isEmpty()) {
+                return;
+            }
+            LocalDate newest = newestSoFar.get().date();
             LocalDate currentPeriod = pay.payPeriods(newest, newest).stream()
                     .filter(period -> period.contains(newest))
                     .map(PayPeriod::start)
@@ -1306,14 +1453,26 @@ public final class Ledger {
 
         List<Entry> oneOffs = entries.between(from, last);
         for (Entry entry : oneOffs) {
-            String label = entry.description() != null && !entry.description().isBlank()
-                    ? entry.description()
-                    : entry.payee() != null && !entry.payee().isBlank() ? entry.payee() : ONE_OFF_LABEL;
+            String label = entryLabel(entry);
             add(movements, lines, types, entry.accountId(), entry.date(), entry.amountCents(), entry.kind() == EntryKind.MONEY_IN, false,
-                    label, Inputs.code(entry.kind()), Source.entry(entry.id()));
+                    label, Inputs.code(entry.kind()), Source.entry(entry));
             if (entry.toAccountId() != null) {
                 add(movements, lines, types, entry.toAccountId(), entry.date(), entry.amountCents(), true, false,
-                        label, Inputs.code(entry.kind()), Source.entry(entry.id()));
+                        label, Inputs.code(entry.kind()), Source.entry(entry));
+            }
+        }
+
+        // What is still owed back on each payment, pack or expense being paid back comes in on the day it is planned. Like a
+        // bill not marked paid it is outstanding: late, it still counts, from the newest balance entered (Rachel, 2026-10-24).
+        for (MoneyBack back : plannedBack()) {
+            if (types.containsKey(back.intoAccountId()) && !back.expectedOn().isAfter(last)) {
+                add(movements, lines, types, back.intoAccountId(), back.expectedOn(), back.owedCents(), true, true,
+                        "Paid back: " + back.name(), PAID_BACK_KIND, back.source());
+            }
+            // Out of one of her own accounts it is a transfer: it leaves that one the same day.
+            if (back.fromAccountId() != null && types.containsKey(back.fromAccountId()) && !back.expectedOn().isAfter(last)) {
+                add(movements, lines, types, back.fromAccountId(), back.expectedOn(), back.owedCents(), false, true,
+                        "Pays back: " + back.name(), PAID_BACK_KIND, back.source());
             }
         }
 
@@ -1670,10 +1829,12 @@ public final class Ledger {
      * after the day it counts on. That is so when it is paid by hand, has not been ticked as
      * paid, and either is not due yet or belongs to the pay period the balance was entered
      * in — the unticked bills of the list being worked through. Anything older is taken as
-     * paid, so nobody has to tick off months of history before the numbers make sense.
+     * paid, so nobody has to tick off months of history before the numbers make sense. A budget is never ticked as paid,
+     * so like autopay it is taken as spent on its day (Rachel, 2026-10-25: budgets were listed as still unpaid under Pay
+     * manually).
      */
     private static boolean outstanding(Occurrence occurrence, StillToPay account) {
-        if (account == null || occurrence.autopay() || occurrence.paid()) {
+        if (account == null || occurrence.autopay() || occurrence.paid() || occurrence.kind() == ItemKind.BUDGET) {
             return false;
         }
         return !occurrence.dueDate().isBefore(account.newestEntered())

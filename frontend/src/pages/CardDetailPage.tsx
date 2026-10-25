@@ -222,9 +222,21 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
           </div>
         </Card>
 
-        {account.latestBalance && points.length > 0 && (
+        {/* As on every account's page, also for a card with no balance entered yet, once a statement is entered or money
+            moves through it (Rachel, 2026-10-24: "one of my cards has no graph? even though I have a balance entered and
+            payments going to it"). */}
+        {(account.latestBalance !== null || statements.some((statement) => statement.entered) || points.some((point) => point.endingCents !== 0)) &&
+          points.length > 0 && (
           <Card title="Where it's heading">
-            <ProjectionChart account={account} balances={asAccount.balances} points={points} showAvailable={false} />
+            <ProjectionChart
+              account={account}
+              balances={asAccount.balances}
+              points={points}
+              showAvailable={false}
+              // What is charged each pay period, by category (Rachel, 2026-10-24: "it needs to be on THOSE too").
+              showSpending
+              statements={statements.filter((statement) => statement.entered)}
+            />
           </Card>
         )}
 

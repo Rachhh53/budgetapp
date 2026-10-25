@@ -168,13 +168,31 @@ class AccountsApiTest extends ApiTestBase {
         }
 
         @Test
-        void aBalanceCannotBeFromTheFuture() throws Exception {
-            long id = createAccount("Everyday Checking", "checking");
+        void aBalanceForADayToComeIsPlannedNotTheBalanceYet() throws Exception {
+            long id = createAccount("Health FSA", "savings");
+            server.post("/api/accounts/" + id + "/balances", "{\"date\":\"2026-09-30\",\"amountCents\":10000}", cookie);
 
-            Reply reply = server.post("/api/accounts/" + id + "/balances", "{\"date\":\"2026-10-02\",\"amountCents\":100}", cookie);
+            Reply planned = server.post("/api/accounts/" + id + "/balances", "{\"date\":\"2027-01-01\",\"amountCents\":300000}", cookie);
+
+            // Saved and listed, but until Jan 1 the account still holds what was last entered.
+            assertThat(planned.status()).isEqualTo(201);
+            assertThat(planned.data().get("account").get("latestBalance").get("amountCents").asLong()).isEqualTo(10000);
+            assertThat(planned.data().get("balances").size()).isEqualTo(2);
+            // The projection takes it as the balance on its day.
+            var points = server.get("/api/accounts/" + id + "/projection?from=2026-12-01&to=2027-02-28", cookie).data();
+            for (var point : points) {
+                boolean after = !point.get("end").asText().startsWith("2026");
+                assertThat(point.get("endingCents").asLong()).as(point.toString()).isEqualTo(after ? 300000 : 10000);
+            }
+        }
+
+        @Test
+        void aPlannedBalanceStillNeedsASupportedYear() throws Exception {
+            long id = createAccount("Health FSA", "savings");
+
+            Reply reply = server.post("/api/accounts/" + id + "/balances", "{\"date\":\"2101-01-01\",\"amountCents\":100}", cookie);
 
             assertThat(reply.status()).isEqualTo(400);
-            assertThat(reply.error()).contains("today or earlier");
         }
 
         @Test

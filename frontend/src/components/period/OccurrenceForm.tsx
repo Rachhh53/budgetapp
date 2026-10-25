@@ -1,12 +1,15 @@
-import { Paperclip } from "lucide-react";
+import { HandCoins, Paperclip } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { Link } from "react-router";
 import { useAccounts } from "../../api/accounts";
 import { type AttachmentOwner, useAttachments } from "../../api/attachments";
+import { REIMBURSEMENT_LABELS } from "../../api/entries";
 import { type Occurrence, type OccurrenceEdit, useEditOccurrence } from "../../api/periods";
+import { useItemReimbursement } from "../../api/reimbursements";
 import { formatDay, todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { Receipts } from "../files/Receipts";
+import { PaidBackPanel } from "../reimbursements/PaidBackPanel";
 import { KIND_ICONS } from "../items/labels";
 import { Modal } from "../Modal";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
@@ -64,6 +67,12 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
   const owner: AttachmentOwner = { type: "occurrence", itemId: occurrence.itemId, scheduledDate: occurrence.scheduledDate };
   const attached = useAttachments(owner);
   const [showingFiles, setShowingFiles] = useState(false);
+  // A bill or budget paid out to someone can be paid back, this one time it comes due (Rachel, 2026-10-24). An invoice or a
+  // planned pack is not a date of the schedule, so it has no flag of its own.
+  const canBePaidBack = (occurrence.kind === "bill" || occurrence.kind === "budget") && occurrence.invoiceId == null && !occurrence.plannedPack;
+  const reimbursement = useItemReimbursement(occurrence.itemId, canBePaidBack);
+  const flagged = reimbursement.data?.payments.find((payment) => payment.scheduledDate === occurrence.scheduledDate);
+  const [showingPaidBack, setShowingPaidBack] = useState(false);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -127,7 +136,11 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
   const fileCount = attached.data?.attachments.length ?? 0;
 
   return (
-    <Modal title={showingFiles ? `Receipts for ${occurrence.name}` : `Edit ${occurrence.name}`} icon={KIND_ICONS[occurrence.kind]} onClose={onClose}>
+    <Modal
+      title={showingFiles ? `Receipts for ${occurrence.name}` : showingPaidBack ? `Paid back — ${occurrence.name}` : `Edit ${occurrence.name}`}
+      icon={showingPaidBack ? HandCoins : KIND_ICONS[occurrence.kind]}
+      onClose={onClose}
+    >
       {/* The receipts take the form's place rather than opening over it, so there is one dialog and it
           still fits the screen. What was typed in the form waits, unsaved, until Back. */}
       {showingFiles && (
@@ -141,7 +154,8 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
           </div>
         </div>
       )}
-      <form onSubmit={submit} hidden={showingFiles} className="space-y-4">
+      {showingPaidBack && <PaidBackPanel occurrence={occurrence} onBack={() => setShowingPaidBack(false)} />}
+      <form onSubmit={submit} hidden={showingFiles || showingPaidBack} className="space-y-4">
         <p className="text-muted">
           {occurrence.coversThrough
             ? `The invoice for visits through ${formatDay(occurrence.coversThrough)}, due ${formatDay(occurrence.dueDate)}.`
@@ -247,14 +261,26 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
             </Link>
             <span className="block text-sm text-muted">Its name, schedule, accounts, or its amount from now on.</span>
           </p>
-          <button
-            type="button"
-            onClick={() => setShowingFiles(true)}
-            className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg border border-line bg-surface px-3 font-semibold"
-          >
-            <Paperclip aria-hidden className="size-4" />
-            {fileCount === 0 ? "Add a receipt" : fileCount === 1 ? "1 receipt" : `${fileCount} receipts`}
-          </button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {canBePaidBack && (
+              <button
+                type="button"
+                onClick={() => setShowingPaidBack(true)}
+                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 font-semibold"
+              >
+                <HandCoins aria-hidden className="size-4" />
+                {flagged ? `Paid back · ${REIMBURSEMENT_LABELS[flagged.reimbursement.status]}` : "Paid back?"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowingFiles(true)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface px-3 font-semibold"
+            >
+              <Paperclip aria-hidden className="size-4" />
+              {fileCount === 0 ? "Add a receipt" : fileCount === 1 ? "1 receipt" : `${fileCount} receipts`}
+            </button>
+          </div>
         </div>
 
         {failure && (

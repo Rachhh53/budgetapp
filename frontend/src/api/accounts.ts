@@ -177,6 +177,32 @@ export function useAccountProjectionBetween(id: number, dates: { from: string; t
   });
 }
 
+/** What one category came to in a pay period; `categoryId` is `null` for what has none. */
+export interface CategoryCents {
+  categoryId: number | null;
+  cents: number;
+}
+
+/** Everything that left a checking or savings account in one pay period, biggest category first. */
+export interface PeriodSpending {
+  start: string;
+  end: string;
+  outCents: number;
+  categories: CategoryCents[];
+}
+
+/**
+ * What went out of an account each pay period overlapping two dates, by category: the bars under its chart. Empty for a
+ * card, loan or investment. Under PAY_KEY: anything that moves money changes it.
+ */
+export function useAccountSpending(id: number, dates: { from: string; to: string }) {
+  return useQuery({
+    queryKey: [...PAY_KEY, "spending", id, dates.from, dates.to],
+    queryFn: () => api.get<PeriodSpending[]>(`/api/accounts/${id}/spending?from=${dates.from}&to=${dates.to}`),
+    placeholderData: keepPreviousData,
+  });
+}
+
 /** This year so far, and each entered balance against the one before. Under PAY_KEY: anything that moves money changes it. */
 export function useAccountPerformance(id: number) {
   return useQuery({

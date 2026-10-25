@@ -1,4 +1,4 @@
-import { CalendarClock } from "lucide-react";
+import { CalendarClock, ChevronRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { type Account, holdsCash } from "../../api/accounts";
@@ -307,6 +307,15 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const [kind, setKind] = useState<ItemKind>(item?.kind ?? starting?.kind ?? "bill");
   const [name, setName] = useState(item?.name ?? starting?.name ?? "");
   const [categoryId, setCategoryId] = useState<number | null>(item?.categoryId ?? null);
+  // A new category reaches back over the item's whole history when asked (Rachel, 2026-10-25: "retroactively").
+  const [categoryEveryDate, setCategoryEveryDate] = useState(false);
+  // Offered for a new category, and also when earlier dates still have another one: a category already changed from a
+  // date can be made the whole history's afterwards (Rachel, 2026-10-25: "I now don't have the option ... because it's
+  // not a change").
+  const categoryChanged =
+    item !== undefined &&
+    item !== null &&
+    (categoryId !== item.categoryId || item.history.some((point) => point.categoryId !== categoryId));
   const [payFrom, setPayFrom] = useState<string | null>(item ? String(item.payFromAccountId) : null);
   const [payTo, setPayTo] = useState<string | null>(
     item?.payToAccountId != null ? String(item.payToAccountId) : starting ? String(starting.payToAccountId) : null,
@@ -349,6 +358,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   );
   // Something once, or yearly, already happens in one month: there is nothing to choose.
   const offersMonths = frequency !== "one_time" && frequency !== "yearly";
+  // Whether the months open shown: only for something already seasonal. Fixed when the form opens, so ticking every
+  // month back on doesn't fold them away mid-change.
+  const [monthsShown] = useState(seasonMonths.length < EVERY_MONTH.length);
   // `null` until chosen: a new item then starts where its kind of schedule usually does (see `startsOn`).
   const [chosenStart, setChosenStart] = useState<string | null>(schedule?.startDate ?? null);
   // The last day it can happen, if it stops (Rachel, 2026-10-20: "how do I plan for a recurring payment to end on a
@@ -356,6 +368,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const [endsOn, setEndsOn] = useState(schedule?.endDate ?? "");
   const [daysAfterPayday, setDaysAfterPayday] = useState(item?.daysAfterPayday ?? 0);
   const [autopay, setAutopay] = useState(item?.autopay ?? false);
+  const [countsFromPaid, setCountsFromPaid] = useState(item?.countsFromPaid ?? false);
+  const [fromLastYear, setFromLastYear] = useState(item?.fromLastYear ?? false);
   const [placement, setPlacement] = useState<Placement>(item?.placement ?? "due_period");
   const [tagIds, setTagIds] = useState<number[]>(item?.tagIds ?? []);
   const [note, setNote] = useState(item?.note ?? "");
@@ -450,6 +464,16 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
   const startWeekday = /^\d{4}-\d{2}-\d{2}$/.test(startsOn) ? isoWeekday(startsOn) : null;
   const shownWeekdays: readonly number[] =
     chosenWeekdays.length > 0 ? chosenWeekdays : startWeekday !== null ? [startWeekday] : [];
+  // Counting the next date from the day it was paid (Rachel, 2026-10-24: "if it's every 6 weeks, it should adjust upcoming
+  // payments to 6 weeks after the latest one") needs a steady step: every so many weeks on one day, months or years.
+  // Not something whose dates aren't payments (visits billed later, sessions paid ahead, uses) or that pays nobody.
+  // Estimating what is still to come from the same month a year before (Rachel, 2026-10-24: "use last years amounts as a
+  // setting"), for a bill or budget whose dates are payments: not visits billed later, sessions or uses.
+  const offersLastYear = (kind === "bill" || kind === "budget") && !perSession;
+  const canCountFromPaid =
+    !isBucketMove &&
+    !(kind === "bill" && (byUse || paidAhead || billedLater)) &&
+    ((onDays && shownWeekdays.length <= 1) || frequency === "monthly" || frequency === "every_n_months" || frequency === "yearly");
 
   // A pack's price spread over its sessions, and how long one lasts at the dates on the Schedule (Rachel, 2026-10-20:
   // "if I pay 1275 for a 20 pack, you never asked me how often I use a session").
@@ -609,6 +633,8 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
       archived,
       archivedOn,
       tagIds,
+      countsFromPaid: canCountFromPaid && countsFromPaid,
+      fromLastYear: offersLastYear && fromLastYear,
       amountCents,
       // Something billed later or paid ahead is added up session by session, so it is always an amount each time.
       amountMode: followsCard || perSession ? "per_occurrence" : amountMode,
@@ -649,7 +675,7 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
       fromBucketId: payingBuckets.length > 0 && comesFrom !== NOT_IN_A_BUCKET ? Number(comesFrom) : null,
       // A change takes effect from the day chosen with the amount (today when not changed); the backend reaches
       // further back only for an earlier start.
-      ...(item ? { effectiveFrom: changesFrom } : {}),
+      ...(item ? { effectiveFrom: changesFrom, categoryEveryDate: categoryChanged && categoryEveryDate } : {}),
     };
   };
 
@@ -817,17 +843,34 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                       />
                     </div>
                   )}
-                  {!(kind === "bill" && byUse) && (
-                    <label className="flex min-h-11 items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={estimate}
-                        onChange={(event) => setEstimate(event.target.checked)}
-                        className="size-5 accent-(--accent)"
-                      />
-                      <span>It's an estimate</span>
-                    </label>
-                  )}
+                  {/* The two side by side, on a phone too, so the amount's screen still fits one screen there. */}
+                  <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 sm:col-span-2">
+                    {!(kind === "bill" && byUse) && (
+                      <label className="flex min-h-11 items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={estimate}
+                          onChange={(event) => setEstimate(event.target.checked)}
+                          className="size-5 accent-(--accent)"
+                        />
+                        <span>It's an estimate</span>
+                      </label>
+                    )}
+                    {offersLastYear && (
+                      <span className="flex items-center gap-1">
+                        <label className="flex min-h-11 items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={fromLastYear}
+                            onChange={(event) => setFromLastYear(event.target.checked)}
+                            className="size-5 shrink-0 accent-(--accent)"
+                          />
+                          <span>Last year's amounts</span>
+                        </label>
+                        <InfoTip term="fromLastYear" />
+                      </span>
+                    )}
+                  </div>
                 </div>
               </>
             )}
@@ -854,6 +897,17 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
               </div>
             )}
             {shows("details") && <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />}
+            {shows("details") && categoryChanged && (
+              <label className="flex min-h-11 items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={categoryEveryDate}
+                  onChange={(event) => setCategoryEveryDate(event.target.checked)}
+                  className="size-5 shrink-0 accent-(--accent)"
+                />
+                <span>Also change every earlier date</span>
+              </label>
+            )}
           </FormSection>
         )}
 
@@ -979,6 +1033,22 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
                 </div>
                 )}
               </div>
+            )}
+            {/* With how it's paid, not on the schedule: it is about when it was paid, and the schedule's screen is full.
+                A row of its own, as beside "Changes from" its words would be squeezed into a narrow column. */}
+            {asksHowPaid && canCountFromPaid && (
+              <span className="flex items-center gap-2">
+                <label className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={countsFromPaid}
+                    onChange={(event) => setCountsFromPaid(event.target.checked)}
+                    className="size-5 shrink-0 accent-(--accent)"
+                  />
+                  <span>Count the next one from the day it's paid</span>
+                </label>
+                <InfoTip term="countsFromPaid" />
+              </span>
             )}
           </FormSection>
         )}
@@ -1160,25 +1230,36 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
               </div>
             )}
 
+
             {offersMonths && (
-              <ChipToggles
-                legend={kind === "bill" && byUse ? "Can happen in" : "Runs in"}
-                options={MONTH_CHIPS}
-                chosen={seasonMonths}
-                onChange={setSeasonMonths}
-                grid="grid-cols-6 sm:grid-cols-12"
-                hint={
-                  kind === "bill" && byUse
-                    ? "Only days in these months count. The bill for the last of them still comes the month after."
-                    : seasonMonths.length === EVERY_MONTH.length
-                    ? "Untick the months it doesn't happen in."
-                    : everyPaycheck
-                      ? "Only the paychecks in these months have it."
-                      : amountMode === "annual"
-                        ? "Nothing happens in the other months. The yearly total is shared over these months' dates."
-                        : "Nothing happens in the other months."
-                }
-              />
+              // Most things run every month, so the months wait behind a summary until they are wanted (Rachel's rule:
+              // pop-up forms fit one screen; every few weeks on a chosen day did not). Open from the start when it is
+              // seasonal or billed by use, where the months are the point.
+              <details open={monthsShown || (kind === "bill" && byUse)} className="group">
+                <summary className="flex min-h-11 cursor-pointer items-center gap-2 font-medium group-open:hidden">
+                  <ChevronRight aria-hidden className="size-4 shrink-0" />
+                  Runs every month
+                  <span className="font-normal text-muted">· choose months</span>
+                </summary>
+                <ChipToggles
+                  legend={kind === "bill" && byUse ? "Can happen in" : "Runs in"}
+                  options={MONTH_CHIPS}
+                  chosen={seasonMonths}
+                  onChange={setSeasonMonths}
+                  grid="grid-cols-6 sm:grid-cols-12"
+                  hint={
+                    kind === "bill" && byUse
+                      ? "Only days in these months count. The bill for the last of them still comes the month after."
+                      : seasonMonths.length === EVERY_MONTH.length
+                      ? "Untick the months it doesn't happen in."
+                      : everyPaycheck
+                        ? "Only the paychecks in these months have it."
+                        : amountMode === "annual"
+                          ? "Nothing happens in the other months. The yearly total is shared over these months' dates."
+                          : "Nothing happens in the other months."
+                  }
+                />
+              </details>
             )}
           </FormSection>
         )}
@@ -1251,7 +1332,10 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
 
         {shows("details") && (
           <FormSection title="Tags and notes">
-            <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+            <div>
+              <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+              {item && <p className={HINT}>Tags count for every date, earlier ones too.</p>}
+            </div>
 
             <div>
               <label htmlFor={`${id}-note`} className={LABEL}>
@@ -1282,7 +1366,9 @@ export function ItemFormBody({ item, accounts, categories, tags, onClose, onDele
             {!(shows("amount") && !followsCard) && !datesAccounts && (
               <p className={HINT}>
                 {/* Kept to two lines on a phone, so the schedule screen fits one (Rachel's rule: pop-up forms fit one screen). */}
-                Saved from today; earlier dates stay as they were.
+                {categoryChanged && categoryEveryDate
+                  ? "Saved from today; earlier dates take the new category too."
+                  : "Saved from today; earlier dates stay as they were."}
                 {shows("schedule") && " A new start date counts from then."}
               </p>
             )}

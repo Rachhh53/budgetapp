@@ -15,13 +15,16 @@ import org.jdbi.v3.core.Jdbi;
 /** Reads and writes {@code accounts} and {@code balance_entries}. */
 public final class AccountsRepository {
 
-    /** Every account column plus its newest balance entry (NULLs when none has been entered). */
+    /**
+     * Every account column plus its newest balance entry as of today (NULLs when none has been entered). A balance planned
+     * for a day still to come is not its balance yet.
+     */
     private static final String SELECT_WITH_LATEST_BALANCE = """
             SELECT a.id, a.name, a.institution, a.type, a.subtype_label, a.color, a.archived, a.archived_on, a.low_balance_threshold,
                    b.id AS balance_id, b.date AS balance_date, b.amount AS balance_amount, b.note AS balance_note
             FROM accounts a
             LEFT JOIN balance_entries b ON b.id = (
-                SELECT id FROM balance_entries WHERE account_id = a.id ORDER BY date DESC LIMIT 1)
+                SELECT id FROM balance_entries WHERE account_id = a.id AND date <= :today ORDER BY date DESC LIMIT 1)
             """;
 
     private final Jdbi jdbi;
@@ -50,6 +53,7 @@ public final class AccountsRepository {
     public List<Account> all() {
         return jdbi.withHandle(handle -> handle
                 .createQuery(SELECT_WITH_LATEST_BALANCE + "ORDER BY a.sort_order, a.id")
+                .bind("today", LocalDate.now(clock).toString())
                 .map((rs, ctx) -> account(rs))
                 .list());
     }
@@ -57,6 +61,7 @@ public final class AccountsRepository {
     public Optional<Account> find(long id) {
         return jdbi.withHandle(handle -> handle
                 .createQuery(SELECT_WITH_LATEST_BALANCE + "WHERE a.id = :id")
+                .bind("today", LocalDate.now(clock).toString())
                 .bind("id", id)
                 .map((rs, ctx) -> account(rs))
                 .findOne());
@@ -142,6 +147,11 @@ public final class AccountsRepository {
                 .createQuery("""
                         SELECT EXISTS (SELECT 1 FROM item_versions WHERE pay_from_account_id = :id OR pay_to_account_id = :id)
                             OR EXISTS (SELECT 1 FROM entries WHERE account_id = :id OR to_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM item_reimbursement_settings WHERE into_account_id = :id OR from_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM payment_reimbursements WHERE from_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM pack_reimbursements WHERE from_account_id = :id)
+                            OR EXISTS (SELECT 1 FROM entries
+                                       WHERE reimbursement_into_account_id = :id OR reimbursement_from_account_id = :id)
                         """)
                 .bind("id", id)
                 .mapTo(Boolean.class)

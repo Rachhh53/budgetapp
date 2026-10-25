@@ -141,7 +141,10 @@ public final class NetWorthCalculator {
         accounts.allBalances().forEach((accountId, balances) -> {
             Account account = byId.get(accountId);
             if (account != null) {
-                balances.stream().filter(balance -> !account.awayOn(balance.date())).forEach(balance -> entered.add(balance.date()));
+                // A balance planned for a day still to come has not been entered yet.
+                balances.stream()
+                        .filter(balance -> !account.awayOn(balance.date()) && !balance.date().isAfter(ledger.today()))
+                        .forEach(balance -> entered.add(balance.date()));
             }
         });
         for (Asset asset : allAssets) {

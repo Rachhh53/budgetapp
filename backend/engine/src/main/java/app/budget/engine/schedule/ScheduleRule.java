@@ -154,6 +154,40 @@ public record ScheduleRule(
         return new ScheduleRule(frequency, interval, day1, day2, month, startDate, endDate, weekendRule, manualDates, months, chosen);
     }
 
+    /**
+     * True when the rule repeats at a steady step that can start again from any day: every so many weeks on one day of
+     * the week, or every so many months or years. Not a rule tied to paydays, to two days a month or to several days of
+     * the week, nor one with dates of its own.
+     */
+    public boolean canCountFromPaid() {
+        return switch (frequency) {
+            case WEEKLY, BIWEEKLY -> weekdays.isEmpty();
+            case MONTHLY, EVERY_N_MONTHS -> true;
+            case YEARLY -> !seasonal();
+            default -> false;
+        };
+    }
+
+    /**
+     * This rule, counted on from {@code day} (Rachel, 2026-10-24: "if it's every 6 weeks, it should adjust upcoming
+     * payments to 6 weeks after the latest one"): the same step, started on that day, so the next date is one step after
+     * it. A rule that {@linkplain #canCountFromPaid cannot} is returned as it is. An end date before {@code day} names
+     * nothing after it.
+     */
+    public ScheduleRule countedFrom(LocalDate day) {
+        if (!canCountFromPaid()) {
+            return this;
+        }
+        LocalDate end = endDate != null && endDate.isBefore(day) ? day : endDate;
+        int dayOfMonth = day.getDayOfMonth();
+        return switch (frequency) {
+            case WEEKLY, BIWEEKLY -> new ScheduleRule(frequency, interval, day1, day2, month, day, end, weekendRule, manualDates, months, null);
+            case MONTHLY, EVERY_N_MONTHS -> new ScheduleRule(frequency, interval, dayOfMonth, day2, month, day, end, weekendRule, manualDates, months, null);
+            case YEARLY -> new ScheduleRule(frequency, interval, dayOfMonth, day2, day.getMonthValue(), day, end, weekendRule, manualDates, months, null);
+            default -> this;
+        };
+    }
+
     /** How many days of the week a weekly or fortnightly rule falls on: one unless several were chosen. */
     public int daysAWeek() {
         return weekdays.isEmpty() ? 1 : weekdays.size();

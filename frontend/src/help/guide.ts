@@ -184,6 +184,8 @@ export const TOPICS: readonly Topic[] = [
         heading: "Which paycheck pays it",
         body: [
           "A bill is paid from the pay period it's due in, a payday included. Tick Pay a period early to pay it from the paycheck before. Once you tick one paid, it moves to the pay period of the day you paid it.",
+          "For something that comes round every so many weeks or months, like a haircut, tick Count the next one from the day it's paid where it's paid from. Paid a week late, the next one moves a week later too.",
+          "For a bill that swings with the seasons, like electric, tick Last year's amounts with the amount. Each date still to come is then planned at what the same month really came to a year before.",
         ],
       },
       {
@@ -209,7 +211,15 @@ export const TOPICS: readonly Topic[] = [
         body: [
           "+ Add account for checking, savings, credit cards, investments and loans; + Add home or asset for a home, car or anything else of value.",
           "Update balances enters the real number for several accounts at once. Budget works forward from the latest balance you entered, so this is how you keep it honest.",
+          "Know a balance ahead of time, like an FSA that's all there on Jan 1? Use Update balance on the account with that date. It's marked Planned, and the projection starts from it on that day.",
           "To be warned when an account runs low, set Warn me when the balance dips below on the account.",
+        ],
+      },
+      {
+        heading: "What goes out each pay period",
+        body: [
+          "On a checking or savings account's page, under Where it's heading, a bar for each pay period shows everything that left the account, split by category, for the same dates as the chart above it. The dashed line is the average of the pay periods that are over.",
+          "Your five biggest categories have a stack of their own and the rest are added together; a sub-category counts toward the category above it. Paler bars are pay periods still to come: what is scheduled. Point at a bar to see it added up.",
         ],
       },
       {
@@ -291,6 +301,10 @@ export const TOPICS: readonly Topic[] = [
         heading: "Reimbursements",
         body: [
           "On an expense's page, Reimbursement tracks money owed back: to submit, submitted, or reimbursed. When the money arrives, add it as money in that pays back the expense. Paying yourself back from a bucket? Use + Pay back from a bucket on the same card.",
+          "A recurring payment someone pays back, like therapy through an HSA: open that payment on its pay period or in Coming up and choose Paid back?. Budget plans the money coming back, and the payment is listed here with your expenses.",
+          "Something bought ahead as a pack: choose Paid back? on the next pack's row in its pay period, before it is bought. When you record the payment, the flag goes with it.",
+          "Budget plans the money coming back into an account on a day, so the year doesn't look short. Only part paid back? On the expense's page, Coming back → Edit sets how much, into which account and about when.",
+          "Paid back out of one of your own accounts, like an FSA? Choose it under Comes out of: Budget plans a transfer from there, and + Add money that came back records it as one. From an insurer or work, leave it at None of my accounts.",
         ],
       },
     ],

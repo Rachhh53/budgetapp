@@ -128,6 +128,12 @@ public final class ItemsRoutes {
      * @param usesPer        billed by use: {@code week} or {@code month}, what the uses are counted per
      * @param archivedOn     with {@code archived}: the day it is archived as of, today or earlier; left out, the day it
      *                       already had, or today
+     * @param countsFromPaid true to count its next dates on from the day it was last paid (Rachel, 2026-10-24); left out,
+     *                       as it was
+     * @param fromLastYear   for a bill or budget, true to estimate what is still to come from what it came to in the same
+     *                       month a year before (Rachel, 2026-10-24); left out, as it was
+     * @param categoryEveryDate on a change, true for the category to reach back over every earlier date too, not only
+     *                       from {@code effectiveFrom} (Rachel, 2026-10-25)
      */
     public record ItemInput(
             String name,
@@ -156,7 +162,10 @@ public final class ItemsRoutes {
             ItemScheduleDto packSchedule,
             Long usesHundredths,
             String usesPer,
-            LocalDate archivedOn) {}
+            LocalDate archivedOn,
+            Boolean countsFromPaid,
+            Boolean fromLastYear,
+            Boolean categoryEveryDate) {}
 
     /**
      * Request body for a "just this one" edit. Only what is sent changes; an empty
@@ -198,6 +207,8 @@ public final class ItemsRoutes {
      * @param usesHundredths billed by use, today: about how many uses, in hundredths; {@code null} otherwise. Its
      *                    {@code perOccurrenceCents} is then a whole month of uses
      * @param usesPer     billed by use, today: {@code week} or {@code month}; {@code null} otherwise
+     * @param countsFromPaid true when its next dates count on from the day it was last paid, not its schedule's own
+     * @param fromLastYear true when what is still to come is estimated from the same month a year before
      */
     public record ItemView(
             long id,
@@ -236,7 +247,9 @@ public final class ItemsRoutes {
             Integer packSessions,
             ItemScheduleDto packSchedule,
             Long usesHundredths,
-            String usesPer) {}
+            String usesPer,
+            boolean countsFromPaid,
+            boolean fromLastYear) {}
 
     /** @param until the first day it runs again; left out to pause until it is turned back on */
     public record PauseInput(LocalDate until) {}
@@ -244,8 +257,11 @@ public final class ItemsRoutes {
     /** @param early true when it is paid from a period before the one it falls due in */
     public record Next(LocalDate scheduledDate, LocalDate dueDate, LocalDate periodStart, boolean early) {}
 
-    /** @param versionId the version it is, to remove it from the history */
-    public record PricePoint(long versionId, LocalDate effectiveFrom, long perOccurrenceCents, long perYearCents) {}
+    /**
+     * @param versionId  the version it is, to remove it from the history
+     * @param categoryId the category it had: when an earlier one differs, the form offers to change every date
+     */
+    public record PricePoint(long versionId, LocalDate effectiveFrom, long perOccurrenceCents, long perYearCents, Long categoryId) {}
 
     public record Deleted(boolean deleted) {}
 
@@ -255,7 +271,7 @@ public final class ItemsRoutes {
         OfCard card = ofCard(input, kind(input), sent, null);
         Terms terms = sized(sent, card);
         // The first version covers the item's whole life, so it is dated from when the schedule starts.
-        long id = items.create(identity(input, null), terms, terms.schedule().startDate());
+        long id = items.create(identity(input, null, false, false), terms, terms.schedule().startDate());
         letItsBucketCountFromItsStart(terms);
         keepItsCardInStep(id, card, terms);
         ApiResponse.send(ctx, 201, view(id));
@@ -287,7 +303,7 @@ public final class ItemsRoutes {
         long id = Inputs.id(ctx, "id");
         ItemInput input = Inputs.body(ctx, ItemInput.class);
         Item existing = items.find(id).orElseThrow(ApiException::notFound);
-        Identity identity = identity(input, existing.archivedOn());
+        Identity identity = identity(input, existing.archivedOn(), existing.countsFromPaid(), existing.fromLastYear());
         Terms sent = terms(input, identity.kind());
         OfCard card = ofCard(input, identity.kind(), sent, id);
         Terms terms = sized(sent, card);
@@ -304,7 +320,7 @@ public final class ItemsRoutes {
             LocalDate earlier = start.isBefore(startWas) ? start : startWas;
             effectiveFrom = earlier.isBefore(effectiveFrom) ? earlier : effectiveFrom;
         }
-        items.update(id, identity, terms, effectiveFrom);
+        items.update(id, identity, terms, effectiveFrom, Boolean.TRUE.equals(input.categoryEveryDate()));
         letItsBucketCountFromItsStart(terms);
         keepItsCardInStep(id, card, terms);
         ApiResponse.ok(ctx, view(id));
@@ -620,7 +636,9 @@ public final class ItemsRoutes {
                 terms.paidAhead() ? terms.packSessions() : null,
                 terms.pack().isPresent() && terms.packSchedule() != null ? ItemScheduleDto.of(terms.packSchedule()) : null,
                 terms.billedByUse() ? terms.usage().hundredths() : null,
-                terms.billedByUse() ? Inputs.code(terms.usage().per()) : null);
+                terms.billedByUse() ? Inputs.code(terms.usage().per()) : null,
+                item.countsFromPaid(),
+                item.fromLastYear());
     }
 
     /**
@@ -646,15 +664,20 @@ public final class ItemsRoutes {
 
     private PricePoint pricePoint(Version version) {
         Amounts amounts = calendar.amounts(version.terms());
-        return new PricePoint(version.id(), version.effectiveFrom(), amounts.perOccurrenceCents(), amounts.perYearCents());
+        return new PricePoint(version.id(), version.effectiveFrom(), amounts.perOccurrenceCents(), amounts.perYearCents(),
+                version.terms().categoryId());
     }
 
     private static ItemKind kind(ItemInput input) {
         return Inputs.choice(ItemKind.class, input.kind(), "the type of item");
     }
 
-    /** @param archivedBefore the day the item was archived as of until now; {@code null} when it wasn't */
-    private Identity identity(ItemInput input, LocalDate archivedBefore) {
+    /**
+     * @param archivedBefore the day the item was archived as of until now; {@code null} when it wasn't
+     * @param countsBefore   whether it counted its dates from the day it was paid until now, kept when not sent
+     * @param lastYearBefore whether it was estimated from a year before until now, kept when not sent
+     */
+    private Identity identity(ItemInput input, LocalDate archivedBefore, boolean countsBefore, boolean lastYearBefore) {
         List<Long> tagIds = Inputs.ids(input.tagIds(), MAX_TAGS, CHOOSE_TAGS);
         if (!tags.allExist(tagIds)) {
             throw ApiException.badRequest(CHOOSE_TAGS);
@@ -664,7 +687,9 @@ public final class ItemsRoutes {
                 kind(input),
                 Inputs.optionalText(input.note(), "the note", NOTE_MAX),
                 Archiving.archivedOn(input.archived(), input.archivedOn(), archivedBefore, pay.today(), null),
-                tagIds);
+                tagIds,
+                input.countsFromPaid() == null ? countsBefore : input.countsFromPaid(),
+                input.fromLastYear() == null ? lastYearBefore : input.fromLastYear());
     }
 
     private Terms terms(ItemInput input, ItemKind kind) {

@@ -62,7 +62,7 @@ const RENT: Item = {
   perYearCents: 1860000,
   // Due on payday and paid by hand, so the paycheck before pays for it.
   next: { scheduledDate: "2026-11-01", dueDate: "2026-11-01", periodStart: "2026-10-15", early: true },
-  history: [{ versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 }],
+  history: [{ versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000, categoryId: 2 }],
   paused: false,
   pausedUntil: null,
   fromBucketId: null,
@@ -291,6 +291,58 @@ describe("recurring items screen", () => {
     expect(bodiesSentTo(fetchMock, "POST /api/items")[0]).toMatchObject({ name: "Streaming", payFromAccountId: 1, fromBucketId: 7 });
   });
 
+  // Rachel, 2026-10-25: "can I have a way to retroactively update tags on a recurring item? ... and categories".
+  it("offers to change the category for every earlier date once the category is changed", async () => {
+    const fetchMock = withItems([RENT], { "PUT /api/items/1": () => ({ status: 200, data: RENT }) });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit the details" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("checkbox", { name: "Also change every earlier date" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText("Tags count for every date, earlier ones too.")).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByRole("combobox", { name: "Category (optional)" }));
+    await pick(dialog, "Category (optional)", "Housing");
+    await userEvent.click(await within(dialog).findByRole("checkbox", { name: "Also change every earlier date" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")[0]).toMatchObject({ categoryId: 1, categoryEveryDate: true });
+  });
+
+  it("offers it again after the category was changed from a date, while earlier dates still have the old one", async () => {
+    const changedFromADate: Item = {
+      ...RENT,
+      history: [
+        { versionId: 1, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000, categoryId: 1 },
+        { versionId: 2, effectiveFrom: "2026-10-25", perOccurrenceCents: 155000, perYearCents: 1860000, categoryId: 2 },
+      ],
+    };
+    const fetchMock = withItems([changedFromADate], { "PUT /api/items/1": () => ({ status: 200, data: changedFromADate }) });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit the details" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Also change every earlier date" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")[0]).toMatchObject({ categoryId: 2, categoryEveryDate: true });
+  });
+
+  it("keeps earlier dates in their own category unless asked", async () => {
+    const fetchMock = withItems([RENT], { "PUT /api/items/1": () => ({ status: 200, data: RENT }) });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit the details" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.clear(within(dialog).getByRole("combobox", { name: "Category (optional)" }));
+    await pick(dialog, "Category (optional)", "Housing");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toHaveLength(1));
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")[0]).toMatchObject({ categoryId: 1, categoryEveryDate: false });
+  });
+
   it("keeps where an existing item comes out of, and sends none for money not in a bucket", async () => {
     const fetchMock = withItems([RENT], {
       "GET /api/buckets": () => ({ status: 200, data: [GIFTS] }),
@@ -485,6 +537,9 @@ describe("recurring items screen", () => {
         note: null,
         archived: false, archivedOn: null,
         tagIds: [],
+        // Monthly can count from the day it was paid, and is off unless asked for.
+        countsFromPaid: false,
+        fromLastYear: false,
         amountCents: 14000,
         amountMode: "per_occurrence",
         estimate: true,
@@ -782,8 +837,8 @@ describe("recurring items screen", () => {
     const twoPrices: Item = {
       ...RENT,
       history: [
-        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000 },
-        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 },
+        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000, categoryId: 2 },
+        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000, categoryId: 2 },
       ],
     };
     const fetchMock = withItems([twoPrices], { "DELETE /api/items/1/versions/2": () => ({ status: 200, data: RENT, changed: true }) });
@@ -805,8 +860,8 @@ describe("recurring items screen", () => {
     const twoPrices: Item = {
       ...RENT,
       history: [
-        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000 },
-        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 },
+        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000, categoryId: 2 },
+        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000, categoryId: 2 },
       ],
     };
     const fetchMock = withItems([twoPrices]);
@@ -832,8 +887,8 @@ describe("recurring items screen", () => {
     const twoPrices: Item = {
       ...RENT,
       history: [
-        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000 },
-        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000 },
+        { versionId: 1, effectiveFrom: "2025-01-01", perOccurrenceCents: 148000, perYearCents: 1776000, categoryId: 2 },
+        { versionId: 2, effectiveFrom: "2026-01-01", perOccurrenceCents: 155000, perYearCents: 1860000, categoryId: 2 },
       ],
     };
     const fetchMock = withItems([twoPrices], { "PUT /api/items/1": () => ({ status: 200, data: twoPrices }) });
@@ -1108,6 +1163,69 @@ describe("recurring items screen", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(bodiesSentTo(fetchMock, "PUT /api/items/3")[1]).toMatchObject({ schedule: { frequency: "every_n_months", interval: 7 } });
+  });
+
+  it("can count the next date from the day it was paid, beside how it is paid", async () => {
+    const fetchMock = withItems([RENT], { "PUT /api/items/1": () => ({ status: 200, data: { ...RENT, countsFromPaid: true } }) });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit where it is paid from" }));
+    const dialog = screen.getByRole("dialog");
+    const counts = within(dialog).getByRole("checkbox", { name: "Count the next one from the day it's paid" });
+    // Off unless asked for, so a bill with a fixed due date keeps it.
+    expect(counts).not.toBeChecked();
+    await userEvent.click(counts);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toMatchObject([{ countsFromPaid: true, schedule: { frequency: "monthly" } }]);
+  });
+
+  it("doesn't offer counting from the day it was paid where the schedule has no steady step", async () => {
+    withItems([{ ...RENT, schedule: { ...RENT.schedule, frequency: "semi_monthly", day2: 15 } }]);
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit where it is paid from" }));
+
+    expect(within(screen.getByRole("dialog")).queryByRole("checkbox", { name: /Count the next one/ })).not.toBeInTheDocument();
+  });
+
+  it("can estimate a bill from last year's amounts, with the amount", async () => {
+    const fetchMock = withItems([RENT], { "PUT /api/items/1": () => ({ status: 200, data: { ...RENT, fromLastYear: true } }) });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Change the amount of Rent" }));
+    const dialog = screen.getByRole("dialog");
+    const lastYear = within(dialog).getByRole("checkbox", { name: "Last year's amounts" });
+    expect(lastYear).not.toBeChecked();
+    await userEvent.click(lastYear);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(bodiesSentTo(fetchMock, "PUT /api/items/1")).toMatchObject([{ fromLastYear: true }]);
+  });
+
+  it("doesn't offer last year's amounts for a transfer, which moves your own money", async () => {
+    withItems([TO_SAVINGS]);
+    renderApp(`/recurring/${TO_SAVINGS.id}`);
+
+    await userEvent.click(await screen.findByRole("button", { name: `Change the amount of ${TO_SAVINGS.name}` }));
+
+    expect(within(screen.getByRole("dialog")).queryByRole("checkbox", { name: "Last year's amounts" })).not.toBeInTheDocument();
+  });
+
+  it("says in the amount history when dates are estimated from last year", async () => {
+    withItems([{ ...RENT, fromLastYear: true }]);
+    renderApp("/recurring/1");
+
+    expect(await screen.findByText(/Dates still to come are estimated from what the same month came to last year/)).toBeInTheDocument();
+  });
+
+  it("says on its page when an item counts from the day it was paid", async () => {
+    withItems([{ ...RENT, countsFromPaid: true }]);
+    renderApp("/recurring/1");
+
+    expect(await screen.findByText(/The next one counts from the day the last one was paid/)).toBeInTheDocument();
   });
 
   it("shows the backend's message when a change is refused", async () => {
@@ -1863,6 +1981,58 @@ describe("recurring item page: coming up", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/items/1/occurrences/2026-11-01")).toEqual([{ amountCents: 160000 }]));
+  });
+
+  it("flags one to be paid back, asking where the money comes back into the first time", async () => {
+    const fetchMock = withItems([RENT], {
+      "GET /api/items/1/upcoming": () => ({ status: 200, data: [next("2026-11-01", 155000)] }),
+      "PUT /api/items/1/occurrences/2026-11-01/reimbursement": () => ({ status: 200, data: {} }),
+    });
+    renderApp("/recurring/1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Change Rent on Nov 1, 2026" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Edit Rent" })).getByRole("button", { name: "Paid back?" }));
+    const dialog = await screen.findByRole("dialog", { name: "Paid back — Rent" });
+    // What comes back starts at the payment's amount (Rachel, 2026-10-24: "a set amount defaulted to the payment being flagged").
+    expect(within(dialog).getByRole("textbox", { name: "Comes back" })).toHaveValue("1550.00");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Comes back into"), "Rainy Day Savings");
+    const days = within(dialog).getByLabelText("Days after it's paid");
+    await userEvent.clear(days);
+    await userEvent.type(days, "14");
+    await userEvent.type(within(dialog).getByLabelText("Who pays it back (optional)"), "Work");
+    await userEvent.click(within(dialog).getByRole("button", { name: "It'll be paid back" }));
+
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/items/1/occurrences/2026-11-01/reimbursement")).toEqual([
+        { amountCents: 155000, intoAccountId: 2, daysAfter: 14, reimbursedBy: "Work", fromAccountId: null },
+      ]),
+    );
+  });
+
+  it("shows how a bill is paid back and opens each payment flagged", async () => {
+    withItems([RENT], {
+      "GET /api/items/1/reimbursement": () => ({
+        status: 200,
+        data: {
+          settings: { itemId: 1, reimbursedBy: "Work", daysAfter: 14, intoAccountId: 2 },
+          payments: [
+            {
+              id: 3, itemId: 1, scheduledDate: "2026-09-01", name: "Rent", kind: "bill", date: "2026-09-02", paid: true,
+              paymentCents: 155000, estimate: false, accountId: 1, categoryId: null, tagIds: [], amountCents: 50000,
+              reimbursement: { status: "submitted", submittedOn: null, to: "Work", paidBackCents: 0, reimbursedCents: 0, owedCents: 50000 },
+              expectedOn: "2026-09-16", intoAccountId: 2, skipped: false, fileCount: 0,
+            },
+          ],
+        },
+      }),
+    });
+    renderApp("/recurring/1");
+
+    const card = await screen.findByRole("region", { name: "Paid back" });
+    expect(await within(card).findByText("Rainy Day Savings")).toBeInTheDocument();
+    expect(card).toHaveTextContent("About 14 days after it's paid");
+    expect(within(card).getByRole("link", { name: /Sep 2, 2026/ })).toHaveAttribute("href", "/recurring/1/payments/2026-09-01");
+    expect(within(card).getByRole("button", { name: "Edit how it's paid back" })).toBeInTheDocument();
   });
 
   it("puts a skipped one back from its form", async () => {

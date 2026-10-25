@@ -49,6 +49,7 @@ public final class LedgerRoutes {
         routes.get("/api/pay-periods", this::list);
         routes.get("/api/pay-periods/{start}", this::one);
         routes.get("/api/accounts/{id}/projection", this::accountProjection);
+        routes.get("/api/accounts/{id}/spending", this::accountSpending);
         routes.get("/api/account-balances", ctx -> ApiResponse.ok(ctx, ledger.balancesOn(calendar.today())));
         routes.get("/api/accounts/{id}/transactions", this::accountTransactions);
         routes.get("/api/accounts/{id}/performance", this::accountPerformance);
@@ -165,6 +166,18 @@ public final class LedgerRoutes {
         LocalDate to = Inputs.dateParam(ctx, "to", calendar.horizonEnd());
         Inputs.requireSensibleRange(from, to);
         ApiResponse.ok(ctx, ledger.accountSeries(account, from, to));
+    }
+
+    /**
+     * What went out of a checking or savings account in each pay period overlapping {@code from}–{@code to}, by category; by
+     * default the current one through the horizon, as for its chart. Empty for any other kind of account.
+     */
+    private void accountSpending(Context ctx) {
+        Account account = accounts.find(Inputs.id(ctx, "id")).orElseThrow(ApiException::notFound);
+        LocalDate from = Inputs.dateParam(ctx, "from", calendar.today());
+        LocalDate to = Inputs.dateParam(ctx, "to", calendar.horizonEnd());
+        Inputs.requireSensibleRange(from, to);
+        ApiResponse.ok(ctx, ledger.spending(account, from, to));
     }
 
     /** Pay periods overlapping {@code from}–{@code to}; by default the current one through the horizon. */
