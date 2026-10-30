@@ -21,7 +21,8 @@ public final class AccountsRepository {
      */
     private static final String SELECT_WITH_LATEST_BALANCE = """
             SELECT a.id, a.name, a.institution, a.type, a.subtype_label, a.color, a.archived, a.archived_on, a.low_balance_threshold,
-                   b.id AS balance_id, b.date AS balance_date, b.amount AS balance_amount, b.note AS balance_note
+                   b.id AS balance_id, b.date AS balance_date, b.amount AS balance_amount, b.note AS balance_note,
+                   b.end_of_day AS balance_end_of_day
             FROM accounts a
             LEFT JOIN balance_entries b ON b.id = (
                 SELECT id FROM balance_entries WHERE account_id = a.id AND date <= :today ORDER BY date DESC LIMIT 1)
@@ -170,31 +171,36 @@ public final class AccountsRepository {
     public List<BalanceEntry> balances(long accountId) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("""
-                        SELECT id, date, amount, note FROM balance_entries
+                        SELECT id, date, amount, note, end_of_day FROM balance_entries
                         WHERE account_id = :accountId ORDER BY date DESC
                         """)
                 .bind("accountId", accountId)
                 .map((rs, ctx) -> new BalanceEntry(
-                        rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note")))
+                        rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note"),
+                        rs.getBoolean("end_of_day")))
                 .list());
     }
 
     /** Every balance entered, by account, oldest first: what projections start from. */
     public Map<Long, List<BalanceEntry>> allBalances() {
         return jdbi.withHandle(handle -> handle
-                .createQuery("SELECT id, account_id, date, amount, note FROM balance_entries ORDER BY date")
+                .createQuery("SELECT id, account_id, date, amount, note, end_of_day FROM balance_entries ORDER BY date")
                 .map((rs, ctx) -> Map.entry(rs.getLong("account_id"), new BalanceEntry(
-                        rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note"))))
+                        rs.getLong("id"), LocalDate.parse(rs.getString("date")), rs.getLong("amount"), rs.getString("note"),
+                        rs.getBoolean("end_of_day"))))
                 .stream()
                 .collect(Collectors.groupingBy(Map.Entry::getKey, Collectors.mapping(Map.Entry::getValue, Collectors.toList()))));
     }
 
-    /** Records the balance for a day. Entering the same day again replaces what was there. */
+    /**
+     * Records the balance a day ended with. Entering the same day again replaces the amount and note; a balance entered
+     * before 2026-10-30 keeps meaning the start of its day, as it was typed (Rachel, 2026-10-30).
+     */
     public void saveBalance(long accountId, LocalDate date, long amountCents, String note) {
         jdbi.useHandle(handle -> handle
                 .createUpdate("""
-                        INSERT INTO balance_entries (account_id, date, amount, note)
-                        VALUES (:accountId, :date, :amount, :note)
+                        INSERT INTO balance_entries (account_id, date, amount, note, end_of_day)
+                        VALUES (:accountId, :date, :amount, :note, 1)
                         ON CONFLICT (account_id, date) DO UPDATE SET amount = excluded.amount, note = excluded.note
                         """)
                 .bind("accountId", accountId)
@@ -207,13 +213,13 @@ public final class AccountsRepository {
     /** A balance for one account, as part of several entered together. */
     public record NewBalance(long accountId, long amountCents) {}
 
-    /** Records several accounts' balances for the same day, all of them or none. */
+    /** Records several accounts' balances for the end of the same day, all of them or none; as {@link #saveBalance}. */
     public void saveBalances(LocalDate date, List<NewBalance> balances) {
         jdbi.useTransaction(handle -> {
             for (NewBalance balance : balances) {
                 handle.createUpdate("""
-                                INSERT INTO balance_entries (account_id, date, amount, note)
-                                VALUES (:accountId, :date, :amount, NULL)
+                                INSERT INTO balance_entries (account_id, date, amount, note, end_of_day)
+                                VALUES (:accountId, :date, :amount, NULL, 1)
                                 ON CONFLICT (account_id, date) DO UPDATE SET amount = excluded.amount
                                 """)
                         .bind("accountId", balance.accountId())
@@ -249,7 +255,8 @@ public final class AccountsRepository {
     private static Account account(ResultSet rs) throws SQLException {
         String balanceDate = rs.getString("balance_date");
         BalanceEntry latest = balanceDate == null ? null : new BalanceEntry(
-                rs.getLong("balance_id"), LocalDate.parse(balanceDate), rs.getLong("balance_amount"), rs.getString("balance_note"));
+                rs.getLong("balance_id"), LocalDate.parse(balanceDate), rs.getLong("balance_amount"), rs.getString("balance_note"),
+                rs.getBoolean("balance_end_of_day"));
         long threshold = rs.getLong("low_balance_threshold");
         boolean noThreshold = rs.wasNull();
         return new Account(

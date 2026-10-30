@@ -17,7 +17,7 @@ const CHECKING: Account = {
   color: "#0f766e",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 1, date: "2026-10-01", amountCents: 500000, note: null },
+  latestBalance: { id: 1, date: "2026-10-01", amountCents: 500000, note: null, endOfDay: true },
 };
 const VISA: Account = { ...CHECKING, id: 3, name: "Harbor Visa", type: "credit_card", color: "#7e22ce" };
 

@@ -50,6 +50,7 @@ function line(id: number, description: string, amountCents: number, more: Partia
     oneOffEntryId: null,
     periodStart: "2026-09-01",
     newPayee: false,
+    matched: null,
     ...more,
   };
 }
@@ -91,6 +92,7 @@ function period(start: string, end: string, more: Partial<PeriodChanges> = {}): 
     coverage: { from: start, to: end, partly: false },
     groups: [],
     items: [{ ...FOOD, dates: [{ ...FOOD.dates[0]!, scheduledDate: start, countsOn: start }] }],
+    matchable: [],
     changes: [],
     undecided: [],
     unmatched: [],
@@ -311,7 +313,7 @@ describe("Statement uploads", () => {
       ],
     };
     const fetchMock = statementBackend(partlyToo, {
-      "POST /api/statement-uploads/5/apply": () => ({ status: 200, data: { amountsChanged: 1, oneOffsAdded: 0, changes: partlyToo }, changed: true }),
+      "POST /api/statement-uploads/5/apply": () => ({ status: 200, data: { amountsChanged: 1, changes: partlyToo }, changed: true }),
     });
     renderApp("/accounts/1/statements/5");
 
@@ -323,21 +325,83 @@ describe("Statement uploads", () => {
     expect(within(dialog).getByText(/partly covered, to Sep 22/)).toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
-    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/statement-uploads/5/apply")).toEqual([{ periods: ["2026-09-01"], oneOffLineIds: [] }]));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/statement-uploads/5/apply")).toEqual([{ periods: ["2026-09-01"] }]));
   });
 
-  it("adds charges nothing takes as one-offs when asked", async () => {
+  it("adds a charge nothing takes as a one-off in one click", async () => {
     const fetchMock = statementBackend(UNCHOSEN, {
-      "POST /api/statement-uploads/5/apply": () => ({ status: 200, data: { amountsChanged: 0, oneOffsAdded: 1, changes: UNCHOSEN }, changed: true }),
+      "POST /api/statement-uploads/5/lines/12/one-off": () => ({ status: 201, data: UPLOAD, changed: true }),
     });
     renderApp("/accounts/1/statements/5");
 
     const notMatched = await screen.findByRole("region", { name: "Not matched" });
-    expect(within(notMatched).getByRole("button", { name: "Add as one-offs" })).toBeDisabled();
-    await userEvent.click(within(notMatched).getByRole("checkbox"));
-    await userEvent.click(within(notMatched).getByRole("button", { name: "Add 1 as a one-off" }));
-    await waitFor(() => expect(bodiesSentTo(fetchMock, "POST /api/statement-uploads/5/apply")).toEqual([{ periods: [], oneOffLineIds: [12] }]));
-    expect(await screen.findByText("Added 1 one-off.")).toBeInTheDocument();
+    await userEvent.click(within(notMatched).getByRole("button", { name: "Add CAFE LUNA as a one-off" }));
+    await waitFor(() => expect(calls(fetchMock)).toContain("POST /api/statement-uploads/5/lines/12/one-off"));
+    // Nothing else is asked first, and no Apply is needed.
+    expect(calls(fetchMock)).not.toContain("POST /api/statement-uploads/5/apply");
+  });
+
+  it("says plainly which is the category, under what, and which are the tags", async () => {
+    const produce: Category = { id: 4, name: "Produce", color: "#65a30d", parentId: 3, itemCount: 0, perYearCents: 0 };
+    const filed = { ...UPLOAD, lines: [line(11, "KROGER #123", 8000, { categoryId: 4, tagIds: [9] })] };
+    statementBackend(UNCHOSEN, {
+      "GET /api/categories": () => ({ status: 200, data: [GROCERIES, produce] }),
+      "GET /api/statement-uploads/5": () => ({ status: 200, data: filed }),
+    });
+    renderApp("/accounts/1/statements/5");
+
+    const charges = await screen.findByRole("region", { name: "Charges" });
+    const row = (await within(charges).findByText("KROGER #123")).closest("li")!;
+    expect(within(row).getByText("Category")).toBeInTheDocument();
+    expect(within(row).getByText("Groceries › Produce")).toBeInTheDocument();
+    expect(within(row).getByText("Tag")).toBeInTheDocument();
+    expect(within(row).getByText("Vacation")).toBeInTheDocument();
+  });
+
+  it("matches a charge to a bill already in that pay period, same amount first, and lets go of it", async () => {
+    const water = { itemId: 31, scheduledDate: "2026-09-05", entryId: null, name: "Water bill", date: "2026-09-05", amountCents: 6000, paid: false, matchedLineId: null };
+    const gym = { ...water, itemId: 32, name: "Gym", amountCents: 8000 };
+    const taken = { ...water, itemId: 33, name: "Phone", matchedLineId: 99 };
+    const offered: StatementChanges = {
+      ...UNCHOSEN,
+      periods: [period("2026-09-01", "2026-09-14", { groups: [GROCERY_TOTAL], matchable: [water, gym, taken] }), UNCHOSEN.periods[1]!],
+    };
+    const matchedUpload = {
+      ...UPLOAD,
+      lines: UPLOAD.lines.map((each) => (each.id === 11 ? { ...each, matched: { itemId: 32, scheduledDate: "2026-09-05", entryId: null } } : each)),
+    };
+    // The page reads the upload again after each change, so the backend keeps what it was told.
+    let current: StatementUpload = UPLOAD;
+    const fetchMock = statementBackend(offered, {
+      "GET /api/statement-uploads/5": () => ({ status: 200, data: current }),
+      "PUT /api/statement-uploads/5/lines/11/match": () => {
+        current = matchedUpload;
+        return { status: 200, data: current, changed: true };
+      },
+      "DELETE /api/statement-uploads/5/lines/11/match": () => {
+        current = UPLOAD;
+        return { status: 200, data: current, changed: true };
+      },
+    });
+    renderApp("/accounts/1/statements/5");
+
+    const charges = await screen.findByRole("region", { name: "Charges" });
+    const row = (await within(charges).findByText("KROGER #123")).closest("li")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Already in Budget…" }));
+    const dialog = await screen.findByRole("dialog", { name: /KROGER #123/ });
+    const choices = within(within(dialog).getByRole("list")).getAllByRole("button");
+    // The same amount comes first, and one another charge already has isn't offered.
+    expect(choices.map((button) => button.textContent)).toEqual([expect.stringContaining("Gym"), expect.stringContaining("Water bill")]);
+
+    await userEvent.click(choices[0]!);
+    await waitFor(() =>
+      expect(bodiesSentTo(fetchMock, "PUT /api/statement-uploads/5/lines/11/match")).toEqual([{ itemId: 32, scheduledDate: "2026-09-05" }]),
+    );
+
+    const matched = (await within(charges).findByText(/Is Gym/)).closest("li")!;
+    expect(within(matched).getByText(/paid/)).toBeInTheDocument();
+    await userEvent.click(within(matched).getByRole("button", { name: "Unmatch" }));
+    await waitFor(() => expect(calls(fetchMock)).toContain("DELETE /api/statement-uploads/5/lines/11/match"));
   });
 
   it("asks which item a charge two items claim counts toward", async () => {

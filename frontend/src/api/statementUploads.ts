@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ACCOUNTS_KEY } from "./accounts";
 import { api } from "./client";
 import { PAY_KEY } from "./income";
@@ -49,6 +49,39 @@ export interface StatementLine {
   periodStart: string | null;
   /** A payee Budget has no category or tags for yet. */
   newPayee: boolean;
+  /** What Budget already had that it is, as its pay period's `matchable` lists it; `null` when it isn't matched. */
+  matched: LineMatch | null;
+}
+
+/** A recurring item's date (`itemId` and `scheduledDate`) or a one-off entry (`entryId`). */
+export interface LineMatch {
+  itemId: number | null;
+  scheduledDate: string | null;
+  entryId: number | null;
+}
+
+/**
+ * Something already in Budget, paid from the account in a pay period, that a charge can be matched to: a recurring
+ * item's date other than a budget, or a one-off spent from the account (Rachel, 2026-10-30).
+ */
+export interface Matchable extends LineMatch {
+  name: string;
+  /** The day it is paid by, or a one-off's day. */
+  date: string;
+  amountCents: number;
+  paid: boolean;
+  /** The charge of this account's statements already matched to it; `null` for none. */
+  matchedLineId: number | null;
+}
+
+/** True when `match` names `candidate`. */
+export function isMatch(match: LineMatch | null, candidate: LineMatch): boolean {
+  return (
+    match !== null &&
+    (match.entryId !== null
+      ? match.entryId === candidate.entryId
+      : match.itemId === candidate.itemId && match.scheduledDate === candidate.scheduledDate)
+  );
 }
 
 export type StatementFormat = "csv" | "ofx" | "pdf";
@@ -144,6 +177,8 @@ export interface PeriodChanges {
   coverage: { from: string; to: string; partly: boolean } | null;
   groups: GroupTotal[];
   items: ItemChoice[];
+  /** What its charges can be matched to, by date. */
+  matchable: Matchable[];
   changes: AmountChange[];
   /** Charges two chosen items both claim, waiting for a choice of which. */
   undecided: number[];
@@ -289,19 +324,57 @@ export function useSetStatementTarget(uploadId: number) {
   });
 }
 
-/** Makes the chosen pay periods' changes, and adds the chosen charges as one-offs of their own. */
+/** Makes the chosen pay periods' changes. */
 export function useApplyStatement(uploadId: number) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { periods: string[]; oneOffLineIds: number[] }) =>
-      api.post<{ amountsChanged: number; oneOffsAdded: number; changes: StatementChanges }>(`/api/statement-uploads/${uploadId}/apply`, input),
-    onSuccess: () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: PAY_KEY }),
-        queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
-        queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
-      ]),
+    mutationFn: (input: { periods: string[] }) =>
+      api.post<{ amountsChanged: number; changes: StatementChanges }>(`/api/statement-uploads/${uploadId}/apply`, input),
+    onSuccess: () => refreshAfterChange(queryClient),
   });
+}
+
+/**
+ * Matches a charge to what it already is: a recurring item's date takes the charge as its amount and is ticked paid on
+ * the day it was spent; a one-off is only linked. Either way it stops counting toward its totals.
+ */
+export function useMatchStatementLine(uploadId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ lineId, match }: { lineId: number; match: LineMatch }) =>
+      api.put<StatementUpload>(
+        `/api/statement-uploads/${uploadId}/lines/${lineId}/match`,
+        match.entryId !== null ? { entryId: match.entryId } : { itemId: match.itemId, scheduledDate: match.scheduledDate },
+      ),
+    onSuccess: () => refreshAfterChange(queryClient),
+  });
+}
+
+/** Lets go of a charge's match, putting a recurring item's date back as it was before. */
+export function useUnmatchStatementLine(uploadId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (lineId: number) => api.delete<StatementUpload>(`/api/statement-uploads/${uploadId}/lines/${lineId}/match`),
+    onSuccess: () => refreshAfterChange(queryClient),
+  });
+}
+
+/** Adds a charge as a one-off on the day it was spent, with its category and tags. */
+export function useAddStatementOneOff(uploadId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (lineId: number) => api.post<StatementUpload>(`/api/statement-uploads/${uploadId}/lines/${lineId}/one-off`, {}),
+    onSuccess: () => refreshAfterChange(queryClient),
+  });
+}
+
+/** What a change from a statement can touch: pay periods (the statement's own figures among them), items and accounts. */
+function refreshAfterChange(queryClient: QueryClient) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: PAY_KEY }),
+    queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY }),
+  ]);
 }
 
 /** Removes a statement. What it changed stays; Undo straight afterwards brings it back. */

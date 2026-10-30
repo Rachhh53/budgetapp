@@ -4,7 +4,7 @@ import type { BalanceAdjustment } from "../../api/periods";
 import { formatDay } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { BalanceForm } from "../accounts/BalanceForm";
-import { dayBefore, Reconcile } from "../accounts/Reconcile";
+import { between, Reconcile } from "../accounts/Reconcile";
 import { EditButton } from "../EditButton";
 import { BUTTON_LINK } from "../ui";
 
@@ -51,8 +51,7 @@ export function BalanceAdjustments({ account, adjustments }: { account: Account;
             <dd className="w-full">
               <Reconcile
                 account={account}
-                from={adjustment.since}
-                through={dayBefore(adjustment.date)}
+                {...between({ date: adjustment.since, endOfDay: adjustment.sinceEndOfDay }, adjustment)}
                 recordsCents={adjustment.balanceCents - adjustment.differenceCents}
                 enteredCents={adjustment.balanceCents}
               />

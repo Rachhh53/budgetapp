@@ -24,7 +24,7 @@ export const TERMS = {
   startingBalance: {
     term: "Starting balance",
     about:
-      "What the account holds as the pay period starts: always what the pay period before ended with. A balance you enter during a pay period shows in it as Balance adjusted, which you can change or delete.",
+      "What the account holds as the pay period's first day begins: always what the pay period before ended with. A balance you enter is what the account held at the end of that day, so that day's paycheck and payments are already in it. Entered during a pay period, it shows there as Balance adjusted: the real balance less starting + what came in and went out up to that day. You can change or delete it.",
   },
   comingIn: {
     term: "Coming in",

@@ -150,6 +150,9 @@ public final class StatementUploadsRoutes {
         routes.get("/api/statement-uploads/{id}", ctx -> ApiResponse.ok(ctx, view(found(ctx), List.of())));
         routes.delete("/api/statement-uploads/{id}", this::delete);
         routes.put("/api/statement-uploads/{id}/lines/{lineId}", this::changeLine);
+        routes.put("/api/statement-uploads/{id}/lines/{lineId}/match", this::match);
+        routes.delete("/api/statement-uploads/{id}/lines/{lineId}/match", this::unmatch);
+        routes.post("/api/statement-uploads/{id}/lines/{lineId}/one-off", this::oneOff);
         routes.get("/api/statement-uploads/{id}/changes", ctx -> ApiResponse.ok(ctx, changes(found(ctx))));
         routes.put("/api/statement-uploads/{id}/targets", this::target);
         routes.post("/api/statement-uploads/{id}/apply", this::apply);
@@ -177,6 +180,7 @@ public final class StatementUploadsRoutes {
      * @param periodStart  the pay period the day it was spent falls in; null outside every period
      * @param duplicateOf  the line of an earlier upload it repeats, which is counted instead
      * @param countsToward the group chosen when its category and a tag are both pointed at items
+     * @param matched      what Budget already had that it is, as its pay period's {@code matchable} names it; null for none
      */
     public record LineView(
             long id,
@@ -193,7 +197,16 @@ public final class StatementUploadsRoutes {
             GroupView countsToward,
             Long oneOffEntryId,
             LocalDate periodStart,
-            boolean newPayee) {}
+            boolean newPayee,
+            MatchedView matched) {}
+
+    /** What a line was matched to: a recurring item's date, or a one-off entry. */
+    public record MatchedView(Long itemId, LocalDate scheduledDate, Long entryId) {
+
+        static MatchedView of(StatementUploadsRepository.Match match) {
+            return match == null ? null : new MatchedView(match.itemId(), match.scheduledDate(), match.entryId());
+        }
+    }
 
     /**
      * An upload with every line read from it.
@@ -523,9 +536,19 @@ public final class StatementUploadsRoutes {
     public record ChangeView(long itemId, LocalDate scheduledDate, long currentCents, long newCents, List<Long> lineIds) {}
 
     /**
+     * Something already in Budget, paid from the account in the period, that a line can be matched to: a date of a recurring
+     * item other than a budget (a budget is what the totals are for), or a one-off spent from the account.
+     *
+     * @param matchedLineId the line of this account's statements matched to it already; null for none
+     */
+    public record MatchableView(
+            Long itemId, LocalDate scheduledDate, Long entryId, String name, LocalDate date, long amountCents, boolean paid, Long matchedLineId) {}
+
+    /**
      * One pay period the upload reaches into.
      *
      * @param coverage  the days of it this account's statements cover; {@code partly} when some are on none of them
+     * @param matchable what a line dated in it can be matched to, by date
      * @param upToDate  every change is already the amount it would set: nothing to apply
      */
     public record PeriodView(
@@ -535,6 +558,7 @@ public final class StatementUploadsRoutes {
             CoverageView coverage,
             List<GroupTotalView> groups,
             List<ChoiceView> items,
+            List<MatchableView> matchable,
             List<ChangeView> changes,
             List<Long> undecided,
             List<Long> unmatched,
@@ -578,12 +602,15 @@ public final class StatementUploadsRoutes {
         Set<LocalDate> starts = periods.stream().map(PayPeriod::start).collect(Collectors.toSet());
         Map<Long, Item> itemsById = new HashMap<>();
         items.all().forEach(item -> itemsById.put(item.id(), item));
-        List<Occurrence> choices = calendar.expand(from, to).occurrences().stream()
+        List<Occurrence> paidFromAccount = calendar.expand(from, to).occurrences().stream()
                 .filter(occurrence -> occurrence.periodStart() != null && starts.contains(occurrence.periodStart()))
                 .filter(occurrence -> occurrence.payFromAccountId() == accountId)
-                .filter(occurrence -> occurrence.kind() == ItemKind.BILL || occurrence.kind() == ItemKind.BUDGET)
                 .filter(occurrence -> !occurrence.skipped() && occurrence.invoiceId() == null && !occurrence.plannedPack())
                 .toList();
+        List<Occurrence> choices = paidFromAccount.stream()
+                .filter(occurrence -> occurrence.kind() == ItemKind.BILL || occurrence.kind() == ItemKind.BUDGET)
+                .toList();
+        Map<LocalDate, List<MatchableView>> matchable = matchable(accountId, periods, paidFromAccount);
         Map<ItemDate, Replaced> replaced = uploads.replaced(choices.stream().map(Occurrence::itemId).distinct().toList());
         Map<ItemDate, Long> bases = new HashMap<>();
         Map<ItemDate, Long> currents = new HashMap<>();
@@ -676,6 +703,7 @@ public final class StatementUploadsRoutes {
                     covered == null ? null : new CoverageView(covered.from(), covered.to(), covered.partly()),
                     groups,
                     choiceViews,
+                    matchable.getOrDefault(period.start(), List.of()),
                     changes.stream()
                             .map(change -> new ChangeView(change.itemId(), change.scheduledDate(), change.currentCents(), change.newCents(),
                                     change.lineIds()))
@@ -695,6 +723,175 @@ public final class StatementUploadsRoutes {
                 .toList();
         return new Worked(new ChangesView(upload.id(), accountId, views, outside, lines), changesByPeriod, undecidedByPeriod, bases,
                 currents, counted);
+    }
+
+    /**
+     * What each period's lines can be matched to: the dates of recurring items paid from the account other than budgets and
+     * set-asides (money that never leaves it), and one-offs spent from it, each with the line already matched to it.
+     */
+    private Map<LocalDate, List<MatchableView>> matchable(long accountId, List<PayPeriod> periods, List<Occurrence> paidFromAccount) {
+        Map<ItemDate, Long> itemTaken = new HashMap<>();
+        Map<Long, Long> entryTaken = new HashMap<>();
+        for (Line line : uploads.linesOfAccount(accountId)) {
+            StatementUploadsRepository.Match match = line.match();
+            if (match == null) {
+                continue;
+            }
+            if (match.entryId() != null) {
+                entryTaken.put(match.entryId(), line.id());
+            } else {
+                itemTaken.put(new ItemDate(match.itemId(), match.scheduledDate()), line.id());
+            }
+        }
+        Map<LocalDate, List<MatchableView>> byPeriod = new HashMap<>();
+        for (Occurrence occurrence : paidFromAccount) {
+            if (occurrence.kind() == ItemKind.BUDGET || occurrence.kind() == ItemKind.BUCKET_MOVE) {
+                continue;
+            }
+            byPeriod.computeIfAbsent(occurrence.periodStart(), start -> new ArrayList<>()).add(new MatchableView(
+                    occurrence.itemId(), occurrence.scheduledDate(), null, occurrence.name(), occurrence.payBy(), occurrence.amountCents(),
+                    occurrence.paid(), itemTaken.get(new ItemDate(occurrence.itemId(), occurrence.scheduledDate()))));
+        }
+        if (!periods.isEmpty()) {
+            for (EntriesRepository.Entry entry : entries.between(periods.getFirst().start(), periods.getLast().end())) {
+                if (entry.accountId() != accountId || entry.kind() != EntryKind.MONEY_OUT) {
+                    continue;
+                }
+                Replacement.periodOf(entry.date(), periods).ifPresent(period -> byPeriod.computeIfAbsent(period.start(), key -> new ArrayList<>())
+                        .add(new MatchableView(null, null, entry.id(), entry.description(), entry.date(), entry.amountCents(), true,
+                                entryTaken.get(entry.id()))));
+            }
+        }
+        byPeriod.values().forEach(list -> list.sort(Comparator.comparing(MatchableView::date).thenComparing(MatchableView::name)));
+        return byPeriod;
+    }
+
+    /** Request body for matching a line: a recurring item's date ({@code itemId}, {@code scheduledDate}) or a one-off ({@code entryId}). */
+    public record MatchInput(Long itemId, LocalDate scheduledDate, Long entryId) {}
+
+    /**
+     * Matches a line to what it already is in Budget (Rachel, 2026-10-30). A recurring item's date takes the charge as its
+     * amount and is ticked paid on the day it was spent; a one-off is only linked. Either way the line stops counting toward
+     * its totals, so nothing is counted twice. One that was matched to something else is let go of first.
+     */
+    private void match(Context ctx) {
+        Upload upload = found(ctx);
+        Line line = ownLine(ctx, upload);
+        MatchInput input = Inputs.body(ctx, MatchInput.class);
+        boolean toEntry = input.entryId() != null;
+        if (toEntry == (input.itemId() != null || input.scheduledDate() != null) || !toEntry && (input.itemId() == null || input.scheduledDate() == null)) {
+            throw ApiException.badRequest("Please choose what this charge is from the list.");
+        }
+        if (line.amountCents() <= 0) {
+            throw ApiException.badRequest("Only money spent can be matched to a bill or a one-off. Money back counts toward its totals.");
+        }
+        if (line.duplicateOf() != null || line.oneOffEntryId() != null) {
+            throw ApiException.conflict(line.duplicateOf() != null
+                    ? "This charge is on an earlier statement too; match it there."
+                    : "This charge was added as a one-off already.");
+        }
+        List<PayPeriod> periods = pay.payPeriods(upload.from(), upload.to());
+        PayPeriod period = periods.stream().filter(each -> each.contains(line.txnDate())).findFirst()
+                .orElseThrow(() -> ApiException.badRequest("This charge is in no pay period, so there is nothing to match it to."));
+        List<Occurrence> paidFromAccount = calendar.expand(period.start(), period.end()).occurrences().stream()
+                .filter(occurrence -> period.start().equals(occurrence.periodStart()) && occurrence.payFromAccountId() == upload.accountId())
+                .filter(occurrence -> !occurrence.skipped() && occurrence.invoiceId() == null && !occurrence.plannedPack())
+                .toList();
+        MatchableView chosen = matchable(upload.accountId(), List.of(period), paidFromAccount).getOrDefault(period.start(), List.of()).stream()
+                .filter(each -> toEntry
+                        ? input.entryId().equals(each.entryId())
+                        : input.itemId().equals(each.itemId()) && input.scheduledDate().equals(each.scheduledDate()))
+                .findFirst()
+                .orElseThrow(() -> ApiException.badRequest("Please choose something from this charge's pay period."));
+        if (chosen.matchedLineId() != null && chosen.matchedLineId() != line.id()) {
+            throw ApiException.conflict("Another charge is already matched to " + chosen.name() + ". Unmatch that one first.");
+        }
+        if (!toEntry && uploads.targets(upload.accountId()).stream()
+                .anyMatch(target -> target.periodStart().equals(period.start()) && target.itemId() == input.itemId())) {
+            throw ApiException.conflict(chosen.name() + " is what a total replaces in this pay period. Choose Nothing for that total first.");
+        }
+        restore(line);
+        if (toEntry) {
+            uploads.setMatch(line.id(), StatementUploadsRepository.Match.entry(input.entryId()));
+        } else {
+            Override stored = storedOverride(input.itemId(), input.scheduledDate());
+            Override paid = stored.withAmount(line.amountCents(), chosen.amountCents());
+            items.saveOverride(new Override(paid.itemId(), paid.originalDueDate(), paid.amountCents(), paid.dueDate(), paid.periodOverride(),
+                    true, line.txnDate(), paid.confirmationCode(), paid.note(), paid.skipped(), paid.projectedCents(), paid.checkNumber(),
+                    paid.payFromAccountId()));
+            uploads.setMatch(line.id(), StatementUploadsRepository.Match.item(input.itemId(), input.scheduledDate(),
+                    new StatementUploadsRepository.Before(stored.amountCents(), stored.paid(), stored.paidDate(), stored.projectedCents())));
+        }
+        ApiResponse.ok(ctx, view(upload, List.of()));
+    }
+
+    /** Lets go of what a line was matched to, putting a recurring item's date back as it was before. */
+    private void unmatch(Context ctx) {
+        Upload upload = found(ctx);
+        Line line = ownLine(ctx, upload);
+        restore(line);
+        ApiResponse.ok(ctx, view(upload, List.of()));
+    }
+
+    /** Puts back the date a line was matched to, as it was before the match, and forgets the match. */
+    private void restore(Line line) {
+        StatementUploadsRepository.Match match = line.match();
+        if (match == null) {
+            return;
+        }
+        if (match.itemId() != null) {
+            Override now = storedOverride(match.itemId(), match.scheduledDate());
+            StatementUploadsRepository.Before before = match.before();
+            items.saveOverride(new Override(now.itemId(), now.originalDueDate(), before.amountCents(), now.dueDate(), now.periodOverride(),
+                    before.paid(), before.paidDate(), now.confirmationCode(), now.note(), now.skipped(), before.projectedCents(),
+                    now.checkNumber(), now.payFromAccountId()));
+        }
+        uploads.clearMatch(line.id());
+    }
+
+    private Override storedOverride(long itemId, LocalDate scheduledDate) {
+        return items.overrides(scheduledDate, scheduledDate).stream()
+                .filter(edit -> edit.itemId() == itemId)
+                .findFirst()
+                .orElse(Override.untouched(itemId, scheduledDate));
+    }
+
+    /** Adds a line as a one-off of its own on the day it was spent, with its category and tags: one click, nothing else to tick. */
+    private void oneOff(Context ctx) {
+        Upload upload = found(ctx);
+        Line line = ownLine(ctx, upload);
+        if (line.duplicateOf() != null || line.oneOffEntryId() != null || line.match() != null) {
+            throw ApiException.conflict(line.match() != null
+                    ? "This charge is matched to something already in Budget. Unmatch it first."
+                    : line.duplicateOf() != null ? "This charge is on an earlier statement too; add it from there."
+                    : "This charge was added as a one-off already.");
+        }
+        boolean back = line.amountCents() < 0;
+        long entryId = entries.create(new EntriesRepository.Fields(
+                back ? EntryKind.MONEY_IN : EntryKind.MONEY_OUT,
+                line.txnDate(),
+                Math.abs(line.amountCents()),
+                false,
+                line.description(),
+                null,
+                line.categoryId(),
+                upload.accountId(),
+                null,
+                null,
+                line.tagIds(),
+                List.of(),
+                null,
+                null,
+                null,
+                null));
+        uploads.setOneOff(line.id(), entryId);
+        ApiResponse.send(ctx, 201, view(upload, List.of()));
+    }
+
+    /** The line named in the path, which must be this upload's own. */
+    private Line ownLine(Context ctx, Upload upload) {
+        long lineId = Inputs.id(ctx, "lineId");
+        return uploads.line(lineId).filter(line -> line.uploadId() == upload.id()).orElseThrow(ApiException::notFound);
     }
 
     /** Request body for pointing a total at an item: {@code itemId} null points it at nothing; {@code mode} replace or add. */
@@ -721,27 +918,34 @@ public final class StatementUploadsRoutes {
             if (!choosable) {
                 throw ApiException.badRequest("Please choose a budget or recurring item from this pay period's list.");
             }
+            boolean matched = uploads.linesOfAccount(upload.accountId()).stream()
+                    .map(Line::match)
+                    .anyMatch(match -> match != null && input.itemId().equals(match.itemId())
+                            && pay.payPeriods(match.scheduledDate(), match.scheduledDate()).stream()
+                                    .anyMatch(each -> each.start().equals(input.periodStart())));
+            if (matched) {
+                throw ApiException.conflict("A charge is matched to that item in this pay period. Unmatch it first.");
+            }
         }
         uploads.setTarget(upload.accountId(), input.periodStart(), new Group(type, input.groupId()), input.itemId(), mode);
         ApiResponse.ok(ctx, changes(upload));
     }
 
-    /** Request body for applying: the pay periods whose changes to make, and lines to add as one-offs of their own. */
-    public record ApplyInput(List<LocalDate> periods, List<Long> oneOffLineIds) {}
+    /** Request body for applying: the pay periods whose changes to make. */
+    public record ApplyInput(List<LocalDate> periods) {}
 
     /** What was applied, and how things stand after. */
-    public record Applied(int amountsChanged, int oneOffsAdded, ChangesView changes) {}
+    public record Applied(int amountsChanged, ChangesView changes) {}
 
     private void apply(Context ctx) {
         Upload upload = found(ctx);
         ApplyInput input = Inputs.body(ctx, ApplyInput.class);
         List<LocalDate> chosen = input.periods() == null ? List.of() : input.periods().stream().distinct().toList();
-        List<Long> oneOffIds = input.oneOffLineIds() == null ? List.of() : input.oneOffLineIds().stream().distinct().toList();
-        if (chosen.contains(null) || oneOffIds.contains(null)) {
+        if (chosen.contains(null)) {
             throw ApiException.badRequest("Please choose the pay periods to apply from the list.");
         }
-        if (chosen.isEmpty() && oneOffIds.isEmpty()) {
-            throw ApiException.badRequest("Please choose at least one pay period to apply, or a charge to add as a one-off.");
+        if (chosen.isEmpty()) {
+            throw ApiException.badRequest("Please choose at least one pay period to apply.");
         }
         Worked worked = worked(upload);
         for (LocalDate period : chosen) {
@@ -753,18 +957,6 @@ public final class StatementUploadsRoutes {
                         + " could count toward two items. Please choose which for each one first.");
             }
         }
-        // A one-off can only be made of one of this upload's own lines that no total is changing an item by.
-        Set<Long> claimed = worked.changes().values().stream()
-                .flatMap(List::stream)
-                .flatMap(change -> change.lineIds().stream())
-                .collect(Collectors.toSet());
-        Map<Long, Line> ownCounted = new HashMap<>();
-        uploads.lines(upload.id()).stream().filter(Line::counted).forEach(line -> ownCounted.put(line.id(), line));
-        for (long lineId : oneOffIds) {
-            if (!ownCounted.containsKey(lineId) || claimed.contains(lineId)) {
-                throw ApiException.badRequest("Please choose charges from this statement that aren't already counted toward an item.");
-            }
-        }
 
         int changed = 0;
         for (LocalDate period : chosen) {
@@ -773,39 +965,14 @@ public final class StatementUploadsRoutes {
                     continue;
                 }
                 ItemDate key = new ItemDate(change.itemId(), change.scheduledDate());
-                Override stored = items.overrides(change.scheduledDate(), change.scheduledDate()).stream()
-                        .filter(edit -> edit.itemId() == change.itemId())
-                        .findFirst()
-                        .orElse(Override.untouched(change.itemId(), change.scheduledDate()));
+                Override stored = storedOverride(change.itemId(), change.scheduledDate());
                 items.saveOverride(stored.withAmount(change.newCents(), change.currentCents()));
                 uploads.saveReplaced(key, new Replaced(worked.bases().get(key), change.newCents()));
                 changed++;
             }
         }
-        for (long lineId : oneOffIds) {
-            Line line = ownCounted.get(lineId);
-            boolean back = line.amountCents() < 0;
-            long entryId = entries.create(new EntriesRepository.Fields(
-                    back ? EntryKind.MONEY_IN : EntryKind.MONEY_OUT,
-                    line.txnDate(),
-                    Math.abs(line.amountCents()),
-                    false,
-                    line.description(),
-                    null,
-                    line.categoryId(),
-                    upload.accountId(),
-                    null,
-                    null,
-                    line.tagIds(),
-                    List.of(),
-                    null,
-                    null,
-                    null,
-                    null));
-            uploads.setOneOff(lineId, entryId);
-        }
         uploads.markApplied(upload.id());
-        ApiResponse.ok(ctx, new Applied(changed, oneOffIds.size(), changes(upload)));
+        ApiResponse.ok(ctx, new Applied(changed, changes(upload)));
     }
 
     // ---------------------------------------------------------------- helpers
@@ -819,7 +986,7 @@ public final class StatementUploadsRoutes {
                 .map(line -> new LineView(line.id(), line.txnDate(), line.postedDate(), line.description(), line.amountCents(), line.kind(),
                         line.leftOut(), line.sure(), line.duplicateOf(), line.categoryId(), line.tagIds(), GroupView.of(line.countsToward()),
                         line.oneOffEntryId(), Replacement.periodOf(line.txnDate(), periods).map(PayPeriod::start).orElse(null),
-                        rule(rules, line.payeeKey()).isEmpty()))
+                        rule(rules, line.payeeKey()).isEmpty(), MatchedView.of(line.match())))
                 .toList();
         int toCheck = (int) lines.stream().filter(line -> !line.sure()).count();
         return new UploadView(upload.id(), account.id(), account.name(), onCard(account), upload.name(), upload.format(), upload.from(),

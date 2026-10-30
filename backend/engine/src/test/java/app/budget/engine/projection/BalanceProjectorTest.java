@@ -116,7 +116,7 @@ class BalanceProjectorTest {
         assertThat(first.out()).isEqualTo(cents(26000));
         assertThat(first.adjusted()).isEqualTo(cents(-260058));
         assertThat(first.adjustments()).containsExactly(
-                new PeriodBalance.Adjustment(date("2026-10-06"), cents(90000), cents(-260058)));
+                new PeriodBalance.Adjustment(date("2026-10-06"), cents(90000), cents(-260058), false));
         assertThat(first.ending()).isEqualTo(cents(84000));
         assertThat(first.lowest()).isEqualTo(cents(84000));
         assertThat(balances.get(1).starting()).isEqualTo(first.ending());
@@ -212,6 +212,83 @@ class BalanceProjectorTest {
 
         assertThat(balance.ending()).isEqualTo(cents(-15000));
         assertThat(balance.lowest().isNegative()).isTrue();
+    }
+
+    // ---------------------------------------------------------------- balances the day ended with (Rachel, 2026-10-30)
+
+    @Test
+    void aBalanceTheDayEndedWithAlreadyHoldsThatDaysPaycheckAndPayments() {
+        List<Movement> movements = List.of(move("2026-10-01", 348227), move("2026-10-01", -8700), move("2026-10-03", -5000));
+
+        List<PeriodBalance> balances = BalanceProjector.project(
+                List.of(anchor("2026-09-30", 422489), endOfDay("2026-10-01", 762016)), movements, PERIODS);
+
+        // The period still starts as Oct 1 begins; the balance is set against starting + paycheck − that day's payment.
+        PeriodBalance first = balances.getFirst();
+        assertThat(first.starting()).isEqualTo(cents(422489));
+        assertThat(first.in()).isEqualTo(cents(348227));
+        assertThat(first.out()).isEqualTo(cents(13700));
+        assertThat(first.adjustments()).containsExactly(
+                new PeriodBalance.Adjustment(date("2026-10-01"), cents(762016), cents(762016 - (422489 + 348227 - 8700)), true));
+        assertThat(first.ending()).isEqualTo(cents(762016 - 5000));
+    }
+
+    @Test
+    void aBalanceThePeriodsLastDayEndedWithStaysInItAndTheNextStartsFromIt() {
+        List<Movement> movements = List.of(move("2026-10-14", -2500), move("2026-10-15", 248620));
+
+        List<PeriodBalance> balances = BalanceProjector.project(
+                List.of(anchor("2026-09-30", 100000), endOfDay("2026-10-14", 90000)), movements, PERIODS);
+
+        assertThat(balances.get(0).adjustments()).containsExactly(
+                new PeriodBalance.Adjustment(date("2026-10-14"), cents(90000), cents(90000 - (100000 - 2500)), true));
+        assertThat(balances.get(0).ending()).isEqualTo(cents(90000));
+        assertThat(balances.get(1).starting()).isEqualTo(cents(90000));
+        assertThat(balances.get(1).adjustments()).isEmpty();
+        assertThat(balances.get(1).ending()).isEqualTo(cents(90000 + 248620));
+    }
+
+    @Test
+    void somethingPaidByHandAndNotTickedOffThatDayStillComesAfterIt() {
+        List<Movement> movements = List.of(move("2026-10-01", 248620), new Movement(date("2026-10-01"), cents(-12000), true));
+
+        List<PeriodBalance> balances = BalanceProjector.project(
+                List.of(anchor("2026-09-30", 100000), endOfDay("2026-10-01", 348620)), movements, PERIODS);
+
+        // Not yet gone when the day ended, so the balance matches; the bill leaves after it.
+        PeriodBalance first = balances.getFirst();
+        assertThat(first.adjustments().getFirst().difference()).isEqualTo(Money.ZERO);
+        assertThat(first.ending()).isEqualTo(cents(348620 - 12000));
+    }
+
+    @Test
+    void theFirstBalanceEverEnteredAtTheEndOfItsDayAlreadyHoldsThatDay() {
+        List<Movement> movements = List.of(move("2026-10-05", 248620), move("2026-10-06", -1000));
+
+        PeriodBalance first = BalanceProjector.project(List.of(endOfDay("2026-10-05", 300000)), movements, PERIODS).getFirst();
+
+        assertThat(first.entered()).isTrue();
+        assertThat(first.starting()).isEqualTo(cents(300000));
+        assertThat(first.startingOn()).isEqualTo(date("2026-10-05"));
+        assertThat(first.in()).isEqualTo(Money.ZERO);
+        assertThat(first.out()).isEqualTo(cents(1000));
+        assertThat(first.ending()).isEqualTo(cents(299000));
+    }
+
+    @Test
+    void aBalanceEnteredBeforeTheChangeStillStandsForTheStartOfItsDay() {
+        List<Movement> movements = List.of(move("2026-10-01", 248620));
+
+        PeriodBalance first = BalanceProjector.project(
+                List.of(anchor("2026-09-30", 100000), anchor("2026-10-01", 100000)), movements, PERIODS).getFirst();
+
+        // The paycheck that day comes after it.
+        assertThat(first.adjustments()).containsExactly(new PeriodBalance.Adjustment(date("2026-10-01"), cents(100000), Money.ZERO, false));
+        assertThat(first.ending()).isEqualTo(cents(348620));
+    }
+
+    private static BalanceAnchor endOfDay(String day, long cents) {
+        return new BalanceAnchor(date(day), cents(cents), true);
     }
 
     private static Movement move(String day, long cents) {

@@ -59,19 +59,23 @@ export interface Occurrence {
 }
 
 /**
- * A balance entered during a pay period, shown in it as an adjustment to what Budget expected that morning.
- * Editing it changes that balance; deleting it removes it.
+ * A balance entered during a pay period, shown in it as an adjustment to what Budget expected the account to hold
+ * then. Editing it changes that balance; deleting it removes it.
  */
 export interface BalanceAdjustment {
   entryId: number;
   date: string;
   /** The balance entered. */
   balanceCents: number;
-  /** That less what the account was expected to hold as the day began, signed. */
+  /** That less what the account was expected to hold as the day ended (or for an older balance, began), signed. */
   differenceCents: number;
   note: string | null;
   /** The balance entered before it, when the records last matched; `null` for none. */
   since: string | null;
+  /** True when it is what its day ended with. */
+  endOfDay: boolean;
+  /** True when the balance entered before it is what its day ended with. */
+  sinceEndOfDay: boolean;
 }
 
 /**

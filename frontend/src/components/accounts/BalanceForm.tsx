@@ -71,8 +71,9 @@ export function BalanceForm({
           hero
         />
         <div>
+          {/* What the account held when the day ended: that day's paycheck and payments are in it (Rachel, 2026-10-30). */}
           <label htmlFor={`${id}-date`} className={LABEL}>
-            As of
+            At the end of
           </label>
           <input
             id={`${id}-date`}
@@ -83,7 +84,8 @@ export function BalanceForm({
             className={INPUT}
           />
           <p className={HINT}>
-            A day still to come is planned: the projection starts from it that day. A day you already entered is replaced.
+            What the account held when that day ended, with that day's paycheck and payments in it. A day still to come is
+            planned. A day you already entered is replaced.
           </p>
           <DefaultDateHint value={date} />
         </div>

@@ -139,7 +139,19 @@ function Opener({ line, onEntry }: { line: AccountTransaction; onEntry: (entryId
   return <span>{line.label}</span>;
 }
 
-/** The day before `date`: a balance entered is what the day began with, so what moved it ends the day before. */
-export function dayBefore(date: string): string {
-  return addDays(date, -1);
+/** A balance entered, as far as which day's movements it already holds. */
+interface Moment {
+  date: string;
+  endOfDay: boolean;
+}
+
+/**
+ * The days whose movements lie between two balances entered. A balance the day ended with already holds that day; one
+ * it began with (every balance entered before 2026-10-30) leaves the day's movements to what follows it.
+ */
+export function between(before: Moment, after: Moment): { from: string; through: string } {
+  return {
+    from: before.endOfDay ? addDays(before.date, 1) : before.date,
+    through: after.endOfDay ? after.date : addDays(after.date, -1),
+  };
 }

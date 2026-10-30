@@ -81,8 +81,9 @@ export function UpdateBalancesForm({ accounts, onClose }: { accounts: readonly A
       <form onSubmit={submit} className="space-y-4">
         <div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {/* What each account held when the day ended: that day's paycheck and payments are in it (Rachel, 2026-10-30). */}
             <label htmlFor={`${id}-date`} className="font-medium">
-              As of
+              At the end of
             </label>
             <input
               id={`${id}-date`}

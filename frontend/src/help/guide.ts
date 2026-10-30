@@ -211,7 +211,7 @@ export const TOPICS: readonly Topic[] = [
         body: [
           "+ Add account for checking, savings, credit cards, investments and loans; + Add home or asset for a home, car or anything else of value.",
           "Update balances enters the real number for several accounts at once. Budget works forward from the latest balance you entered, so this is how you keep it honest.",
-          "Know a balance ahead of time, like an FSA that's all there on Jan 1? Use Update balance on the account with that date. It's marked Planned, and the projection starts from it on that day.",
+          "Know a balance ahead of time, like an FSA that's all there on Jan 1? Use Update balance on the account with that date. It's marked Planned, and the projection starts from it at the end of that day.",
           "To be warned when an account runs low, set Warn me when the balance dips below on the account.",
         ],
       },

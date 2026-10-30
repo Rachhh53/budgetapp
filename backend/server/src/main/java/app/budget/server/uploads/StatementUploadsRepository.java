@@ -56,6 +56,7 @@ public final class StatementUploadsRepository {
      * @param amountCents  spent as positive, money back negative
      * @param duplicateOf  the line of an earlier upload it repeats; null when it is new
      * @param countsToward the group chosen when two of its groups are pointed at items; null until then
+     * @param match        what Budget already has that it is, chosen by the user; null when it isn't matched
      */
     public record Line(
             long id,
@@ -73,12 +74,38 @@ public final class StatementUploadsRepository {
             Long categoryId,
             List<Long> tagIds,
             Group countsToward,
-            Long oneOffEntryId) {
+            Long oneOffEntryId,
+            Match match) {
 
-        /** Counted toward totals: not left out, not a repeat, and not a one-off of its own. */
+        /** Counted toward totals: not left out, not a repeat, not a one-off of its own and not matched to one already there. */
         public boolean counted() {
-            return !leftOut && duplicateOf == null && oneOffEntryId == null;
+            return !leftOut && duplicateOf == null && oneOffEntryId == null && match == null;
         }
+    }
+
+    /**
+     * What a line was matched to: a date of a recurring item ({@code itemId} and {@code scheduledDate}) or a one-off
+     * entry ({@code entryId}), with that date as it was before, to put back when it is unmatched.
+     */
+    public record Match(Long itemId, LocalDate scheduledDate, Long entryId, Before before) {
+
+        public static Match item(long itemId, LocalDate scheduledDate, Before before) {
+            return new Match(itemId, scheduledDate, null, before);
+        }
+
+        public static Match entry(long entryId) {
+            return new Match(null, null, entryId, Before.NOTHING);
+        }
+    }
+
+    /**
+     * An item's date before a line was matched to it.
+     *
+     * @param amountCents    the amount typed over it then; null for none
+     * @param projectedCents the amount it showed before its first typed amount; null for none
+     */
+    public record Before(Long amountCents, boolean paid, LocalDate paidDate, Long projectedCents) {
+        public static final Before NOTHING = new Before(null, false, null, null);
     }
 
     /** A line to add with a new upload. */
@@ -105,7 +132,9 @@ public final class StatementUploadsRepository {
 
     private static final String LINE_SELECT = """
             SELECT l.id, l.upload_id, l.txn_date, l.posted_date, l.description, l.payee_key, l.amount, l.kind, l.left_out, l.sure,
-                   l.external_id, l.duplicate_of, l.category_id, l.counts_toward, l.counts_toward_tag_id, l.one_off_entry_id
+                   l.external_id, l.duplicate_of, l.category_id, l.counts_toward, l.counts_toward_tag_id, l.one_off_entry_id,
+                   l.matched_item_id, l.matched_date, l.matched_entry_id, l.before_amount, l.before_paid, l.before_paid_date,
+                   l.before_projected
             FROM statement_upload_lines l
             """;
 
@@ -287,6 +316,37 @@ public final class StatementUploadsRepository {
                 .execute());
     }
 
+    /** Records what a line is. Matching it to something else replaces what it was matched to. */
+    public void setMatch(long lineId, Match match) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        UPDATE statement_upload_lines
+                        SET matched_item_id = :itemId, matched_date = :date, matched_entry_id = :entryId, before_amount = :amount,
+                            before_paid = :paid, before_paid_date = :paidDate, before_projected = :projected
+                        WHERE id = :id
+                        """)
+                .bind("itemId", match.itemId())
+                .bind("date", match.scheduledDate() == null ? null : match.scheduledDate().toString())
+                .bind("entryId", match.entryId())
+                .bind("amount", match.before().amountCents())
+                .bind("paid", match.before().paid())
+                .bind("paidDate", match.before().paidDate() == null ? null : match.before().paidDate().toString())
+                .bind("projected", match.before().projectedCents())
+                .bind("id", lineId)
+                .execute());
+    }
+
+    /** Lets go of what a line was matched to, so it counts toward its totals again. */
+    public void clearMatch(long lineId) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        UPDATE statement_upload_lines
+                        SET matched_item_id = NULL, matched_date = NULL, matched_entry_id = NULL, before_amount = NULL, before_paid = 0,
+                            before_paid_date = NULL, before_projected = NULL
+                        WHERE id = :id
+                        """)
+                .bind("id", lineId)
+                .execute());
+    }
+
     /** Removes an upload and its lines. What it changed stays, as for a pay stub; Undo brings it back. */
     public boolean delete(long id) {
         return jdbi.withHandle(handle -> handle.createUpdate("DELETE FROM statement_uploads WHERE id = :id").bind("id", id).execute()) > 0;
@@ -464,7 +524,8 @@ public final class StatementUploadsRepository {
         return lines.stream()
                 .map(line -> new Line(line.id(), line.uploadId(), line.txnDate(), line.postedDate(), line.description(), line.payeeKey(),
                         line.amountCents(), line.kind(), line.leftOut(), line.sure(), line.externalId(), line.duplicateOf(),
-                        line.categoryId(), List.copyOf(tags.getOrDefault(line.id(), List.of())), line.countsToward(), line.oneOffEntryId()))
+                        line.categoryId(), List.copyOf(tags.getOrDefault(line.id(), List.of())), line.countsToward(), line.oneOffEntryId(),
+                        line.match()))
                 .toList();
     }
 
@@ -511,7 +572,25 @@ public final class StatementUploadsRepository {
                 nullableLong(rs, "category_id"),
                 List.of(),
                 chosen,
-                nullableLong(rs, "one_off_entry_id"));
+                nullableLong(rs, "one_off_entry_id"),
+                match(rs));
+    }
+
+    /** What the line was matched to; null when nothing is, or what it was matched to has since been deleted. */
+    private static Match match(ResultSet rs) throws SQLException {
+        Long itemId = nullableLong(rs, "matched_item_id");
+        String date = rs.getString("matched_date");
+        Long entryId = nullableLong(rs, "matched_entry_id");
+        if (entryId != null) {
+            return Match.entry(entryId);
+        }
+        if (itemId == null || date == null) {
+            return null;
+        }
+        String paidDate = rs.getString("before_paid_date");
+        return Match.item(itemId, LocalDate.parse(date), new Before(
+                nullableLong(rs, "before_amount"), rs.getBoolean("before_paid"), paidDate == null ? null : LocalDate.parse(paidDate),
+                nullableLong(rs, "before_projected")));
     }
 
     private static Long nullableLong(ResultSet rs, String column) throws SQLException {

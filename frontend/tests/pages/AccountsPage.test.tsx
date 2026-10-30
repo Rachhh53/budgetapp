@@ -14,7 +14,7 @@ const CHECKING: Account = {
   color: "#0f766e",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 10, date: "2026-10-02", amountCents: 170510, note: null },
+  latestBalance: { id: 10, date: "2026-10-02", amountCents: 170510, note: null, endOfDay: true },
 };
 const SAVINGS: Account = {
   id: 2,
@@ -25,7 +25,7 @@ const SAVINGS: Account = {
   color: "#c2410c",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 11, date: "2026-09-30", amountCents: 842000, note: null },
+  latestBalance: { id: 11, date: "2026-09-30", amountCents: 842000, note: null, endOfDay: true },
 };
 const CARD: Account = {
   id: 3,

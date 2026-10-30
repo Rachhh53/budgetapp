@@ -6,21 +6,27 @@ import {
   type CountedLine,
   type GroupTotal,
   type ItemChoice,
+  isMatch,
+  type Matchable,
   type PeriodChanges,
   type ReplaceMode,
   type StatementChanges,
   type StatementLine,
   type StatementUpload,
   statementPreviewUrl,
+  useAddStatementOneOff,
   useApplyStatement,
   useChangeStatementLine,
   useDeleteStatementUpload,
+  useMatchStatementLine,
   useSetStatementTarget,
   useStatementChanges,
   useStatementUpload,
+  useUnmatchStatementLine,
 } from "../api/statementUploads";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
+import { categoryLabel } from "../components/categories/LabelFields";
 import { EditButton } from "../components/EditButton";
 import { FilePreview } from "../components/files/Receipts";
 import { FilterPills } from "../components/FilterPills";
@@ -124,7 +130,7 @@ export function StatementUploadPage() {
           </p>
         )}
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-          <ChargesCard upload={data} categories={categories} tags={tags} />
+          <ChargesCard upload={data} changes={changes.data} categories={categories} tags={tags} />
           <div className="space-y-4">
             {changes.isPending && (
               <Card title="What changes">
@@ -196,18 +202,41 @@ function Notices({ upload, changes }: { upload: StatementUpload; changes: Statem
 }
 
 function counted(line: StatementLine): boolean {
-  return !line.leftOut && line.duplicateOf === null && line.oneOffEntryId === null;
+  return !line.leftOut && line.duplicateOf === null && line.oneOffEntryId === null && line.matched === null;
+}
+
+/** Can still be matched to something in Budget, or added as a one-off: not a repeat and not dealt with already. */
+function open(line: StatementLine): boolean {
+  return line.duplicateOf === null && line.oneOffEntryId === null && line.matched === null;
 }
 
 type LineFilter = "to_file" | "left_out";
 
 /**
- * Every line, by pay period, each with its category and tags and an Edit to file it. Left-out lines (payments,
- * transfers, repeats of an earlier statement) stay listed, saying why, with Put back where that applies.
+ * Every line, by pay period, each with its category and tags and an Edit to file it. A charge that is already in Budget
+ * (a bill, a one-off entered by hand) is matched to it from its row, and one that isn't is added as a one-off with one
+ * click (Rachel, 2026-10-30). Left-out lines (payments, transfers, repeats of an earlier statement) stay listed, saying
+ * why, with Put back where that applies.
  */
-function ChargesCard({ upload, categories, tags }: { upload: StatementUpload; categories: readonly Category[]; tags: readonly Tag[] }) {
+function ChargesCard({
+  upload,
+  changes,
+  categories,
+  tags,
+}: {
+  upload: StatementUpload;
+  changes: StatementChanges | undefined;
+  categories: readonly Category[];
+  tags: readonly Tag[];
+}) {
   const change = useChangeStatementLine(upload.id);
+  const unmatch = useUnmatchStatementLine(upload.id);
+  const oneOff = useAddStatementOneOff(upload.id);
   const [editing, setEditing] = useState<StatementLine>();
+  const [matching, setMatching] = useState<StatementLine>();
+  const candidates = (line: StatementLine): Matchable[] =>
+    changes?.periods.find((period) => period.start === line.periodStart)?.matchable ?? [];
+  const failed = change.error ?? unmatch.error ?? oneOff.error;
   const [filter, setFilter] = useState<LineFilter | null>(null);
   const [filed, setFiled] = useState<string>();
   const shown = upload.lines.filter((line) =>
@@ -233,9 +262,9 @@ function ChargesCard({ upload, categories, tags }: { upload: StatementUpload; ca
           {filed}
         </p>
       )}
-      {change.isError && (
+      {failed && (
         <p role="alert" className="mt-2 text-danger">
-          {change.error.message}
+          {failed.message}
         </p>
       )}
       {shown.length === 0 && <p className="mt-3 text-muted">{filter === "to_file" ? "Every charge is filed." : "Nothing here."}</p>}
@@ -251,9 +280,14 @@ function ChargesCard({ upload, categories, tags }: { upload: StatementUpload; ca
                 <ChargeRow
                   key={line.id}
                   line={line}
+                  candidates={candidates(line)}
                   categories={categories}
                   tags={tags}
+                  pending={unmatch.isPending || oneOff.isPending}
                   onEdit={() => setEditing(line)}
+                  onMatch={() => setMatching(line)}
+                  onUnmatch={() => unmatch.mutate(line.id)}
+                  onOneOff={() => oneOff.mutate(line.id)}
                   onPutBack={() =>
                     change.mutate({ lineId: line.id, input: { categoryId: line.categoryId, tagIds: line.tagIds, leftOut: false, countsToward: line.countsToward } })
                   }
@@ -272,33 +306,46 @@ function ChargesCard({ upload, categories, tags }: { upload: StatementUpload; ca
           onClose={() => setEditing(undefined)}
         />
       )}
+      {matching && <MatchDialog uploadId={upload.id} line={matching} candidates={candidates(matching)} onClose={() => setMatching(undefined)} />}
     </Card>
   );
 }
 
 function ChargeRow({
   line,
+  candidates,
   categories,
   tags,
+  pending,
   onEdit,
+  onMatch,
+  onUnmatch,
+  onOneOff,
   onPutBack,
 }: {
   line: StatementLine;
+  candidates: readonly Matchable[];
   categories: readonly Category[];
   tags: readonly Tag[];
+  pending: boolean;
   onEdit: () => void;
+  onMatch: () => void;
+  onUnmatch: () => void;
+  onOneOff: () => void;
   onPutBack: () => void;
 }) {
   const category = categories.find((each) => each.id === line.categoryId);
+  const matched = line.matched === null ? undefined : candidates.find((candidate) => isMatch(line.matched, candidate));
   // Why a line isn't counted, said in words: never by greying it out alone.
   const why =
     line.oneOffEntryId !== null
       ? "Added as a one-off"
       : line.duplicateOf !== null
         ? "On an earlier statement too"
-        : line.leftOut
+        : line.leftOut && line.matched === null
           ? `${KIND_LABELS[line.kind]} · left out`
           : null;
+  const canMatch = open(line) && line.amountCents > 0 && candidates.some((candidate) => candidate.matchedLineId === null);
   return (
     <li onClick={clickRowToEdit} className={`-mx-2 flex items-start gap-2 rounded-lg px-2 py-2 ${ROW_OPENS}`}>
       <div className="min-w-0 flex-1">
@@ -306,21 +353,56 @@ function ChargeRow({
           <span className="font-medium wrap-anywhere">{line.description}</span>
           <span className="text-sm text-muted">{formatDay(line.txnDate)}</span>
         </p>
-        <div className="mt-1 flex flex-wrap items-center gap-1 text-sm">
-          {category ? (
-            <span
-              className="rounded-full px-2.5 py-0.5 font-semibold"
-              style={{ backgroundColor: category.color, color: readableTextOn(category.color) }}
-            >
-              {category.name}
-            </span>
-          ) : (
-            line.tagIds.length === 0 && counted(line) && <span className="font-medium text-warn-ink">Not filed yet</span>
-          )}
-          <TagChips tagIds={line.tagIds} tags={tags} />
+        {/* Each labelled, so the category (with what it sits under) and the tags are never mistaken for each other. */}
+        {(category || line.tagIds.length > 0) && (
+          <dl className="mt-1 space-y-1 text-sm">
+            {category && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <dt className="text-muted">Category</dt>
+                <dd
+                  className="rounded-full px-2.5 py-0.5 font-semibold wrap-anywhere"
+                  style={{ backgroundColor: category.color, color: readableTextOn(category.color) }}
+                >
+                  {categoryLabel(category, categories)}
+                </dd>
+              </div>
+            )}
+            {line.tagIds.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <dt className="text-muted">{line.tagIds.length === 1 ? "Tag" : "Tags"}</dt>
+                <dd>
+                  <TagChips tagIds={line.tagIds} tags={tags} />
+                </dd>
+              </div>
+            )}
+          </dl>
+        )}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          {!category && line.tagIds.length === 0 && counted(line) && <span className="font-medium text-warn-ink">Not filed yet</span>}
           {!line.sure && <span className="font-semibold text-warn-ink">Check this</span>}
           {why && <span className="text-muted">{why}</span>}
-          {line.leftOut && line.duplicateOf === null && line.oneOffEntryId === null && (
+          {line.matched !== null && (
+            <span className="font-medium">
+              Is {matched ? `${matched.name} · ${formatDay(matched.date)}` : "something already in Budget"}
+              {line.matched.itemId !== null && " · paid"}
+            </span>
+          )}
+          {line.matched !== null && (
+            <button type="button" disabled={pending} onClick={onUnmatch} className={`${BUTTON_LINK} min-h-9`}>
+              Unmatch
+            </button>
+          )}
+          {canMatch && (
+            <button type="button" onClick={onMatch} className={`${BUTTON_LINK} min-h-9`}>
+              Already in Budget…
+            </button>
+          )}
+          {counted(line) && (
+            <button type="button" disabled={pending} onClick={onOneOff} className={`${BUTTON_LINK} min-h-9`}>
+              Add as a one-off
+            </button>
+          )}
+          {line.leftOut && open(line) && (
             <button type="button" onClick={onPutBack} className={`${BUTTON_LINK} min-h-9`}>
               Put back
             </button>
@@ -335,6 +417,69 @@ function ChargeRow({
         <EditButton name={line.description} onClick={onEdit} />
       </div>
     </li>
+  );
+}
+
+/**
+ * Which bill, transfer or one-off already in Budget a charge is: the pay period's own, those with the same amount first.
+ * Choosing one sets a recurring item's date to the charge and ticks it paid on the day it was spent; a one-off is only
+ * linked. Undo, or Unmatch on the row, takes it back.
+ */
+function MatchDialog({
+  uploadId,
+  line,
+  candidates,
+  onClose,
+}: {
+  uploadId: number;
+  line: StatementLine;
+  candidates: readonly Matchable[];
+  onClose: () => void;
+}) {
+  const match = useMatchStatementLine(uploadId);
+  const free = candidates.filter((candidate) => candidate.matchedLineId === null);
+  const sorted = [...free].sort((a, b) => Number(b.amountCents === line.amountCents) - Number(a.amountCents === line.amountCents));
+  return (
+    <Modal title={`${line.description} · ${formatCents(line.amountCents)}`} icon={ReceiptText} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-muted">
+          Which of these is it? A bill or transfer takes this amount and is ticked paid on {formatDay(line.txnDate)}; a one-off you entered is
+          just linked. Either way it no longer counts toward its totals.
+        </p>
+        <ul className="max-h-[50dvh] divide-y divide-line overflow-y-auto rounded-lg border border-line">
+          {sorted.map((candidate) => (
+            <li key={candidate.entryId !== null ? `entry-${candidate.entryId}` : `item-${candidate.itemId}-${candidate.scheduledDate}`}>
+              <button
+                type="button"
+                disabled={match.isPending}
+                onClick={() => match.mutate({ lineId: line.id, match: candidate }, { onSuccess: onClose })}
+                className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left hover:bg-bg/60"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium wrap-anywhere">{candidate.name}</span>
+                  <span className="block text-sm text-muted">
+                    {candidate.entryId !== null ? "One-off" : "Recurring"} · {formatDay(candidate.date)}
+                    {candidate.paid && candidate.entryId === null && " · paid"}
+                    {candidate.amountCents === line.amountCents && " · same amount"}
+                  </span>
+                </span>
+                <Amount cents={candidate.amountCents} className="shrink-0" />
+              </button>
+            </li>
+          ))}
+        </ul>
+        {match.error && (
+          <p role="alert" className="text-danger">
+            {match.error.message}
+          </p>
+        )}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className={BUTTON_SECONDARY}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -641,20 +786,22 @@ function Undecided({
   );
 }
 
-/** This statement's charges no chosen item takes, which can be added as one-offs of their own instead. */
+/**
+ * This statement's charges no chosen item takes. Each can be added as a one-off with one click, or matched to what it
+ * already is from its row under Charges.
+ */
 function NotMatchedCard({ upload, changes }: { upload: StatementUpload; changes: StatementChanges }) {
-  const apply = useApplyStatement(upload.id);
-  const [chosen, setChosen] = useState<number[]>([]);
+  const oneOff = useAddStatementOneOff(upload.id);
   const own = new Map(upload.lines.map((line) => [line.id, line]));
   const unmatched = changes.periods.flatMap((period) => period.unmatched).filter((lineId) => own.has(lineId));
   if (unmatched.length === 0) {
     return null;
   }
-  const toggle = (lineId: number) => setChosen((before) => (before.includes(lineId) ? before.filter((each) => each !== lineId) : [...before, lineId]));
   return (
     <Card title="Not matched">
       <p className={HINT}>
-        No chosen item takes these. Leave them, choose an item for their category or tag above, or add any of them as one-offs of their own.
+        No chosen item takes these. Leave them, choose an item for their category or tag above, say what they already are under Charges, or
+        add them as one-offs.
       </p>
       <ul className="mt-2 divide-y divide-line">
         {unmatched.map((lineId) => {
@@ -663,36 +810,29 @@ function NotMatchedCard({ upload, changes }: { upload: StatementUpload; changes:
             return null;
           }
           return (
-            <li key={lineId}>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 py-1">
-                <input type="checkbox" checked={chosen.includes(lineId)} onChange={() => toggle(lineId)} className="size-5 shrink-0" />
-                <span className="min-w-0 flex-1 wrap-anywhere">
-                  {line.description} <span className="text-sm text-muted">{formatDay(line.txnDate)}</span>
-                </span>
-                <Amount cents={line.amountCents} className="shrink-0" />
-              </label>
+            <li key={lineId} className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 py-1">
+              <span className="min-w-0 flex-1 wrap-anywhere">
+                {line.description} <span className="text-sm text-muted">{formatDay(line.txnDate)}</span>
+              </span>
+              <Amount cents={line.amountCents} className="shrink-0" />
+              <button
+                type="button"
+                disabled={oneOff.isPending}
+                onClick={() => oneOff.mutate(lineId)}
+                aria-label={`Add ${line.description} as a one-off`}
+                className={`${BUTTON_LINK} min-h-9`}
+              >
+                Add as a one-off
+              </button>
             </li>
           );
         })}
       </ul>
-      {apply.isError && (
+      {oneOff.isError && (
         <p role="alert" className="mt-1 text-danger">
-          {apply.error.message}
+          {oneOff.error.message}
         </p>
       )}
-      {apply.isSuccess && (
-        <p role="status" className="mt-1 font-medium">
-          Added {apply.data.oneOffsAdded} {apply.data.oneOffsAdded === 1 ? "one-off" : "one-offs"}.
-        </p>
-      )}
-      <button
-        type="button"
-        disabled={chosen.length === 0 || apply.isPending}
-        onClick={() => apply.mutate({ periods: [], oneOffLineIds: chosen }, { onSuccess: () => setChosen([]) })}
-        className={`${BUTTON_SECONDARY} mt-2`}
-      >
-        {apply.isPending ? "Adding…" : chosen.length === 0 ? "Add as one-offs" : `Add ${chosen.length} as ${chosen.length === 1 ? "a one-off" : "one-offs"}`}
-      </button>
     </Card>
   );
 }
@@ -709,7 +849,7 @@ function ApplyDialog({ uploadId, periods, onClose }: { uploadId: number; periods
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    apply.mutate({ periods: chosen, oneOffLineIds: [] }, { onSuccess: onClose });
+    apply.mutate({ periods: chosen }, { onSuccess: onClose });
   };
 
   return (

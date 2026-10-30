@@ -20,7 +20,7 @@ const CHECKING: Account = {
   color: "#0f766e",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null },
+  latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null, endOfDay: true },
 };
 const SAVINGS: Account = { ...CHECKING, id: 2, name: "Rainy Day Savings", type: "savings" };
 const VISA: Account = { ...CHECKING, id: 3, name: "Visa", type: "credit_card" };
@@ -411,7 +411,7 @@ describe("pay period screen", () => {
           ...OCTOBER.accounts[0]!,
           entered: false,
           adjustedCents: -12500,
-          adjustments: [{ entryId: 44, date: "2026-10-06", balanceCents: 250000, differenceCents: -12500, note: null, since: null }],
+          adjustments: [{ entryId: 44, date: "2026-10-06", balanceCents: 250000, differenceCents: -12500, note: null, since: null, endOfDay: true, sinceEndOfDay: false }],
           endingCents: 297110,
         },
         OCTOBER.accounts[1]!,

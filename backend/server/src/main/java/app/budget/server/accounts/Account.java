@@ -31,8 +31,19 @@ public record Account(
         return Archiving.awayOn(archivedOn, day);
     }
 
-    /** A balance the user typed in for one day. Amounts are whole cents. */
-    public record BalanceEntry(long id, LocalDate date, long amountCents, String note) {}
+    /**
+     * A balance the user typed in for one day. Amounts are whole cents.
+     *
+     * @param endOfDay true when it is what the day ended with, so everything dated that day is already in it: every
+     *                 balance entered from 2026-10-30 on. False for one entered before, which is what the day began with
+     */
+    public record BalanceEntry(long id, LocalDate date, long amountCents, String note, boolean endOfDay) {
+
+        /** The first day whose money is not already in this balance. */
+        public LocalDate settlesFrom() {
+            return endOfDay ? date.plusDays(1) : date;
+        }
+    }
 
     /**
      * One account with everything entered for it.

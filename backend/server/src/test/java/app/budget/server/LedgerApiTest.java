@@ -156,8 +156,8 @@ class LedgerApiTest extends ApiTestBase {
 
         @BeforeEach
         void setUpAMonth() throws Exception {
-            enterBalance(checking, "2026-10-01", 121438);
-            enterBalance(savings, "2026-10-01", 500000);
+            enterBalance(checking, "2026-09-30", 121438);
+            enterBalance(savings, "2026-09-30", 500000);
             // Rent is set aside a paycheck ahead ("Pay a period early"): due on payday, it comes out of the one before.
             rent = item("Rent", "bill", 155000, monthly(1), "\"placement\":\"one_early\"");
             electric = item("Electric", "bill", 14000, monthly(16), "\"placement\":\"one_early\",\"estimate\":true");
@@ -182,10 +182,11 @@ class LedgerApiTest extends ApiTestBase {
             assertThat(period.get("paychecks")).hasSize(1);
             assertThat(period.get("carriedOver")).isEmpty();
 
+            // What Sep 30 ended with is what Oct 1 begins with.
             JsonNode account = account(period, checking);
             assertThat(account.get("startingCents").asLong()).isEqualTo(121438);
             assertThat(account.get("startingOn").asText()).isEqualTo("2026-10-01");
-            assertThat(account.get("entered").asBoolean()).isTrue();
+            assertThat(account.get("entered").asBoolean()).isFalse();
             assertThat(account.get("inCents").asLong()).isEqualTo(248620);
             // 300.00 groceries + 200.00 transfer + 412.00 car loan + 85.00 gift + 140.00 electric
             assertThat(account.get("outCents").asLong()).isEqualTo(113700);
@@ -336,7 +337,7 @@ class LedgerApiTest extends ApiTestBase {
 
         @Test
         void enteringTheBalanceAgainForTheSameDayReplacesIt() throws Exception {
-            enterBalance(checking, "2026-10-01", 20000);
+            enterBalance(checking, "2026-09-30", 20000);
 
             JsonNode account = account(period("2026-10-01"), checking);
 

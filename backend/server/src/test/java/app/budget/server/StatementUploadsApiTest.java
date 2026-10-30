@@ -90,9 +90,13 @@ class StatementUploadsApiTest extends ApiTestBase {
                 cookie);
     }
 
-    private Reply apply(long uploadId, String periods, String oneOffs) throws Exception {
-        return server.post("/api/statement-uploads/" + uploadId + "/apply",
-                "{\"periods\":[%s],\"oneOffLineIds\":[%s]}".formatted(periods, oneOffs), cookie);
+    private Reply apply(long uploadId, String periods) throws Exception {
+        return server.post("/api/statement-uploads/" + uploadId + "/apply", "{\"periods\":[%s]}".formatted(periods), cookie);
+    }
+
+    private Reply matchToDate(long uploadId, JsonNode line, long itemId, String date) throws Exception {
+        return server.put("/api/statement-uploads/" + uploadId + "/lines/" + line.get("id").asLong() + "/match",
+                "{\"itemId\":%d,\"scheduledDate\":\"%s\"}".formatted(itemId, date), cookie);
     }
 
     /** The item's occurrence in the period starting {@code start}. */
@@ -233,7 +237,7 @@ class StatementUploadsApiTest extends ApiTestBase {
         assertThat(change.get("currentCents").asLong()).isEqualTo(20000);
         assertThat(change.get("newCents").asLong()).isEqualTo(8000);
 
-        Reply applied = apply(id, "\"2026-09-01\"", "");
+        Reply applied = apply(id, "\"2026-09-01\"");
         assertThat(applied.status()).isEqualTo(200);
         assertThat(applied.data().get("amountsChanged").asInt()).isEqualTo(1);
         assertThat(period(applied.data().get("changes"), "2026-09-01").get("upToDate").asBoolean()).isTrue();
@@ -253,17 +257,17 @@ class StatementUploadsApiTest extends ApiTestBase {
     void addPutsTheTotalOnTopAndApplyingAgainNeverAddsTwice() throws Exception {
         long id = filedSeptember();
         target(id, "2026-09-01", "category", groceries, food, "add");
-        apply(id, "\"2026-09-01\"", "");
+        apply(id, "\"2026-09-01\"");
         assertThat(occurrence(food, "2026-09-01").get("amountCents").asLong()).isEqualTo(28000);
 
         JsonNode again = period(server.get("/api/statement-uploads/" + id + "/changes", cookie).data(), "2026-09-01");
         assertThat(again.get("upToDate").asBoolean()).isTrue();
-        apply(id, "\"2026-09-01\"", "");
+        apply(id, "\"2026-09-01\"");
         assertThat(occurrence(food, "2026-09-01").get("amountCents").asLong()).isEqualTo(28000);
 
         // Switched to Replace, it starts from nothing rather than from the amount Add made.
         target(id, "2026-09-01", "category", groceries, food, "replace");
-        apply(id, "\"2026-09-01\"", "");
+        apply(id, "\"2026-09-01\"");
         assertThat(occurrence(food, "2026-09-01").get("amountCents").asLong()).isEqualTo(8000);
     }
 
@@ -309,7 +313,7 @@ class StatementUploadsApiTest extends ApiTestBase {
 
         JsonNode first = period(server.get("/api/statement-uploads/" + id + "/changes", cookie).data(), "2026-09-01");
         assertThat(first.get("undecided")).hasSize(1);
-        assertThat(apply(id, "\"2026-09-01\"", "").status()).isEqualTo(409);
+        assertThat(apply(id, "\"2026-09-01\"").status()).isEqualTo(409);
 
         JsonNode upload = server.get("/api/statement-uploads/" + id, cookie).data();
         JsonNode shell = line(upload, "SHELL OIL 5744");
@@ -317,7 +321,7 @@ class StatementUploadsApiTest extends ApiTestBase {
                 {"categoryId":%d,"tagIds":[%d],"countsToward":{"type":"tag","id":%d}}""".formatted(gas, vacation, vacation), cookie);
         assertThat(chosen.status()).isEqualTo(200);
 
-        assertThat(apply(id, "\"2026-09-01\"", "").status()).isEqualTo(200);
+        assertThat(apply(id, "\"2026-09-01\"").status()).isEqualTo(200);
         assertThat(occurrence(trip, "2026-09-01").get("amountCents").asLong()).isEqualTo(3800);
         assertThat(occurrence(fuel, "2026-09-01").get("amountCents").asLong()).isZero();
 
@@ -342,16 +346,15 @@ class StatementUploadsApiTest extends ApiTestBase {
     }
 
     @Test
-    void chargesNoItemTakesCanBeAddedAsOneOffs() throws Exception {
+    void aChargeNoItemTakesIsAddedAsAOneOffInOneClick() throws Exception {
         long id = filedSeptember();
         JsonNode upload = server.get("/api/statement-uploads/" + id, cookie).data();
         long cafe = line(upload, "CAFE LUNA").get("id").asLong();
         JsonNode late = period(server.get("/api/statement-uploads/" + id + "/changes", cookie).data(), "2026-09-15");
         assertThat(late.get("unmatched")).extracting(JsonNode::asLong).containsExactly(cafe);
 
-        Reply applied = apply(id, "", String.valueOf(cafe));
-        assertThat(applied.status()).isEqualTo(200);
-        assertThat(applied.data().get("oneOffsAdded").asInt()).isEqualTo(1);
+        Reply added = server.post("/api/statement-uploads/" + id + "/lines/" + cafe + "/one-off", "", cookie);
+        assertThat(added.status()).isEqualTo(201);
         JsonNode entries = server.get("/api/entries?from=2026-09-16&to=2026-09-16", cookie).data();
         assertThat(entries).singleElement().satisfies(entry -> {
             assertThat(entry.get("kind").asText()).isEqualTo("money_out");
@@ -359,15 +362,83 @@ class StatementUploadsApiTest extends ApiTestBase {
             assertThat(entry.get("accountId").asLong()).isEqualTo(card);
         });
         // Now a one-off of its own, it counts toward no total and can't be added again.
-        assertThat(line(server.get("/api/statement-uploads/" + id, cookie).data(), "CAFE LUNA").get("oneOffEntryId").isNull()).isFalse();
-        assertThat(apply(id, "", String.valueOf(cafe)).status()).isEqualTo(400);
+        assertThat(line(added.data(), "CAFE LUNA").get("oneOffEntryId").isNull()).isFalse();
+        assertThat(server.post("/api/statement-uploads/" + id + "/lines/" + cafe + "/one-off", "", cookie).status()).isEqualTo(409);
+    }
+
+    @Test
+    void aChargeMatchedToABillSetsItsAmountAndTicksItPaidAndUnmatchingPutsItBack() throws Exception {
+        long carWash = created("/api/items", """
+                {"name":"Fuel card","kind":"bill","amountCents":4000,"payFromAccountId":%d,
+                 "schedule":{"frequency":"monthly","day1":5,"startDate":"2026-01-01"}}""".formatted(card));
+        long id = filedSeptember();
+        JsonNode shell = line(server.get("/api/statement-uploads/" + id, cookie).data(), "SHELL OIL 5744");
+        JsonNode before = period(server.get("/api/statement-uploads/" + id + "/changes", cookie).data(), "2026-09-01");
+        // Bills can be matched; budgets are what the totals are for.
+        assertThat(before.get("matchable").findValuesAsText("name")).contains("Fuel card").doesNotContain("Food for Amara's house");
+
+        Reply matched = matchToDate(id, shell, carWash, "2026-09-05");
+        assertThat(matched.status()).as(matched.body().toString()).isEqualTo(200);
+        assertThat(line(matched.data(), "SHELL OIL 5744").get("matched").get("itemId").asLong()).isEqualTo(carWash);
+        JsonNode paid = occurrence(carWash, "2026-09-01");
+        assertThat(paid.get("amountCents").asLong()).isEqualTo(3800);
+        assertThat(paid.get("paid").asBoolean()).isTrue();
+        assertThat(paid.get("paidDate").asText()).isEqualTo("2026-09-05");
+        // It no longer counts toward its category or tag totals, so nothing is counted twice.
+        JsonNode after = period(server.get("/api/statement-uploads/" + id + "/changes", cookie).data(), "2026-09-01");
+        assertThat(after.get("groups").findValuesAsText("name")).doesNotContain("Gas", "Vacation");
+        assertThat(after.get("matchable").findValues("matchedLineId").stream().filter(value -> !value.isNull()).map(JsonNode::asLong))
+                .containsExactly(shell.get("id").asLong());
+
+        assertThat(server.delete("/api/statement-uploads/" + id + "/lines/" + shell.get("id").asLong() + "/match", cookie).status())
+                .isEqualTo(200);
+        JsonNode back = occurrence(carWash, "2026-09-01");
+        assertThat(back.get("amountCents").asLong()).isEqualTo(4000);
+        assertThat(back.get("paid").asBoolean()).isFalse();
+    }
+
+    @Test
+    void aChargeMatchedToAOneOffAlreadyEnteredIsOnlyLinked() throws Exception {
+        long entry = created("/api/entries",
+                "{\"kind\":\"money_out\",\"date\":\"2026-09-09\",\"amountCents\":2580,\"description\":\"Groceries run\",\"accountId\":%d}"
+                        .formatted(card));
+        long id = filedSeptember();
+        JsonNode kroger = line(server.get("/api/statement-uploads/" + id, cookie).data(), "KROGER #456");
+
+        Reply matched = server.put("/api/statement-uploads/" + id + "/lines/" + kroger.get("id").asLong() + "/match",
+                "{\"entryId\":%d}".formatted(entry), cookie);
+        assertThat(matched.status()).as(matched.body().toString()).isEqualTo(200);
+        // Groceries is now only the first Kroger charge: the second is already in Budget as that one-off.
+        JsonNode september = period(server.get("/api/statement-uploads/" + id + "/changes", cookie).data(), "2026-09-01");
+        assertThat(group(september, "category", groceries).get("totalCents").asLong()).isEqualTo(5420);
+        assertThat(server.get("/api/entries?from=2026-09-09&to=2026-09-09", cookie).data()).singleElement()
+                .satisfies(found -> assertThat(found.get("amountCents").asLong()).isEqualTo(2580));
+    }
+
+    @Test
+    void aMatchMustBeSomethingInTheChargesOwnPayPeriodThatNoOtherChargeHas() throws Exception {
+        long fuel = created("/api/items", """
+                {"name":"Fuel card","kind":"bill","amountCents":4000,"payFromAccountId":%d,
+                 "schedule":{"frequency":"monthly","day1":5,"startDate":"2026-01-01"}}""".formatted(card));
+        long id = filedSeptember();
+        JsonNode upload = server.get("/api/statement-uploads/" + id, cookie).data();
+        // A budget, a date in another pay period, and money back can't be matched.
+        assertThat(matchToDate(id, line(upload, "SHELL OIL 5744"), food, "2026-09-01").status()).isEqualTo(400);
+        assertThat(matchToDate(id, line(upload, "SHELL OIL 5744"), fuel, "2026-10-05").status()).isEqualTo(400);
+        assertThat(matchToDate(id, line(upload, "PAYMENT THANK YOU"), fuel, "2026-09-05").status()).isEqualTo(400);
+        assertThat(server.put("/api/statement-uploads/" + id + "/lines/" + line(upload, "SHELL OIL 5744").get("id").asLong() + "/match",
+                "{}", cookie).status()).isEqualTo(400);
+        // One charge to a date: a second has to wait until the first is unmatched.
+        assertThat(matchToDate(id, line(upload, "SHELL OIL 5744"), fuel, "2026-09-05").status()).isEqualTo(200);
+        assertThat(matchToDate(id, line(upload, "KROGER #123"), fuel, "2026-09-05").status()).isEqualTo(409);
+        assertThat(server.put("/api/statement-uploads/" + id + "/lines/999999/match", "{}", cookie).status()).isEqualTo(404);
     }
 
     @Test
     void removingAnUploadLeavesWhatItChanged() throws Exception {
         long id = filedSeptember();
         target(id, "2026-09-01", "category", groceries, food, "replace");
-        apply(id, "\"2026-09-01\"", "");
+        apply(id, "\"2026-09-01\"");
         assertThat(server.get("/api/accounts/" + card + "/statement-uploads", cookie).data()).hasSize(1);
 
         assertThat(server.delete("/api/statement-uploads/" + id, cookie).status()).isEqualTo(200);
@@ -379,8 +450,8 @@ class StatementUploadsApiTest extends ApiTestBase {
     @Test
     void badRequestsAreRefusedKindly() throws Exception {
         long id = filedSeptember();
-        assertThat(apply(id, "", "").status()).isEqualTo(400);
-        assertThat(apply(id, "\"2026-08-01\"", "").status()).isEqualTo(400);
+        assertThat(apply(id, "").status()).isEqualTo(400);
+        assertThat(apply(id, "\"2026-08-01\"").status()).isEqualTo(400);
         assertThat(target(id, "2026-09-01", "category", 999, food, "replace").status()).isEqualTo(400);
         assertThat(target(id, "2026-09-01", "category", groceries, food, "sideways").status()).isEqualTo(400);
         JsonNode upload = server.get("/api/statement-uploads/" + id, cookie).data();
@@ -402,6 +473,9 @@ class StatementUploadsApiTest extends ApiTestBase {
         assertThat(server.get(upload + "/changes", null).status()).isEqualTo(401);
         assertThat(server.put(upload + "/targets", "{}", null).status()).isEqualTo(401);
         assertThat(server.post(upload + "/apply", "{}", null).status()).isEqualTo(401);
+        assertThat(server.put(upload + "/lines/1/match", "{}", null).status()).isEqualTo(401);
+        assertThat(server.delete(upload + "/lines/1/match", null).status()).isEqualTo(401);
+        assertThat(server.post(upload + "/lines/1/one-off", "", null).status()).isEqualTo(401);
         assertThat(server.download(upload + "/file", null, null).status()).isEqualTo(401);
         assertThat(server.download(upload + "/preview", null, null).status()).isEqualTo(401);
     }

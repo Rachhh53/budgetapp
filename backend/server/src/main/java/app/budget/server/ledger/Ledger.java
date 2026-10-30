@@ -90,6 +90,7 @@ public final class Ledger {
     private static final String INTEREST_KIND = "interest";
     private static final String GROWTH_KIND = "growth";
     private static final String BALANCE_LABEL = "Balance you entered";
+    private static final String BALANCE_KIND = "balance";
     private static final String ONE_OFF_LABEL = "One-off entry";
     /** Money planned to come back for a recurring payment flagged to be paid back (Rachel, 2026-10-24). */
     public static final String PAID_BACK_KIND = "paid_back";
@@ -193,17 +194,28 @@ public final class Ledger {
 
     /**
      * A balance entered during a pay period, shown in it as an adjustment: what the account turned out to hold as
-     * {@code date} began, against what Budget expected (Rachel, 2026-10-21: "that adjustment should be editable and
-     * deletable"). Changing or removing it changes or removes that balance.
+     * {@code date} ended (or for one entered before 2026-10-30, began), against what Budget expected (Rachel,
+     * 2026-10-21: "that adjustment should be editable and deletable"). Changing or removing it changes or removes that
+     * balance.
      *
      * @param entryId         the balance entry it is, for {@code DELETE /api/accounts/{id}/balances/{entryId}}
      * @param balanceCents    the balance entered
      * @param differenceCents that less what was expected, signed
      * @param note            the note entered with it, kept when it is changed
-     * @param since           the balance entered before it, when the records last matched: what moved the account from
-     *                        then up to the day before is what the difference is in; {@code null} for none
+     * @param since           the balance entered before it, when the records last matched: what moved the account
+     *                        between the two is what the difference is in; {@code null} for none
+     * @param endOfDay        true when it is what {@code date} ended with, so that day's movements are in it
+     * @param sinceEndOfDay   true when {@code since} is what that day ended with, so that day's movements were already in it
      */
-    public record Adjustment(long entryId, LocalDate date, long balanceCents, long differenceCents, String note, LocalDate since) {}
+    public record Adjustment(
+            long entryId,
+            LocalDate date,
+            long balanceCents,
+            long differenceCents,
+            String note,
+            LocalDate since,
+            boolean endOfDay,
+            boolean sinceEndOfDay) {}
 
     /** One bucket across one pay period; {@code endingCents − startingCents} is what the period moved. */
     public record BucketPeriod(long bucketId, long accountId, long startingCents, long endingCents) {}
@@ -828,9 +840,13 @@ public final class Ledger {
                 }
             }
         }
+        Set<LocalDate> endedDays = new HashSet<>();
         for (BalanceEntry entry : accounts.balances(account.id())) {
             if (within(entry.date(), from, to)) {
-                found.add(new Transaction(entry.date(), BALANCE_LABEL, "balance", entry.amountCents(), false));
+                found.add(new Transaction(entry.date(), BALANCE_LABEL, BALANCE_KIND, entry.amountCents(), false));
+                if (entry.endOfDay()) {
+                    endedDays.add(entry.date());
+                }
             }
         }
         // Interest typed over says what had been estimated, which also tells the page it is not an estimate.
@@ -856,7 +872,10 @@ public final class Ledger {
                 .findFirst()
                 .map(period -> line.withSource(line.source().in(period.start())))
                 .orElse(line));
-        found.sort(Comparator.comparing(Transaction::date).reversed());
+        // Newest first, and within a day in the order things happened: a balance the day ended with after (above) the
+        // day's movements, one it began with before (below) them.
+        found.sort(Comparator.comparing(Transaction::date).reversed()
+                .thenComparingInt(line -> !BALANCE_KIND.equals(line.kind()) ? 1 : endedDays.contains(line.date()) ? 0 : 2));
         return found;
     }
 
@@ -867,7 +886,8 @@ public final class Ledger {
      * @param depositsCents what was put in between the two, less what was taken out
      * @param growthCents   the change that deposits do not explain: a gain when positive, a loss when
      *                      negative (spec §5.5). Only ever worked out from entered balances
-     * @param recordsCents  what the records came to as its day began, from the entry before and everything since:
+     * @param recordsCents  what the records came to at the moment it stands for (as its day ended, or for one entered
+     *                      before 2026-10-30, began), from the entry before and everything since:
      *                      the same figure its pay period adjusts from, to reconcile against (Rachel, 2026-10-21:
      *                      "where's my recon and difference in accounts?"); {@code null} for the first entry
      */
@@ -936,8 +956,9 @@ public final class Ledger {
                 continue;
             }
             BalanceEntry before = entered.get(i - 1);
-            // A balance stands for the start of its day, so that day's own movements belong to what follows it.
-            long deposits = depositsWithin(lines, before.date(), entry.date().minusDays(1));
+            // Only what neither balance already holds: a balance the day began with leaves that day's movements to what
+            // follows it, one the day ended with already has them.
+            long deposits = depositsWithin(lines, before.settlesFrom(), entry.settlesFrom().minusDays(1));
             long growth = GainLoss.between(
                     Money.ofCents(before.amountCents()), Money.ofCents(entry.amountCents()), Money.ofCents(deposits)).cents();
             changes.add(new BalanceChange(
@@ -955,7 +976,8 @@ public final class Ledger {
                     ? first.amountCents()
                     : accountPeriods(workings(List.of(new PayPeriod(since.minusDays(1), since.minusDays(1), since.minusDays(1)))), account)
                             .stream().findFirst().map(AccountPeriod::endingCents).orElse(0L);
-            long deposits = depositsWithin(lines, since, today);
+            // A first balance that ended its day already holds that day's deposits.
+            long deposits = depositsWithin(lines, first != null && first.date().equals(since) ? first.settlesFrom() : since, today);
             long held = now.getFirst().endingCents();
             thisYear = new YearSoFar(
                     since, start, held, held - start, deposits,
@@ -1228,15 +1250,18 @@ public final class Ledger {
     private static List<Adjustment> adjustments(PeriodBalance balance, List<BalanceEntry> entries) {
         return balance.adjustments().stream()
                 .flatMap(adjustment -> entries.stream()
-                        .filter(entry -> entry.date().equals(adjustment.date()))
+                        .filter(entry -> entry.date().equals(adjustment.date()) && entry.endOfDay() == adjustment.endOfDay())
                         .findFirst()
-                        .map(entry -> new Adjustment(
-                                entry.id(), adjustment.date(), adjustment.balance().cents(), adjustment.difference().cents(), entry.note(),
-                                entries.stream()
-                                        .map(BalanceEntry::date)
-                                        .filter(date -> date.isBefore(adjustment.date()))
-                                        .reduce((earlier, later) -> later)
-                                        .orElse(null)))
+                        .map(entry -> {
+                            // The balance entered before it: the latest whose money stops before this one's does.
+                            Optional<BalanceEntry> before = entries.stream()
+                                    .filter(earlier -> earlier.settlesFrom().isBefore(entry.settlesFrom()))
+                                    .reduce((earlier, later) -> later);
+                            return new Adjustment(
+                                    entry.id(), adjustment.date(), adjustment.balance().cents(), adjustment.difference().cents(), entry.note(),
+                                    before.map(BalanceEntry::date).orElse(null), entry.endOfDay(),
+                                    before.map(BalanceEntry::endOfDay).orElse(false));
+                        })
                         .stream())
                 .toList();
     }
@@ -1295,9 +1320,10 @@ public final class Ledger {
             List<BalanceEntry> merged = new ArrayList<>(entered.getOrDefault(accountId, List.of()));
             for (CardsRepository.Statement statement : ofCard) {
                 LocalDate dayAfter = statement.closeDate().plusDays(1);
-                if (merged.stream().noneMatch(entry -> entry.date().equals(dayAfter))) {
+                // A balance entered for the end of the closing day stands at the same moment, so it stands too.
+                if (merged.stream().noneMatch(entry -> entry.settlesFrom().equals(dayAfter))) {
                     // A negative id can never be a balance entry's, so it is never mistaken for one.
-                    merged.add(new BalanceEntry(-statement.id(), dayAfter, statement.balanceCents(), null));
+                    merged.add(new BalanceEntry(-statement.id(), dayAfter, statement.balanceCents(), null, false));
                 }
             }
             merged.sort(Comparator.comparing(BalanceEntry::date));
@@ -1374,7 +1400,7 @@ public final class Ledger {
                     .map(PayPeriod::start)
                     .findFirst()
                     .orElse(null);
-            stillToPay.put(accountId, new StillToPay(newest, currentPeriod));
+            stillToPay.put(accountId, new StillToPay(newestSoFar.get().settlesFrom(), currentPeriod));
         });
 
         // A bucket holds everything moved into it since it was opened, and a bill saved up for
@@ -1623,7 +1649,7 @@ public final class Ledger {
         Map<Long, Projection> projections = new HashMap<>();
         entered.forEach((accountId, forAccount) -> {
             List<BalanceAnchor> anchors = forAccount.stream()
-                    .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents())))
+                    .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents()), entry.endOfDay()))
                     .toList();
             InterestTerms terms = earning.get(accountId);
             projections.put(accountId, BalanceProjector.project(anchors, movements.getOrDefault(accountId, List.of()), periods, terms));
@@ -1711,7 +1737,7 @@ public final class Ledger {
                 .orElse(ofAccount.getFirst().date());
         return ofAccount.stream()
                 .filter(entry -> !entry.date().isBefore(startsFrom))
-                .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents())))
+                .map(entry -> new BalanceAnchor(entry.date(), Money.ofCents(entry.amountCents()), entry.endOfDay()))
                 .toList();
     }
 
@@ -1820,6 +1846,8 @@ public final class Ledger {
     /**
      * The newest balance entered for an account, and the pay period that day falls in.
      *
+     * @param newestEntered      the first day that balance does not already hold: its own day for one the day began
+     *                           with, the next for one it ended with
      * @param currentPeriodStart {@code null} when that day is outside every pay period
      */
     private record StillToPay(LocalDate newestEntered, LocalDate currentPeriodStart) {}

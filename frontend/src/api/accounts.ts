@@ -16,6 +16,11 @@ export interface BalanceEntry {
   date: string;
   amountCents: number;
   note: string | null;
+  /**
+   * True when it is what the day ended with, so that day's paycheck and payments are already in it: every balance
+   * entered from 2026-10-30 on. False for one entered before, which is what the day began with.
+   */
+  endOfDay: boolean;
 }
 
 export interface Account {
@@ -106,7 +111,7 @@ export interface BalanceChange {
   depositsCents: number | null;
   /** The change that deposits do not explain: a gain when positive, a loss when negative. */
   growthCents: number | null;
-  /** What the records came to as its day began, to reconcile against; `null` for the first balance. */
+  /** What the records came to at the moment it stands for, to reconcile against; `null` for the first balance. */
   recordsCents: number | null;
 }
 

@@ -7,6 +7,7 @@ import app.budget.engine.projection.BalanceAnchor;
 import app.budget.engine.projection.Movement;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -191,7 +192,7 @@ public final class CardProjector {
     }
 
     /**
-     * @param anchors   balances the user entered (what was owed at the start of that day), in any order
+     * @param anchors   balances the user entered (what was owed as that day began, or ended), in any order
      * @param fixed     charges (positive) and typed payments (negative), in any order
      * @param following the payments whose amount is to be worked out
      * @param through   the last day to follow
@@ -201,10 +202,12 @@ public final class CardProjector {
         if (anchors.isEmpty()) {
             return Result.NONE;
         }
+        // A balance a day ended with is what the next day began with, which is how the walk below reads every balance.
+        // Where both were entered for that moment, the later day's stands.
         TreeMap<LocalDate, Money> entered = new TreeMap<>();
-        for (BalanceAnchor anchor : anchors) {
-            entered.put(anchor.date(), anchor.balance());
-        }
+        anchors.stream()
+                .sorted(Comparator.comparing(BalanceAnchor::settlesFrom).thenComparing(anchor -> !anchor.endOfDay()))
+                .forEach(anchor -> entered.put(anchor.settlesFrom(), anchor.balance()));
         LocalDate start = entered.firstKey();
         if (start.isAfter(through)) {
             return Result.NONE;

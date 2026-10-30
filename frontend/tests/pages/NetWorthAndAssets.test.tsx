@@ -15,7 +15,7 @@ const CHECKING: Account = {
   color: "#0f766e",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 10, date: "2026-10-02", amountCents: 284512, note: null },
+  latestBalance: { id: 10, date: "2026-10-02", amountCents: 284512, note: null, endOfDay: true },
 };
 const VISA: Account = { ...CHECKING, id: 2, name: "Travel Rewards Visa", institution: null, type: "credit_card", latestBalance: null };
 const MORTGAGE: Account = {
@@ -25,7 +25,7 @@ const MORTGAGE: Account = {
   institution: null,
   type: "loan",
   subtypeLabel: "Mortgage",
-  latestBalance: { id: 12, date: "2026-10-01", amountCents: 28500000, note: null },
+  latestBalance: { id: 12, date: "2026-10-01", amountCents: 28500000, note: null, endOfDay: true },
 };
 
 const HOME: Asset = {

@@ -24,14 +24,14 @@ const RETIREMENT: Account = {
   type: "investment",
   subtypeLabel: "401(k)",
   color: "#7e22ce",
-  latestBalance: { id: 31, date: "2026-10-01", amountCents: 4000000, note: null },
+  latestBalance: { id: 31, date: "2026-10-01", amountCents: 4000000, note: null, endOfDay: true },
 };
 
 const RETIREMENT_DETAIL: AccountDetail = {
   account: RETIREMENT,
   balances: [
-    { id: 31, date: "2026-10-01", amountCents: 4000000, note: null },
-    { id: 30, date: "2026-09-01", amountCents: 3900000, note: null },
+    { id: 31, date: "2026-10-01", amountCents: 4000000, note: null, endOfDay: true },
+    { id: 30, date: "2026-09-01", amountCents: 3900000, note: null, endOfDay: true },
   ],
   interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null },
   rates: [{ id: 4, kind: "growth", rateBp: 700, effectiveDate: "2026-01-01" }],
