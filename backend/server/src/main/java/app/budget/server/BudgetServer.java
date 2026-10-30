@@ -48,6 +48,9 @@ import app.budget.server.items.InvoicesRepository;
 import app.budget.server.items.InvoicesRoutes;
 import app.budget.server.items.ItemsRepository;
 import app.budget.server.items.ItemsRoutes;
+import app.budget.server.items.ReimbursementViews;
+import app.budget.server.items.ReimbursementsRoutes;
+import app.budget.server.items.ReimbursementsRepository;
 import app.budget.server.items.PaidAheadRoutes;
 import app.budget.server.items.PrepaymentsRepository;
 import app.budget.server.ledger.Ledger;
@@ -178,6 +181,7 @@ public final class BudgetServer {
         TagsRepository tags = new TagsRepository(database.jdbi(), clock);
         ItemsRepository items = new ItemsRepository(database.jdbi(), clock);
         EntriesRepository entries = new EntriesRepository(database.jdbi(), clock);
+        ReimbursementsRepository reimbursements = new ReimbursementsRepository(database.jdbi());
         BucketsRepository buckets = new BucketsRepository(database.jdbi(), clock);
         InterestRepository interest = new InterestRepository(database.jdbi());
         InvoicesRepository invoices = new InvoicesRepository(database.jdbi(), clock);
@@ -185,16 +189,17 @@ public final class BudgetServer {
         ItemCalendar itemCalendar = new ItemCalendar(items, payCalendar, invoices, prepayments);
         CardsRepository cards = new CardsRepository(database.jdbi());
         LoansRepository loans = new LoansRepository(database.jdbi());
-        Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest, cards, loans);
+        AttachmentsRepository attachments = new AttachmentsRepository(database.jdbi(), clock);
+        ReimbursementViews reimbursementViews = new ReimbursementViews(reimbursements, items, itemCalendar, attachments);
+        Ledger ledger = new Ledger(accounts, entries, items, itemCalendar, payCalendar, buckets, interest, cards, loans, reimbursementViews);
         AssetsRepository assets = new AssetsRepository(database.jdbi(), clock);
         NetWorthCalculator netWorth = new NetWorthCalculator(assets, accounts, ledger);
         FileStore fileStore = new FileStore(config.dataDir(), config.maxUploadMb() * 1024L * 1024L);
-        AttachmentsRepository attachments = new AttachmentsRepository(database.jdbi(), clock);
         // Nothing is being recorded yet, so this is the moment to delete files nothing can want any more:
         // ones taken off whatever they were attached to, once Undo can no longer put them back.
         fileStore.sweep(attachments.forgetUnused());
         ReportsRepository reports = new ReportsRepository(database.jdbi(), clock, jsonMapper());
-        ReportRunner reportRunner = new ReportRunner(entries, items, itemCalendar, payCalendar, accounts, categories, tags, attachments);
+        ReportRunner reportRunner = new ReportRunner(entries, items, itemCalendar, payCalendar, accounts, categories, tags, attachments, reimbursements);
         PayStubsRepository payStubs = new PayStubsRepository(database.jdbi(), clock);
         IncomeReportRunner incomeReportRunner = new IncomeReportRunner(payCalendar, income, payStubs, entries, accounts, ledger);
         ProjectedVsActualRunner projectedRunner = new ProjectedVsActualRunner(items, itemCalendar, payCalendar, accounts, categories, tags);
@@ -243,15 +248,17 @@ public final class BudgetServer {
             routes.get("/api/health", ctx -> ApiResponse.ok(ctx, Map.of("ok", true)));
             new SettingsRoutes(settings, clock).register(routes);
             new AccountsRoutes(accounts, interest, buckets, ledger, clock).register(routes);
-            new BucketsRoutes(buckets, accounts, ledger, clock, categories, tags, entries).register(routes);
+            new BucketsRoutes(buckets, accounts, ledger, clock, categories, tags, entries, reimbursements).register(routes);
             new HolidaysRoutes(holidays, clock).register(routes);
             new IncomeRoutes(income, accounts, payCalendar, clock).register(routes);
             new OneOffPaychecksRoutes(income, oneOffs, accounts).register(routes);
             new CategoriesRoutes(categories, tags, items, itemCalendar, payCalendar).register(routes);
             new ItemsRoutes(items, itemCalendar, payCalendar, accounts, categories, tags, buckets, ledger, cards).register(routes);
             new InvoicesRoutes(invoices, items, itemCalendar, accounts, payCalendar).register(routes);
-            new PaidAheadRoutes(items, itemCalendar, entries, prepayments, accounts, payCalendar).register(routes);
-            new EntriesRoutes(entries, accounts, categories, tags, buckets, ledger, clock).register(routes);
+            new PaidAheadRoutes(items, itemCalendar, entries, prepayments, accounts, payCalendar, reimbursements).register(routes);
+            new ReimbursementsRoutes(reimbursements, reimbursementViews, items, itemCalendar, accounts, entries, buckets, payCalendar)
+                    .register(routes);
+            new EntriesRoutes(entries, accounts, categories, tags, buckets, ledger, reimbursementViews, clock).register(routes);
             new LedgerRoutes(ledger, payCalendar, accounts, interest, cards).register(routes);
             new AssetsRoutes(assets, accounts, netWorth, clock).register(routes);
             new CardsRoutes(cards, accounts, interest, items, ledger, payCalendar, settings).register(routes);

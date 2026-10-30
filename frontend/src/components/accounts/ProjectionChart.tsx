@@ -4,6 +4,7 @@ import { type Account, type AccountPoint, type BalanceEntry, useAccountProjectio
 import { formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { CHART_TOOLTIP, INPUT, LABEL } from "../ui";
+import { SpendingChart } from "./SpendingChart";
 
 const MS_PER_DAY = 86_400_000;
 const MONTH_AND_YEAR = new Intl.DateTimeFormat("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
@@ -109,6 +110,14 @@ interface ProjectionChartProps {
   points: readonly AccountPoint[];
   /** True when the account has buckets, so "available" is worth drawing as its own line. */
   showAvailable: boolean;
+  /** True for a checking or savings account: what goes out each pay period is drawn under the balance, for the same dates. */
+  showSpending?: boolean;
+  /**
+   * A card's statements the user entered: each is a real number on its closing day, so it is drawn on the solid line like a
+   * balance entered (Rachel, 2026-10-24: "I don't know why some statements entered are dotted on some accounts and solid on
+   * others"). A balance entered the same day wins.
+   */
+  statements?: readonly { closeDate: string; balanceCents: number }[];
 }
 
 /**
@@ -122,7 +131,14 @@ interface ProjectionChartProps {
  * (an account nothing was entered for starts from nothing), and dates past the usual horizon
  * run the projection on. The words underneath follow what is in view.
  */
-export function ProjectionChart({ account, balances, points: ahead, showAvailable }: ProjectionChartProps) {
+export function ProjectionChart({
+  account,
+  balances,
+  points: ahead,
+  showAvailable,
+  showSpending = false,
+  statements = [],
+}: ProjectionChartProps) {
   const id = useId();
   const [range, setRange] = useState<Range>("all");
   // Custom dates: empty until chosen, when they start out as what the chart opens on.
@@ -141,7 +157,10 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
   const ranged = useAccountProjectionBetween(account.id, asked);
   const points = asked !== undefined && ranged.data !== undefined ? ranged.data : ahead;
 
-  const entered = [...balances].reverse();
+  // Oldest first. A balance for a day still to come is planned, not entered: the projection takes it on its day.
+  const oldestFirst = [...balances].reverse();
+  const entered = oldestFirst.filter((balance) => balance.date <= todayDate);
+  const planned = oldestFirst.filter((balance) => balance.date > todayDate);
   // None for an account nothing was entered for: the app builds that one up from nothing.
   const latest = entered.at(-1);
   if (ahead.length === 0) {
@@ -155,6 +174,9 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
     days.set(time, day);
     return day;
   };
+  for (const statement of statements) {
+    at(statement.closeDate).entered = statement.balanceCents;
+  }
   for (const balance of entered) {
     at(balance.date).entered = balance.amountCents;
   }
@@ -169,6 +191,10 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
     if (showAvailable) {
       day.available = point.availableCents;
     }
+  }
+  // On its own day the projection stands at the planned balance, wherever a pay period ends.
+  for (const balance of planned) {
+    at(balance.date).projected = balance.amountCents;
   }
   const all = [...days.values()].sort((a, b) => a.at - b.at);
   const earliest = all[0]?.at ?? today;
@@ -189,6 +215,10 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
   });
   const last = inView.at(-1);
   const lowest = inView.reduce<AccountPoint | undefined>((low, point) => (low === undefined || point.lowestCents < low.lowestCents ? point : low), undefined);
+  // On a card or loan the balance is what is owed, so its low point is good news: what is worth knowing is when it owes
+  // the most (Rachel, 2026-10-24: "this doesn't make sense for a credit card").
+  const owed = account.type === "credit_card" || account.type === "loan";
+  const most = inView.reduce<AccountPoint | undefined>((high, point) => (high === undefined || point.endingCents > high.endingCents ? point : high), undefined);
 
   const chooseRange = (chosen: Range) => {
     if (chosen === "custom" && customFrom === "" && customTo === "") {
@@ -305,12 +335,12 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
       )}
       {last === undefined || lowest === undefined ? (
         <figcaption className="mt-2 text-sm text-muted">
-          Solid: balances you entered. Dashed: the app's own figures. No pay period ends between these dates, so there are none to give
+          Solid: {statements.length > 0 ? "balances and statements" : "balances"} you entered. Dashed: the app's own figures. No pay period ends between these dates, so there are none to give
           for them.
         </figcaption>
       ) : (
         <figcaption className="mt-2 text-sm text-muted">
-          Solid: balances you entered. Dashed: the projection, which reaches{" "}
+          Solid: {statements.length > 0 ? "balances and statements" : "balances"} you entered. Dashed: the projection, which reaches{" "}
           <span data-amount className="font-semibold text-ink tabular-nums">
             {formatCents(last.endingCents)}
           </span>{" "}
@@ -325,13 +355,28 @@ export function ProjectionChart({ account, balances, points: ahead, showAvailabl
               unallocated, the dotted line)
             </>
           )}
-          . Its lowest point on the way is{" "}
-          <span data-amount className="font-semibold text-ink tabular-nums">
-            {formatCents(lowest.lowestCents)}
-          </span>
-          , in the pay period that starts {formatDate(lowest.start)}.
+          {owed && most !== undefined ? (
+            <>
+              . The most it owes at the end of a pay period is{" "}
+              <span data-amount className="font-semibold text-ink tabular-nums">
+                {formatCents(most.endingCents)}
+              </span>
+              , on {formatDate(most.end)}.
+            </>
+          ) : (
+            <>
+              . Its lowest point on the way is{" "}
+              <span data-amount className="font-semibold text-ink tabular-nums">
+                {formatCents(lowest.lowestCents)}
+              </span>
+              , in the pay period that starts {formatDate(lowest.start)}.
+            </>
+          )}
           {reachesBack && " Before today, the dashed line is what the app works out the account held: the balances you entered and everything that moved."}
         </figcaption>
+      )}
+      {showSpending && customProblem === null && (
+        <SpendingChart accountId={account.id} from={toIso(from)} to={toIso(to)} charged={account.type === "credit_card"} />
       )}
     </figure>
   );

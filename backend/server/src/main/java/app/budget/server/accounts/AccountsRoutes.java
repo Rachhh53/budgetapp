@@ -137,9 +137,11 @@ public final class AccountsRoutes {
         if (input.date() == null) {
             throw ApiException.badRequest("Please choose the date this balance is from.");
         }
-        // A balance entry is the real number on a real day, so it cannot be from the future.
-        if (input.date().isAfter(LocalDate.now(clock))) {
-            throw ApiException.badRequest("A balance needs a date of today or earlier.");
+        // A balance is the real number on a real day. One for a day still to come is planned (Rachel, 2026-10-24: an FSA's
+        // whole year is there on Jan 1, "i just asked to be able to enter the account amount ahead of time"): the
+        // projection takes it as the balance on that day, and until then it counts as nothing else (see Ledger).
+        if (!Inputs.inSupportedYears(input.date())) {
+            throw ApiException.badRequest("Please choose a date between 2000 and 2100.");
         }
         long amount = Inputs.signedAmount(input.amountCents(), "The balance");
         String note = Inputs.optionalText(input.note(), "the note", NOTE_MAX);

@@ -11,7 +11,7 @@ export function formatCents(cents: number): string {
 }
 
 /**
- * `24000000` → `"$240k"`, `125000000` → `"$1.25M"`: short enough for a chart's axis, for figures that can run to
+ * `24000000` → `"$240k"`, `160000` → `"$1.6k"`, `125000000` → `"$1.25M"`: short enough for a chart's axis, for figures that can run to
  * millions. Below zero the minus sign comes first, as `formatCents` writes it: `"-$20k"`, never `"$-20k"`.
  */
 export function shortDollars(cents: number): string {
@@ -20,7 +20,10 @@ export function shortDollars(cents: number): string {
   if (dollars >= 1_000_000) {
     return `${sign}$${(dollars / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
   }
-  const short = dollars >= 1000 ? `$${Math.round(dollars / 1000)}k` : `$${Math.round(dollars)}`;
+  // Under $10k a tenth is kept, so ticks a few hundred apart read apart: "$1.6k" and "$2.4k", not "$2k" twice.
+  const thousands = dollars / 1000;
+  const short =
+    dollars >= 10_000 ? `$${Math.round(thousands)}k` : dollars >= 1000 ? `$${thousands.toFixed(1).replace(/\.0$/, "")}k` : `$${Math.round(dollars)}`;
   return short === "$0" ? short : `${sign}${short}`;
 }
 

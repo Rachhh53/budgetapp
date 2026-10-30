@@ -1,7 +1,6 @@
 import { Wallet } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { type Account, useDeleteBalance, useSaveBalance } from "../../api/accounts";
-import { todayIso } from "../../lib/dates";
 import { useDefaultDate } from "../../api/settings";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { Modal } from "../Modal";
@@ -11,7 +10,9 @@ import { BUTTON_PRIMARY, BUTTON_SECONDARY, HINT, INPUT, LABEL } from "../ui";
 
 /**
  * "The real number is X": records the balance an account actually had on a day.
- * Entering the same day again replaces what was there, which is how a typo is fixed.
+ * Entering the same day again replaces what was there, which is how a typo is fixed. A day still to come is a planned
+ * balance, like an FSA's year all there on Jan 1 (Rachel, 2026-10-24): the projection takes it on its day, nothing else
+ * counts it until then.
  *
  * @param editing a balance already entered, to change: moved to another day, the one on its old day goes
  */
@@ -27,7 +28,6 @@ export function BalanceForm({
   const id = useId();
   const save = useSaveBalance(account.id);
   const remove = useDeleteBalance(account.id);
-  const today = todayIso();
   const defaultDate = useDefaultDate().date;
   const [date, setDate] = useState(editing?.date ?? defaultDate);
   const [amount, setAmount] = useState(editing ? centsToInput(editing.amountCents) : "");
@@ -78,12 +78,13 @@ export function BalanceForm({
             id={`${id}-date`}
             type="date"
             value={date}
-            max={today}
             onChange={(event) => setDate(event.target.value)}
             required
             className={INPUT}
           />
-          <p className={HINT}>Today or earlier. A day you already entered is replaced.</p>
+          <p className={HINT}>
+            A day still to come is planned: the projection starts from it that day. A day you already entered is replaced.
+          </p>
           <DefaultDateHint value={date} />
         </div>
         <div>

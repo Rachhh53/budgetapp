@@ -66,6 +66,7 @@ const STUB: PayStub = {
   payDate: "2026-10-01",
   status: "review",
   applied: null,
+  editingSaved: false,
   pages: 1,
   sizeBytes: 48211,
   lines: LINES,
@@ -414,7 +415,7 @@ describe("pay stub page", () => {
     const fetchMock = withStub(SAVED, {
       "GET /api/pay-stubs/7": () => ({ status: 200, data: current }),
       "POST /api/pay-stubs/7/reopen": () => {
-        current = { ...SAVED, status: "review", applied: null };
+        current = { ...SAVED, status: "review", applied: null, editingSaved: true };
         return { status: 200, data: current, changed: true };
       },
     });
@@ -431,6 +432,36 @@ describe("pay stub page", () => {
     // It corrected the amounts the first time, so that is where the save dialog starts.
     await userEvent.click(screen.getByRole("button", { name: "Save stub…" }));
     expect(screen.getByRole("radio", { name: /Correct Northwind Health's amounts/ })).toBeChecked();
+  });
+
+  it("cancels editing a saved stub, putting it back as it was saved rather than removing it", async () => {
+    let current: PayStub = { ...SAVED, status: "review", applied: null, editingSaved: true };
+    const fetchMock = withStub(current, {
+      "GET /api/pay-stubs/7": () => ({ status: 200, data: current }),
+      "POST /api/pay-stubs/7/cancel-edit": () => {
+        current = SAVED;
+        return { status: 200, data: current, changed: true };
+      },
+    });
+    renderApp("/income/1/stubs/7");
+
+    expect(await screen.findByText(/Cancel editing puts it back as it was/)).toBeInTheDocument();
+    // Leaving a saved stub never removes it, so Discard is not offered while it is being edited.
+    expect(screen.queryByRole("button", { name: "Discard" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel editing" }));
+
+    expect(await screen.findByRole("button", { name: "Edit stub" })).toBeInTheDocument();
+    expect(calls(fetchMock)).toContain("POST /api/pay-stubs/7/cancel-edit");
+    expect(calls(fetchMock).some((call) => call.startsWith("DELETE"))).toBe(false);
+    expect(screen.getByRole("heading", { name: /^Pay stub/ })).toBeInTheDocument();
+  });
+
+  it("still offers Discard on a stub that was never saved", async () => {
+    withStub(STUB);
+    renderApp("/income/1/stubs/7");
+
+    expect(await screen.findByRole("button", { name: "Discard" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel editing" })).not.toBeInTheDocument();
   });
 
   it("says so when no pay lines could be found", async () => {

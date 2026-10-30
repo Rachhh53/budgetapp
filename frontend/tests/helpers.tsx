@@ -171,6 +171,11 @@ const noStubs: Handler = () => ({ status: 200, data: [] });
 
 /** Any bill's or budget's year before anything falls in it. */
 const NO_BY_MONTH = /^GET \/api\/items\/\d+\/by-month$/;
+/** Any recurring item nobody pays back, and a year with no payment flagged to be paid back (Rachel, 2026-10-24). */
+const NOT_PAID_BACK = /^GET \/api\/items\/\d+\/reimbursement$/;
+const nothingPaidBack: Handler = () => ({ status: 200, data: { settings: null, payments: [], packs: [] } });
+const NONE_FLAGGED = /^GET \/api\/payment-reimbursements(\?.*)?$/;
+const noneFlagged: Handler = () => ({ status: 200, data: [] });
 const nothingByMonth: Handler = () => ({
   status: 200,
   data: { year: 2026, months: [], highest: null, lowest: null, totalCents: 0, averageCents: 0, budgetCents: 0, budgetTooLow: false },
@@ -204,7 +209,7 @@ export function fakeBackend(overrides: Record<string, Handler> = {}) {
     const method = init?.method ?? "GET";
     // A route can be given with its exact query, or without one to answer whatever is asked.
     const handler =
-      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : NO_STUBS.test(`${method} ${path}`) ? noStubs : NO_BY_MONTH.test(`${method} ${path}`) ? nothingByMonth : undefined);
+      routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`] ?? (NO_PROJECTION.test(`${method} ${path}`) ? nothingProjected : NO_PERFORMANCE.test(`${method} ${path}`) ? nothingToCompare : NO_YEAR.test(`${method} ${path}`) ? nothingThisYear : NO_LOAN.test(`${method} ${path}`) ? noLoanTerms : NO_STUBS.test(`${method} ${path}`) ? noStubs : NO_BY_MONTH.test(`${method} ${path}`) ? nothingByMonth : NOT_PAID_BACK.test(`${method} ${path}`) ? nothingPaidBack : NONE_FLAGGED.test(`${method} ${path}`) ? noneFlagged : undefined);
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const answer: ReturnType<Handler> = handler?.(body) ?? { status: 404, error: "We couldn't find that." };
     const { status, data = null, error = null } = answer;

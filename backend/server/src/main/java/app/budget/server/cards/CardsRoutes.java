@@ -538,7 +538,7 @@ public final class CardsRoutes {
         if (dueDayMoved && rule.frequency() == Frequency.MONTHLY) {
             items.update(
                     linked.id(),
-                    new Identity(linked.name(), linked.kind(), linked.note(), linked.archivedOn(), linked.tagIds()),
+                    new Identity(linked.name(), linked.kind(), linked.note(), linked.archivedOn(), linked.tagIds(), linked.countsFromPaid(), linked.fromLastYear()),
                     new Terms(
                             terms.amountCents(), terms.amountMode(), terms.estimate(), terms.categoryId(), terms.payFromAccountId(),
                             terms.payToAccountId(), terms.autopay(), terms.placement(),
@@ -767,7 +767,7 @@ public final class CardsRoutes {
         LocalDate to = entered.stream().map(Statement::dueDate).max(LocalDate::compareTo).orElse(today);
         List<Transaction> lines = ledger.transactions(account, from, to.isBefore(from) ? from : to);
         Map<LocalDate, Long> records = records(account, entered);
-        Map<LocalDate, LocalDate> reconcileFrom = reconcileFrom(account, entered, records);
+        Map<LocalDate, LocalDate> reconcileFrom = reconcileFrom(account, entered, records, today);
         for (Statement statement : entered) {
             long paid = lines.stream()
                     .filter(line -> line.amountCents() < 0 && !line.unpaid()
@@ -803,8 +803,14 @@ public final class CardsRoutes {
      * For each entered statement the records don't match: where to start looking. A balance entered for the card
      * puts the records right from its day, and a statement that matched says everything up to its close was right.
      */
-    private Map<LocalDate, LocalDate> reconcileFrom(Account account, List<Statement> entered, Map<LocalDate, Long> records) {
-        List<LocalDate> balancesEntered = accounts.balances(account.id()).stream().map(BalanceEntry::date).sorted().toList();
+    private Map<LocalDate, LocalDate> reconcileFrom(
+            Account account, List<Statement> entered, Map<LocalDate, Long> records, LocalDate today) {
+        // A balance planned for a day still to come puts nothing right yet.
+        List<LocalDate> balancesEntered = accounts.balances(account.id()).stream()
+                .map(BalanceEntry::date)
+                .filter(date -> !date.isAfter(today))
+                .sorted()
+                .toList();
         List<Statement> oldestFirst = entered.stream().sorted(Comparator.comparing(Statement::closeDate)).toList();
         Map<LocalDate, LocalDate> from = new HashMap<>();
         LocalDate matched = null;

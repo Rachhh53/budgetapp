@@ -14,13 +14,16 @@ import app.budget.server.api.Archiving;
 import app.budget.server.income.PayCalendar;
 import app.budget.server.items.InvoicesRepository.Invoice;
 import app.budget.server.items.ItemsRepository.Item;
+import app.budget.server.items.ItemsRepository.Paid;
 import app.budget.server.items.ItemsRepository.Override;
 import app.budget.server.items.ItemsRepository.Pause;
 import app.budget.server.items.ItemsRepository.Terms;
 import app.budget.server.items.ItemsRepository.Version;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.Month;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -470,6 +473,14 @@ public final class ItemCalendar {
 
     /** {@link #expand(List, LocalDate, LocalDate)} without the planned packs: what the schedules themselves name. */
     private Expansion expandSchedules(List<Item> chosen, LocalDate from, LocalDate to, LocalDate asked) {
+        return expandSchedules(chosen, from, to, asked, true);
+    }
+
+    /**
+     * @param byLastYear false to give every occurrence its own amount, as the look back a year for an item estimated from
+     *                   last year does: what it came to then is its own, never itself an estimate from the year before
+     */
+    private Expansion expandSchedules(List<Item> chosen, LocalDate from, LocalDate to, LocalDate asked, boolean byLastYear) {
         LocalDate lo = from.minusMonths(MARGIN_MONTHS);
         LocalDate hi = to.plusMonths(MARGIN_MONTHS);
         List<PayPeriod> periods = pay.payPeriods(lo, hi);
@@ -485,6 +496,10 @@ public final class ItemCalendar {
 
         Map<Long, List<Pause>> pauses = items.pauses();
         Map<Long, List<Invoice>> invoiced = invoices.byItem();
+        Map<Long, List<Paid>> payments = chosen.stream().anyMatch(Item::countsFromPaid) ? items.paymentsCountedFrom() : Map.of();
+        LocalDate today = pay.today();
+        List<Item> estimated = byLastYear ? chosen.stream().filter(ItemCalendar::estimatedFromLastYear).toList() : List.of();
+        Map<Long, Map<YearMonth, Long>> lastYear = estimated.isEmpty() ? Map.of() : monthsBefore(estimated, lo, today);
         List<Occurrence> occurrences = new ArrayList<>();
         List<Occurrence> visits = new ArrayList<>();
         List<Occurrence> sessions = new ArrayList<>();
@@ -496,7 +511,8 @@ public final class ItemCalendar {
             Map<LocalDate, Override> edited = edits.getOrDefault(item.id(), Map.of());
             // The scheduled dates listed, so a payment whose date the schedule no longer names can still be found.
             Set<LocalDate> listed = new HashSet<>();
-            for (Planned<Terms> planned : planner.occurrences(versions, lo, hi)) {
+            List<Paid> countedFrom = item.countsFromPaid() ? payments.getOrDefault(item.id(), List.of()) : List.of();
+            for (Planned<Terms> planned : planned(planner, versions, countedFrom, lo, hi)) {
                 // While an item is paused, what its schedule names simply does not happen; nor once it is archived.
                 if (paused.stream().anyMatch(pause -> pause.covers(planned.scheduled()))
                         || Archiving.awayOn(item.archivedOn(), planned.scheduled())) {
@@ -504,7 +520,8 @@ public final class ItemCalendar {
                 }
                 listed.add(planned.scheduled());
                 Override edit = edited.getOrDefault(planned.scheduled(), Override.untouched(item.id(), planned.scheduled()));
-                Occurrence occurrence = occurrence(item, planned, edit, assigner, payRule, null, null);
+                Occurrence occurrence = fromLastYear(
+                        occurrence(item, planned, edit, assigner, payRule, null, null), edit, lastYear.get(item.id()), today);
                 // Billed by use: no bill comes when the days since the last one had no months it can happen in.
                 if (planned.version().details().billedByUse() && edit.amountCents() == null && occurrence.amountCents() == 0) {
                     continue;
@@ -769,6 +786,89 @@ public final class ItemCalendar {
                 edit.checkNumber(),
                 invoiceId,
                 coversThrough);
+    }
+
+    /**
+     * What an item's schedule names within {@code lo}–{@code hi}. For one that counts from the day it was paid, the dates
+     * after each payment count on from that payment's paid date, up to the next payment (Rachel, 2026-10-24: "if it's
+     * every 6 weeks, it should adjust upcoming payments to 6 weeks after the latest one"): paid on Mar 10 rather than
+     * Mar 1, the next is six weeks after Mar 10, and so on until the next one is paid. Dates up to the first payment are
+     * the schedule's own. A date the steps land on that is not after both the payment's days is left out, so nothing is
+     * named twice.
+     *
+     * @param payments the item's payments, in the order its schedule named them; empty when it keeps to its schedule
+     */
+    private static List<Planned<Terms>> planned(
+            OccurrencePlanner planner, List<OccurrencePlanner.Version<Terms>> versions, List<Paid> payments, LocalDate lo, LocalDate hi) {
+        if (payments.isEmpty()) {
+            return planner.occurrences(versions, lo, hi);
+        }
+        // Before the first payment, the schedule's own dates.
+        LocalDate firstPaid = payments.getFirst().scheduled();
+        List<Planned<Terms>> planned = new ArrayList<>(planner.occurrences(versions, lo, hi).stream()
+                .filter(each -> !each.scheduled().isAfter(firstPaid))
+                .toList());
+        for (int i = 0; i < payments.size(); i++) {
+            Paid payment = payments.get(i);
+            LocalDate after = payment.paidOn().isAfter(payment.scheduled()) ? payment.paidOn() : payment.scheduled();
+            LocalDate until = i + 1 < payments.size() ? payments.get(i + 1).scheduled() : null;
+            List<OccurrencePlanner.Version<Terms>> counted = versions.stream()
+                    .map(version -> new OccurrencePlanner.Version<>(
+                            version.effectiveFrom(), version.rule().countedFrom(payment.paidOn()), version.daysAfterPayday(), version.details()))
+                    .toList();
+            planner.occurrences(counted, lo, hi).stream()
+                    .filter(each -> each.scheduled().isAfter(after) && (until == null || !each.scheduled().isAfter(until)))
+                    .forEach(planned::add);
+        }
+        planned.sort(Comparator.comparing((Planned<Terms> each) -> each.due()).thenComparing(Planned::scheduled));
+        return planned;
+    }
+
+    /** Whether {@code item} is estimated from a year before: a bill or budget set to, whose dates are payments. */
+    private static boolean estimatedFromLastYear(Item item) {
+        return item.fromLastYear() && (item.kind() == ItemKind.BILL || item.kind() == ItemKind.BUDGET);
+    }
+
+    /**
+     * What each of {@code chosen} came to in each month before this one, from two years before {@code lo}: the average of
+     * its dates in that month, by the day each counts on (the day it was paid, once it was), skipped ones left out. The
+     * same history Plan next year counts.
+     */
+    private Map<Long, Map<YearMonth, Long>> monthsBefore(List<Item> chosen, LocalDate lo, LocalDate today) {
+        YearMonth thisMonth = YearMonth.from(today);
+        Map<Long, Map<YearMonth, long[]>> sums = new HashMap<>();
+        for (Occurrence occurrence : expandSchedules(chosen, lo.minusYears(2), today, null, false).occurrences()) {
+            LocalDate counted = occurrence.paid() && occurrence.paidDate() != null ? occurrence.paidDate() : occurrence.dueDate();
+            if (occurrence.skipped() || !YearMonth.from(counted).isBefore(thisMonth)) {
+                continue;
+            }
+            long[] sum = sums.computeIfAbsent(occurrence.itemId(), id -> new HashMap<>()).computeIfAbsent(YearMonth.from(counted), month -> new long[2]);
+            sum[0] += occurrence.amountCents();
+            sum[1]++;
+        }
+        Map<Long, Map<YearMonth, Long>> averages = new HashMap<>();
+        sums.forEach((itemId, months) -> months.forEach((month, sum) -> averages.computeIfAbsent(itemId, id -> new HashMap<>()).put(
+                month, BigDecimal.valueOf(sum[0]).divide(BigDecimal.valueOf(sum[1]), 0, Money.ROUNDING).longValueExact())));
+        return averages;
+    }
+
+    /**
+     * {@code occurrence} estimated from what it came to in the same month a year before (Rachel, 2026-10-24: "use last
+     * years amounts as a setting"; she chose the same month, and the item's own amount when there is nothing to match),
+     * when it is still to come, unpaid and not typed over. A month a year back that isn't over yet looks a year further.
+     * Left as it is without {@code months}, or when that month had nothing.
+     */
+    private static Occurrence fromLastYear(Occurrence occurrence, Override edit, Map<YearMonth, Long> months, LocalDate today) {
+        if (months == null || edit.paid() || edit.amountCents() != null || occurrence.dueDate().isBefore(today)) {
+            return occurrence;
+        }
+        YearMonth thisMonth = YearMonth.from(today);
+        YearMonth back = YearMonth.from(occurrence.dueDate()).minusYears(1);
+        while (!back.isBefore(thisMonth)) {
+            back = back.minusYears(1);
+        }
+        Long cents = months.get(back);
+        return cents == null ? occurrence : occurrence.withAmount(cents, true);
     }
 
     private static OccurrencePlanner.Version<Terms> planned(Version version) {

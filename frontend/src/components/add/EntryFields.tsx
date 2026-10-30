@@ -22,7 +22,7 @@ import { FormSection } from "../FormSection";
 import { AMOUNT_HELP, MoneyField } from "../MoneyField";
 import { Picker, TextPicker } from "../Picker";
 import { type IntoLine, IntoBuckets, NOT_IN_A_BUCKET } from "./IntoBuckets";
-import { useOwedExpenses } from "./owedExpenses";
+import { choiceFor, choiceOf, intoOf, owedOn, type PaysBackTarget, paysBackIds, targetName, useOwedExpenses } from "./owedExpenses";
 import { DefaultDateHint } from "../settings/DefaultDateHint";
 import { BUTTON_DANGER_OUTLINE, BUTTON_PRIMARY, HINT, INPUT, LABEL } from "../ui";
 
@@ -35,8 +35,8 @@ interface EntryFieldsProps {
   entry?: Entry;
   /** When adding: the account to start on, for a form opened for one account (a charge on a card). */
   accountId?: number;
-  /** When adding money coming in: the expense it pays back, for a form opened from that expense. */
-  paysBack?: Entry;
+  /** When adding money coming in: the expense or flagged payment it pays back, for a form opened from it. */
+  paysBack?: PaysBackTarget;
   /** The pay period on screen, if any: it gives the form its first date and account, and the preview. */
   period?: PeriodDetail;
   accounts: readonly Account[];
@@ -71,19 +71,35 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
   const names = useNames();
 
   // Opened from an expense to record what came back: what is still owed is the likely amount.
-  const owed = entry === undefined ? paysBack?.reimbursement?.owedCents : undefined;
+  const owed = entry === undefined ? owedOn(paysBack) : undefined;
   const [amount, setAmount] = useState(entry ? centsToInput(entry.amountCents) : owed ? centsToInput(owed) : "");
   const [estimate, setEstimate] = useState(entry?.estimate ?? false);
   const [description, setDescription] = useState(
-    entry?.description ?? (paysBack ? `Reimbursement: ${paysBack.payee ?? paysBack.description}` : ""),
+    entry?.description ?? (paysBack ? `Reimbursement: ${targetName(paysBack)}` : ""),
   );
   const [payee, setPayee] = useState(entry?.payee ?? "");
   const opensOn = useDefaultDate();
   const [date, setDate] = useState(entry?.date ?? firstDate(period, opensOn.date));
   const [accountId, setAccountId] = useState<string | null>(
-    entry ? String(entry.accountId) : startOn !== undefined ? String(startOn) : period?.primaryAccountId != null ? String(period.primaryAccountId) : null,
+    entry
+      ? String(entry.accountId)
+      : startOn !== undefined
+        ? String(startOn)
+        : // What is paid back says which account its money comes back into.
+          paysBack && intoOf(paysBack) !== null
+          ? String(intoOf(paysBack))
+          : period?.primaryAccountId != null
+            ? String(period.primaryAccountId)
+            : null,
   );
-  const [toAccountId, setToAccountId] = useState<string | null>(entry?.toAccountId != null ? String(entry.toAccountId) : null);
+  // Paid back out of one of her own accounts, like an FSA, it is a transfer into the account it comes back into.
+  const [toAccountId, setToAccountId] = useState<string | null>(
+    entry?.toAccountId != null
+      ? String(entry.toAccountId)
+      : kind === "transfer" && paysBack && intoOf(paysBack) !== null
+        ? String(intoOf(paysBack))
+        : null,
+  );
   const [categoryId, setCategoryId] = useState<number | null>(entry?.categoryId ?? null);
   const [tagIds, setTagIds] = useState<number[]>(entry?.tagIds ?? []);
   const [note, setNote] = useState(entry?.note ?? "");
@@ -92,15 +108,17 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
   const [chosenFrom, setChosenFrom] = useState<string>();
   const [toBeRepaid, setToBeRepaid] = useState(false);
   const [paysBackId, setPaysBackId] = useState<string | null>(
-    entry?.reimbursesEntryId != null ? String(entry.reimbursesEntryId) : paysBack ? String(paysBack.id) : null,
+    entry ? choiceOf(entry.reimbursesEntryId, entry.reimbursesPaymentId) : paysBack ? choiceFor(paysBack) : null,
   );
   // Receipts chosen for an entry that does not exist yet: sent once it does.
   const [files, setFiles] = useState<File[]>([]);
   // Set when the entry was added but its files were not: the form then only says so, and closes.
   const [notAttached, setNotAttached] = useState<string>();
 
-  // What money coming in could be paying back: expenses still owed, and whichever one it already pays back.
-  const owedExpenses = useOwedExpenses(kind === "money_in", paysBackId, paysBack);
+  // What money coming in, or a transfer out of an account like an FSA (Rachel, 2026-10-25), could be paying back: expenses
+  // still owed, and whichever one it already pays back.
+  const paysBackKind = kind === "money_in" || kind === "transfer";
+  const owedExpenses = useOwedExpenses(paysBackKind, paysBackId, paysBack);
 
   // Only money arriving can be set aside, and only in the buckets of the account it arrives in.
   const arrivesIn = kind === "money_in" ? accountId : kind === "transfer" ? toAccountId : null;
@@ -155,7 +173,7 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
     kind !== "money_in" && accounts.some((account) => String(account.id) === accountId && account.type === "checking");
 
   // What money coming in can be said to pay back; nothing to ask when there is no such expense.
-  const canPayBack = kind === "money_in" && (owedExpenses.length > 0 || paysBackId !== null);
+  const canPayBack = paysBackKind && (owedExpenses.length > 0 || paysBackId !== null);
   const adding = entry === undefined;
   const labelsTitle = kind === "money_out" ? "Paid to, tags and note" : "Category, tags and note";
   // Adding: two short steps everyone takes, and the rest behind "More options". Changing: one group at a
@@ -260,7 +278,7 @@ export function EntryFields({ kind, entry, accountId: startOn, paysBack, period,
       checkNumber: paidFromChecking && checkNumber.trim() !== "" ? checkNumber.trim() : null,
       tagIds,
       bucketSplits,
-      reimbursesEntryId: kind === "money_in" && paysBackId !== null ? Number(paysBackId) : null,
+      ...paysBackIds(paysBackKind ? paysBackId : null),
       // Only said when adding: from then on where it stands is kept on the expense's own page.
       ...(entry === undefined && kind === "money_out" && toBeRepaid ? { reimbursementStatus: "to_submit" as const } : {}),
     };

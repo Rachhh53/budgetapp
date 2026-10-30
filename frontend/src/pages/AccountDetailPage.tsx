@@ -213,7 +213,7 @@ export function AccountDetailPage() {
           (latest || points.some((point) => point.endingCents !== 0)) &&
           points.length > 0 && (
             <Card title="Where it's heading">
-              <ProjectionChart account={account} balances={balances} points={points} showAvailable={hasBuckets} />
+              <ProjectionChart account={account} balances={balances} points={points} showAvailable={hasBuckets} showSpending={cash} />
             </Card>
           )
         )}

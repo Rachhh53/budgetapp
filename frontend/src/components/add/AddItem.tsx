@@ -22,6 +22,7 @@ import { Modal } from "../Modal";
 import { Segmented } from "../Segmented";
 import { BUTTON_PRIMARY } from "../ui";
 import { EntryFields, type EntryPart } from "./EntryFields";
+import type { PaysBackTarget } from "./owedExpenses";
 import { UploadDialog } from "./UploadDialog";
 
 /** What the + Add item form can add: a one-off of some kind, or a recurring item. */
@@ -32,7 +33,7 @@ interface AddItemContext {
    * Opens the form with `kind` chosen and, when given, the account it is for (a charge on one card, say)
    * or the expense that money coming in pays back.
    */
-  add: (kind: AddKind, accountId?: number, paysBack?: Entry) => void;
+  add: (kind: AddKind, accountId?: number, paysBack?: PaysBackTarget) => void;
   /** Opens the form on a one-off that already exists, to change or delete it. */
   /** Opens a one-off for changing; `startAt` names the fields to open on, for a card's own Edit button. */
   editEntry: (entry: Entry, startAt?: EntryPart) => void;
@@ -40,7 +41,7 @@ interface AddItemContext {
    * Opens "Move money out of a bucket", or with `move` that move, to change or delete it; with `paysBack`, a new
    * move that pays yourself back for that expense.
    */
-  moveOut: (move?: MoveOut, paysBack?: Entry) => void;
+  moveOut: (move?: MoveOut, paysBack?: PaysBackTarget) => void;
   /** Opens "Upload a pay stub or receipt…". */
   upload: () => void;
   menuOpen: boolean;
@@ -75,13 +76,13 @@ const EDITABLE = "input, textarea, select, [contenteditable='true']";
  * screen: Ctrl+N opens the menu, Ctrl+E goes straight to money out and Ctrl+I to money in.
  */
 export function AddItemProvider({ children }: { children: ReactNode }) {
-  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number; paysBack?: Entry; startAt?: EntryPart } | null>(null);
+  const [form, setForm] = useState<{ kind: AddKind; entry?: Entry; accountId?: number; paysBack?: PaysBackTarget; startAt?: EntryPart } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hasMenu, setHasMenu] = useState(false);
   const [period, setPeriod] = useState<PeriodDetail>();
 
-  const add = useCallback((kind: AddKind, accountId?: number, paysBack?: Entry) => {
+  const add = useCallback((kind: AddKind, accountId?: number, paysBack?: PaysBackTarget) => {
     setMenuOpen(false);
     setForm({ kind, accountId, paysBack });
   }, []);
@@ -91,8 +92,8 @@ export function AddItemProvider({ children }: { children: ReactNode }) {
     setUploading(true);
   }, []);
   // A move out of a bucket: `{}` for a new one.
-  const [movingOut, setMovingOut] = useState<{ move?: MoveOut; paysBack?: Entry } | null>(null);
-  const moveOut = useCallback((move?: MoveOut, paysBack?: Entry) => {
+  const [movingOut, setMovingOut] = useState<{ move?: MoveOut; paysBack?: PaysBackTarget } | null>(null);
+  const moveOut = useCallback((move?: MoveOut, paysBack?: PaysBackTarget) => {
     setMenuOpen(false);
     setMovingOut({ move, paysBack });
   }, []);
@@ -175,7 +176,7 @@ function AddItemForm({
   initialKind: AddKind;
   entry?: Entry;
   /** The expense a new money-in entry pays back, when the form was opened from that expense. */
-  paysBack?: Entry;
+  paysBack?: PaysBackTarget;
   /** When changing: the fields to open on. */
   startAt?: EntryPart;
   /** The account a new one-off starts on, when the form was opened for one. */

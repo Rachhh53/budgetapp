@@ -315,6 +315,7 @@ public final class BucketsRepository {
      *
      * @param amountCents        what was moved out, positive (stored as a negative change)
      * @param reimbursesEntryId the expense it pays back (migration V38); {@code null} when it pays none back
+     * @param reimbursesPaymentId the flagged recurring payment it pays back instead (migration V46); {@code null} otherwise
      */
     public record MoveOut(
             long id,
@@ -325,15 +326,19 @@ public final class BucketsRepository {
             String note,
             Long categoryId,
             List<Long> tagIds,
-            Long reimbursesEntryId) {}
+            Long reimbursesEntryId,
+            Long reimbursesPaymentId) {}
 
     /** Records a move out of a bucket. @return its id */
     public long addMoveOut(
-            long bucketId, LocalDate date, long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId) {
+            long bucketId, LocalDate date, long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId,
+            Long reimbursesPaymentId) {
         return jdbi.inTransaction(handle -> {
             long id = handle.createUpdate("""
-                            INSERT INTO bucket_changes (bucket_id, date, amount, source, note, to_available, category_id, reimburses_entry_id)
-                            VALUES (:bucketId, :date, :amount, 'manual', :note, 1, :categoryId, :reimburses)
+                            INSERT INTO bucket_changes
+                                (bucket_id, date, amount, source, note, to_available, category_id, reimburses_entry_id,
+                                 reimburses_payment_id)
+                            VALUES (:bucketId, :date, :amount, 'manual', :note, 1, :categoryId, :reimburses, :reimbursesPayment)
                             """)
                     .bind("bucketId", bucketId)
                     .bind("date", date.toString())
@@ -341,6 +346,7 @@ public final class BucketsRepository {
                     .bind("note", note)
                     .bind("categoryId", categoryId)
                     .bind("reimburses", reimbursesEntryId)
+                    .bind("reimbursesPayment", reimbursesPaymentId)
                     .executeAndReturnGeneratedKeys("id")
                     .mapTo(Long.class)
                     .one();
@@ -358,14 +364,16 @@ public final class BucketsRepository {
             String note,
             Long categoryId,
             List<Long> tagIds,
-            Long reimbursesEntryId) {
+            Long reimbursesEntryId,
+            Long reimbursesPaymentId) {
         return jdbi.inTransaction(handle -> {
             boolean found = handle.createUpdate("""
                             UPDATE bucket_changes SET date = :date, amount = :amount, note = :note, category_id = :categoryId,
-                                reimburses_entry_id = :reimburses
+                                reimburses_entry_id = :reimburses, reimburses_payment_id = :reimbursesPayment
                             WHERE id = :id AND bucket_id = :bucketId AND to_available = 1
                             """)
                     .bind("reimburses", reimbursesEntryId)
+                    .bind("reimbursesPayment", reimbursesPaymentId)
                     .bind("id", changeId)
                     .bind("bucketId", bucketId)
                     .bind("date", date.toString())
@@ -391,7 +399,8 @@ public final class BucketsRepository {
     }
 
     private static final String MOVES_OUT = """
-            SELECT c.id, c.bucket_id, b.account_id, c.date, c.amount, c.note, c.category_id, c.reimburses_entry_id
+            SELECT c.id, c.bucket_id, b.account_id, c.date, c.amount, c.note, c.category_id, c.reimburses_entry_id,
+                   c.reimburses_payment_id
             FROM bucket_changes c JOIN buckets b ON b.id = c.bucket_id
             WHERE c.to_available = 1 AND\s""";
 
@@ -410,6 +419,13 @@ public final class BucketsRepository {
                 .bind("id", expenseId)));
     }
 
+    /** The moves out of a bucket that pay back the flagged recurring payment {@code paymentId}, oldest first. */
+    public List<MoveOut> movesOutPayingBackPayment(long paymentId) {
+        return jdbi.withHandle(handle -> movesOut(handle, handle
+                .createQuery(MOVES_OUT + "c.reimburses_payment_id = :id ORDER BY c.date, c.id")
+                .bind("id", paymentId)));
+    }
+
     private static List<MoveOut> movesOut(Handle handle, Query query) {
         return query
                 .map((rs, ctx) -> {
@@ -417,9 +433,11 @@ public final class BucketsRepository {
                     Long category = rs.wasNull() ? null : categoryId;
                     long reimburses = rs.getLong("reimburses_entry_id");
                     Long paysBack = rs.wasNull() ? null : reimburses;
+                    long payment = rs.getLong("reimburses_payment_id");
+                    Long paysBackPayment = rs.wasNull() ? null : payment;
                     return new MoveOut(rs.getLong("id"), rs.getLong("bucket_id"), rs.getLong("account_id"),
                             LocalDate.parse(rs.getString("date")), -rs.getLong("amount"), rs.getString("note"), category, List.of(),
-                            paysBack);
+                            paysBack, paysBackPayment);
                 })
                 .list()
                 .stream()
@@ -428,7 +446,7 @@ public final class BucketsRepository {
                                 .bind("id", move.id())
                                 .mapTo(Long.class)
                                 .list(),
-                        move.reimbursesEntryId()))
+                        move.reimbursesEntryId(), move.reimbursesPaymentId()))
                 .toList();
     }
 

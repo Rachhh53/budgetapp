@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import org.jdbi.v3.core.Handle;
@@ -41,6 +42,13 @@ public final class ItemsRepository {
      * @param createdOn  the day it was added: saving up for it cannot have started any earlier
      * @param versions   oldest first; never empty
      */
+    /**
+     * A recurring item with every version of it.
+     *
+     * @param countsFromPaid true when its next dates count on from the day it was last paid (migration V44)
+     * @param fromLastYear   true when what is still to come is estimated from what it came to in the same month a year
+     *                       before (migration V45)
+     */
     public record Item(
             long id,
             String name,
@@ -50,7 +58,9 @@ public final class ItemsRepository {
             LocalDate archivedOn,
             LocalDate createdOn,
             List<Long> tagIds,
-            List<Version> versions) {
+            List<Version> versions,
+            boolean countsFromPaid,
+            boolean fromLastYear) {
 
         /** The version in force on {@code date}. The earliest one also covers every date before it. */
         public Version versionOn(LocalDate date) {
@@ -201,7 +211,14 @@ public final class ItemsRepository {
      *
      * @param archivedOn the day it is archived as of; {@code null} when it is not archived
      */
-    public record Identity(String name, ItemKind kind, String note, LocalDate archivedOn, List<Long> tagIds) {}
+    public record Identity(
+            String name, ItemKind kind, String note, LocalDate archivedOn, List<Long> tagIds, boolean countsFromPaid, boolean fromLastYear) {
+
+        /** An item whose dates keep to its schedule, whenever it is paid, at its own amount. */
+        public Identity(String name, ItemKind kind, String note, LocalDate archivedOn, List<Long> tagIds) {
+            this(name, kind, note, archivedOn, tagIds, false, false);
+        }
+    }
 
     /**
      * A "just this one" edit. {@code null} means that part of the occurrence was not changed.
@@ -254,8 +271,8 @@ public final class ItemsRepository {
     public long create(Identity identity, Terms terms, LocalDate effectiveFrom) {
         return jdbi.inTransaction(handle -> {
             long id = handle.createQuery("""
-                            INSERT INTO items (name, kind, note, archived, archived_on, created_at)
-                            VALUES (:name, :kind, :note, :archived, :archivedOn, :now)
+                            INSERT INTO items (name, kind, note, archived, archived_on, counts_from_paid, estimates_from_last_year, created_at)
+                            VALUES (:name, :kind, :note, :archived, :archivedOn, :countsFromPaid, :fromLastYear, :now)
                             RETURNING id
                             """)
                     .bind("name", identity.name())
@@ -263,6 +280,8 @@ public final class ItemsRepository {
                     .bind("note", identity.note())
                     .bind("archived", identity.archivedOn() != null)
                     .bind("archivedOn", identity.archivedOn() == null ? null : identity.archivedOn().toString())
+                    .bind("countsFromPaid", identity.countsFromPaid())
+                    .bind("fromLastYear", identity.fromLastYear())
                     .bind("now", clock.instant().toString())
                     .mapTo(Long.class)
                     .one();
@@ -285,7 +304,63 @@ public final class ItemsRepository {
      * new terms.
      */
     public void update(long id, Identity identity, Terms terms, LocalDate effectiveFrom) {
+        update(id, identity, terms, effectiveFrom, false);
+    }
+
+    /**
+     * The same, and with {@code categoryEveryDate} the category reaches back over every earlier version too (Rachel,
+     * 2026-10-25: "a way to retroactively update tags on a recurring item ... and categories"). Tags belong to the whole
+     * item already. Packs bought ahead are one-off expenses of their own, so they follow the item: a new category from
+     * the change's date on (every date, when asked), and new tags on every one.
+     */
+    public void update(long id, Identity identity, Terms terms, LocalDate effectiveFrom, boolean categoryEveryDate) {
         jdbi.useTransaction(handle -> {
+            // The category in force on the change's date, or the first one when the item only starts after it.
+            List<Version> before = versions(handle, id);
+            Long categoryWas = before.stream()
+                    .filter(version -> !version.effectiveFrom().isAfter(effectiveFrom))
+                    .reduce((earlier, later) -> later)
+                    .orElse(before.getFirst())
+                    .terms()
+                    .categoryId();
+            List<Long> tagsWere = handle.createQuery("SELECT tag_id FROM item_tags WHERE item_id = :id ORDER BY tag_id")
+                    .bind("id", id)
+                    .mapTo(Long.class)
+                    .list();
+            if (categoryEveryDate) {
+                handle.createUpdate("UPDATE item_versions SET category_id = :category WHERE item_id = :id AND effective_from < :from")
+                        .bind("category", terms.categoryId())
+                        .bind("id", id)
+                        .bind("from", effectiveFrom.toString())
+                        .execute();
+            }
+            if (categoryEveryDate || !Objects.equals(categoryWas, terms.categoryId())) {
+                handle.createUpdate("""
+                                UPDATE entries SET category_id = :category
+                                WHERE id IN (SELECT entry_id FROM item_prepayments WHERE item_id = :id)
+                                  AND (:every OR date >= :from)
+                                """)
+                        .bind("category", terms.categoryId())
+                        .bind("id", id)
+                        .bind("every", categoryEveryDate)
+                        .bind("from", effectiveFrom.toString())
+                        .execute();
+            }
+            if (!tagsWere.equals(identity.tagIds().stream().distinct().sorted().toList())) {
+                List<Long> packs = handle.createQuery("SELECT entry_id FROM item_prepayments WHERE item_id = :id")
+                        .bind("id", id)
+                        .mapTo(Long.class)
+                        .list();
+                for (long entryId : packs) {
+                    handle.createUpdate("DELETE FROM entry_tags WHERE entry_id = :entryId").bind("entryId", entryId).execute();
+                    for (Long tagId : identity.tagIds().stream().distinct().toList()) {
+                        handle.createUpdate("INSERT INTO entry_tags (entry_id, tag_id) VALUES (:entryId, :tagId)")
+                                .bind("entryId", entryId)
+                                .bind("tagId", tagId)
+                                .execute();
+                    }
+                }
+            }
             boolean kindChanged = !handle.createQuery("SELECT kind FROM items WHERE id = :id")
                     .bind("id", id)
                     .mapTo(String.class)
@@ -317,7 +392,8 @@ public final class ItemsRepository {
                         .execute();
             }
             handle.createUpdate("""
-                            UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived, archived_on = :archivedOn
+                            UPDATE items SET name = :name, kind = :kind, note = :note, archived = :archived, archived_on = :archivedOn,
+                                counts_from_paid = :countsFromPaid, estimates_from_last_year = :fromLastYear
                             WHERE id = :id
                             """)
                     .bind("id", id)
@@ -326,6 +402,8 @@ public final class ItemsRepository {
                     .bind("note", identity.note())
                     .bind("archived", identity.archivedOn() != null)
                     .bind("archivedOn", identity.archivedOn() == null ? null : identity.archivedOn().toString())
+                    .bind("countsFromPaid", identity.countsFromPaid())
+                    .bind("fromLastYear", identity.fromLastYear())
                     .execute();
             replaceTags(handle, id, identity.tagIds());
 
@@ -466,8 +544,9 @@ public final class ItemsRepository {
 
             handle.createUpdate("""
                             UPDATE items
-                            SET name = n.name, kind = n.kind, note = n.note, archived = 0, archived_on = NULL
-                            FROM (SELECT name, kind, note FROM items WHERE id = :added) AS n
+                            SET name = n.name, kind = n.kind, note = n.note, counts_from_paid = n.counts_from_paid,
+                                estimates_from_last_year = n.estimates_from_last_year, archived = 0, archived_on = NULL
+                            FROM (SELECT name, kind, note, counts_from_paid, estimates_from_last_year FROM items WHERE id = :added) AS n
                             WHERE items.id = :old
                             """)
                     .bind("added", added)
@@ -560,6 +639,28 @@ public final class ItemsRepository {
     }
 
     /** Single-occurrence edits whose scheduled date falls within {@code from}–{@code to}. */
+    /** One payment of an item: the date its schedule named, and the day it was paid. */
+    public record Paid(LocalDate scheduled, LocalDate paidOn) {}
+
+    /**
+     * For each item that counts its dates from the day it was paid, every payment with a paid date, in the order its
+     * schedule named them. Each one's paid date is what the dates after it count on from, up to the next.
+     */
+    public Map<Long, List<Paid>> paymentsCountedFrom() {
+        Map<Long, List<Paid>> found = new HashMap<>();
+        jdbi.useHandle(handle -> handle
+                .createQuery("""
+                        SELECT o.item_id, o.original_due_date, o.paid_date
+                        FROM occurrence_overrides o JOIN items i ON i.id = o.item_id
+                        WHERE i.counts_from_paid = 1 AND o.paid = 1 AND o.paid_date IS NOT NULL
+                        ORDER BY o.item_id, o.original_due_date
+                        """)
+                .map((rs, ctx) -> found.computeIfAbsent(rs.getLong("item_id"), id -> new ArrayList<>()).add(new Paid(
+                        LocalDate.parse(rs.getString("original_due_date")), LocalDate.parse(rs.getString("paid_date")))))
+                .list());
+        return found;
+    }
+
     public List<Override> overrides(LocalDate from, LocalDate to) {
         return jdbi.withHandle(handle -> handle
                 .createQuery("SELECT * FROM occurrence_overrides WHERE original_due_date BETWEEN :from AND :to")
@@ -603,10 +704,19 @@ public final class ItemsRepository {
     }
 
     /** The columns of {@code items}, before versions and tags are attached. */
-    private record ItemRow(long id, String name, ItemKind kind, String note, boolean archived, LocalDate archivedOn, LocalDate createdOn) {}
+    private record ItemRow(
+            long id,
+            String name,
+            ItemKind kind,
+            String note,
+            boolean archived,
+            LocalDate archivedOn,
+            LocalDate createdOn,
+            boolean countsFromPaid,
+            boolean fromLastYear) {}
 
     private List<ItemRow> rows(Handle handle, String clause, Long id) {
-        var query = handle.createQuery("SELECT id, name, kind, note, archived, archived_on, created_at FROM items " + clause);
+        var query = handle.createQuery("SELECT id, name, kind, note, archived, archived_on, created_at, counts_from_paid, estimates_from_last_year FROM items " + clause);
         if (id != null) {
             query.bind("id", id);
         }
@@ -618,7 +728,9 @@ public final class ItemsRepository {
                 rs.getBoolean("archived"),
                 rs.getString("archived_on") == null ? null : LocalDate.parse(rs.getString("archived_on")),
                 // Stored as an instant; the day it was on this PC is what counts.
-                Instant.parse(rs.getString("created_at")).atZone(clock.getZone()).toLocalDate())).list();
+                Instant.parse(rs.getString("created_at")).atZone(clock.getZone()).toLocalDate(),
+                rs.getBoolean("counts_from_paid"),
+                rs.getBoolean("estimates_from_last_year"))).list();
     }
 
     private static Item complete(Handle handle, ItemRow row) {
@@ -627,7 +739,8 @@ public final class ItemsRepository {
                 .mapTo(Long.class)
                 .list();
         return new Item(
-                row.id(), row.name(), row.kind(), row.note(), row.archived(), row.archivedOn(), row.createdOn(), tagIds, versions(handle, row.id()));
+                row.id(), row.name(), row.kind(), row.note(), row.archived(), row.archivedOn(), row.createdOn(), tagIds, versions(handle, row.id()),
+                row.countsFromPaid(), row.fromLastYear());
     }
 
     /** A version row before its schedule is loaded. */

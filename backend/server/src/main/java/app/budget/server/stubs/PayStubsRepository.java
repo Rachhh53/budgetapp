@@ -27,7 +27,7 @@ import org.jdbi.v3.core.Jdbi;
 public final class PayStubsRepository {
 
     private static final String SELECT = """
-            SELECT s.id, s.income_source_id, s.name, s.pay_date, s.status, s.applied, f.hash, f.size, f.pages
+            SELECT s.id, s.income_source_id, s.name, s.pay_date, s.status, s.applied, s.saved_applied, f.hash, f.size, f.pages
             FROM pay_stubs s JOIN files f ON f.id = s.file_id
             """;
 
@@ -70,6 +70,8 @@ public final class PayStubsRepository {
      * @param name    what its file was called when it was added
      * @param payDate null until the stub's date is read or typed
      * @param applied null while in review
+     * @param savedApplied while a saved stub is being edited, what saving it had changed; null otherwise, so Cancel is
+     *                     there only when there is a saved stub to go back to
      */
     public record Stub(
             long id,
@@ -78,6 +80,7 @@ public final class PayStubsRepository {
             LocalDate payDate,
             Status status,
             Applied applied,
+            Applied savedApplied,
             String hash,
             long sizeBytes,
             int pages,
@@ -135,14 +138,59 @@ public final class PayStubsRepository {
         });
     }
 
+    /** The columns of a stub's lines, the same in {@code pay_stub_lines} and the copy kept while it is edited. */
+    private static final String LINE_COLUMNS = "position, section, label, amount, ytd_amount, maps_to, maps_to_account_id, sure";
+
     /**
      * Puts a saved stub back in review, to be changed and saved again. What it changed when it
-     * was saved stays as it is until then.
+     * was saved stays as it is until then. The stub as it was saved is copied aside, so the edit
+     * can be cancelled.
      */
     public void reopen(long id) {
-        jdbi.useHandle(handle -> handle.createUpdate("UPDATE pay_stubs SET status = 'review', applied = NULL WHERE id = :id")
-                .bind("id", id)
-                .execute());
+        jdbi.useTransaction(handle -> {
+            handle.createUpdate("DELETE FROM pay_stub_saved_lines WHERE pay_stub_id = :id").bind("id", id).execute();
+            handle.createUpdate("INSERT INTO pay_stub_saved_lines (pay_stub_id, " + LINE_COLUMNS + ") SELECT pay_stub_id, " + LINE_COLUMNS
+                            + " FROM pay_stub_lines WHERE pay_stub_id = :id")
+                    .bind("id", id)
+                    .execute();
+            handle.createUpdate("""
+                            UPDATE pay_stubs SET saved_applied = applied, saved_pay_date = pay_date, status = 'review', applied = NULL
+                            WHERE id = :id
+                            """)
+                    .bind("id", id)
+                    .execute();
+        });
+    }
+
+    /**
+     * Puts a stub being edited back as it was saved: its lines, its date and what saving it changed, which were never
+     * taken back (Rachel, 2026-10-24). False when it is not a saved stub being edited.
+     */
+    public boolean cancelEdit(long id) {
+        return jdbi.inTransaction(handle -> {
+            boolean editing = handle.createQuery("SELECT saved_applied IS NOT NULL FROM pay_stubs WHERE id = :id AND status = 'review'")
+                    .bind("id", id)
+                    .mapTo(Boolean.class)
+                    .findOne()
+                    .orElse(false);
+            if (!editing) {
+                return false;
+            }
+            handle.createUpdate("DELETE FROM pay_stub_lines WHERE pay_stub_id = :id").bind("id", id).execute();
+            handle.createUpdate("INSERT INTO pay_stub_lines (pay_stub_id, " + LINE_COLUMNS + ") SELECT pay_stub_id, " + LINE_COLUMNS
+                            + " FROM pay_stub_saved_lines WHERE pay_stub_id = :id")
+                    .bind("id", id)
+                    .execute();
+            handle.createUpdate("""
+                            UPDATE pay_stubs
+                            SET status = 'saved', applied = saved_applied, pay_date = saved_pay_date, saved_applied = NULL, saved_pay_date = NULL
+                            WHERE id = :id
+                            """)
+                    .bind("id", id)
+                    .execute();
+            handle.createUpdate("DELETE FROM pay_stub_saved_lines WHERE pay_stub_id = :id").bind("id", id).execute();
+            return true;
+        });
     }
 
     /**
@@ -151,10 +199,15 @@ public final class PayStubsRepository {
      */
     public void save(Stub stub, Applied applied) {
         jdbi.useTransaction(handle -> {
-            handle.createUpdate("UPDATE pay_stubs SET status = 'saved', applied = :applied WHERE id = :id")
+            handle.createUpdate("""
+                            UPDATE pay_stubs SET status = 'saved', applied = :applied, saved_applied = NULL, saved_pay_date = NULL
+                            WHERE id = :id
+                            """)
                     .bind("applied", Inputs.code(applied))
                     .bind("id", stub.id())
                     .execute();
+            // Saved again, so there is nothing to cancel back to.
+            handle.createUpdate("DELETE FROM pay_stub_saved_lines WHERE pay_stub_id = :id").bind("id", stub.id()).execute();
             for (StubLine line : stub.lines()) {
                 handle.createUpdate("""
                                 INSERT INTO stub_layouts (income_source_id, label_key, section, maps_to, maps_to_account_id)
@@ -219,6 +272,7 @@ public final class PayStubsRepository {
         long id = rs.getLong("id");
         String payDate = rs.getString("pay_date");
         String applied = rs.getString("applied");
+        String savedApplied = rs.getString("saved_applied");
         List<StubLine> lines = handle
                 .createQuery("""
                         SELECT id, section, label, amount, ytd_amount, maps_to, maps_to_account_id, sure
@@ -246,6 +300,7 @@ public final class PayStubsRepository {
                 payDate == null ? null : LocalDate.parse(payDate),
                 choice(Status.class, rs.getString("status")),
                 applied == null ? null : choice(Applied.class, applied),
+                savedApplied == null ? null : choice(Applied.class, savedApplied),
                 rs.getString("hash"),
                 rs.getLong("size"),
                 rs.getInt("pages"),

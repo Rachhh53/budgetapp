@@ -12,6 +12,7 @@ import { EditButton, EditPageButton } from "../components/EditButton";
 import { ByMonthCard } from "../components/items/ByMonthCard";
 import { BilledLaterCard } from "../components/items/BilledLaterCard";
 import { PaidAheadCard } from "../components/items/PaidAheadCard";
+import { PaidBackCard } from "../components/items/PaidBackCard";
 import { UpcomingCard } from "../components/items/UpcomingCard";
 import { ItemForm, type ItemPart } from "../components/items/ItemForm";
 import { PAYMENT_MODE_LABELS } from "../components/cards/labels";
@@ -203,6 +204,11 @@ export function RecurringItemDetailPage() {
                   </Fact>
                 )}
               </dl>
+              {item.countsFromPaid && (
+                <p className="mt-3 text-sm text-muted">
+                  The next one counts from the day the last one was paid, so paying late or early moves the dates after it.
+                </p>
+              )}
             </Card>
 
             <Card
@@ -255,6 +261,7 @@ export function RecurringItemDetailPage() {
               )}
             </Card>
             <AmountHistory item={item} />
+            {(item.kind === "bill" || item.kind === "budget") && <PaidBackCard item={item} />}
           </div>
         </div>
       </div>
@@ -340,6 +347,8 @@ function AmountHistory({ item }: { item: Item }) {
         {item.history.length < 2
           ? "No changes yet. When the amount changes, choose Change the amount: everything dated before that day keeps this amount."
           : "Each date uses the newest amount set on or before it."}
+        {item.fromLastYear &&
+          " Dates still to come are estimated from what the same month came to last year; a month with nothing then uses this amount."}
       </p>
     </Card>
   );

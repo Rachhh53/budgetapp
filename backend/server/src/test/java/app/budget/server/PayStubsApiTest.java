@@ -102,6 +102,7 @@ class PayStubsApiTest extends ApiTestBase {
             assertThat(server.put("/api/pay-stubs/" + id, "{\"lines\":[]}", null).status()).isEqualTo(401);
             assertThat(server.post("/api/pay-stubs/" + id + "/save", "{\"apply\":\"none\"}", null).status()).isEqualTo(401);
             assertThat(server.post("/api/pay-stubs/" + id + "/reopen", "", null).status()).isEqualTo(401);
+            assertThat(server.post("/api/pay-stubs/" + id + "/cancel-edit", "", null).status()).isEqualTo(401);
             assertThat(server.delete("/api/pay-stubs/" + id, null).status()).isEqualTo(401);
             assertThat(server.download("/api/pay-stubs/" + id + "/file", null, null).status()).isEqualTo(401);
             assertThat(server.download("/api/pay-stubs/" + id + "/preview", null, null).status()).isEqualTo(401);
@@ -540,6 +541,54 @@ class PayStubsApiTest extends ApiTestBase {
             assertThat(year.get("grossPaychecksSoFar").asInt()).isEqualTo(19);
             assertThat(year.get("grossWholeYearCents").asLong()).isEqualTo(24 * 360_000L);
             assertThat(year.get("grossPaychecksInYear").asInt()).isEqualTo(24);
+        }
+
+        @Test
+        void editingASavedStubCanBeCancelledLeavingItExactlyAsItWasSaved() throws Exception {
+            long id = reviewed();
+            save(id, "correct");
+            JsonNode saved = server.get("/api/pay-stubs/" + id, cookie).data();
+            assertThat(saved.get("editingSaved").asBoolean()).isFalse();
+
+            Reply reopened = server.post("/api/pay-stubs/" + id + "/reopen", "", cookie);
+            assertThat(reopened.data().get("editingSaved").asBoolean()).isTrue();
+            // Changes are kept as they are made: a line taken off and the date moved.
+            server.put("/api/pay-stubs/" + id, """
+                    {"payDate":"2026-10-15","lines":[{"section":"earnings","label":"Regular pay","amountCents":360000,"tracksAs":"gross"}]}""",
+                    cookie);
+
+            Reply cancelled = server.post("/api/pay-stubs/" + id + "/cancel-edit", "", cookie);
+
+            assertThat(cancelled.status()).as(cancelled.body().toString()).isEqualTo(200);
+            JsonNode back = cancelled.data();
+            assertThat(back.get("status").asText()).isEqualTo("saved");
+            assertThat(back.get("applied").asText()).isEqualTo("correct");
+            assertThat(back.get("editingSaved").asBoolean()).isFalse();
+            assertThat(back.get("payDate").asText()).isEqualTo(saved.get("payDate").asText());
+            assertThat(back.get("lines")).hasSize(12);
+            assertThat(line(back, "401(k)").get("accountId").asLong()).isEqualTo(retirement);
+            // What the save had changed was never taken back, and still stands.
+            assertThat(source().get("grossCents").asLong()).isEqualTo(360_000);
+            // Opened and cancelled again, it goes back to the same.
+            server.post("/api/pay-stubs/" + id + "/reopen", "", cookie);
+            assertThat(server.post("/api/pay-stubs/" + id + "/cancel-edit", "", cookie).data().get("lines")).hasSize(12);
+        }
+
+        @Test
+        void onlyASavedStubBeingEditedCanBeCancelled() throws Exception {
+            // Added and never saved: Discard is for that one.
+            long id = reviewed();
+            Reply notSaved = server.post("/api/pay-stubs/" + id + "/cancel-edit", "", cookie);
+            assertThat(notSaved.status()).isEqualTo(409);
+            assertThat(notSaved.error()).isEqualTo("This stub isn't being edited after it was saved, so there is nothing to go back to.");
+            // Saved and not opened again.
+            save(id, "none");
+            assertThat(server.post("/api/pay-stubs/" + id + "/cancel-edit", "", cookie).status()).isEqualTo(409);
+            // Opened again and saved again: the copy is let go, so there is nothing to cancel.
+            server.post("/api/pay-stubs/" + id + "/reopen", "", cookie);
+            save(id, "none");
+            assertThat(server.post("/api/pay-stubs/" + id + "/cancel-edit", "", cookie).status()).isEqualTo(409);
+            assertThat(server.post("/api/pay-stubs/999/cancel-edit", "", cookie).status()).isEqualTo(404);
         }
 
         @Test

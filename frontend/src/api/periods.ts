@@ -174,6 +174,24 @@ export interface PeriodDetail {
   paidAheadRunningOut?: RunningOut[];
   /** Money moved out of a bucket to money not in a bucket, dated in this period: listed under Income. */
   movesOut?: MoveOut[];
+  /**
+   * Money planned to come back in this period, for a flagged payment, a flagged pack still to buy or a one-off expense;
+   * in the current one, also any due back before it that has not all come yet. Listed under Income (Rachel, 2026-10-24).
+   */
+  moneyBack?: MoneyBack[];
+}
+
+/** Money planned to come back. `source` names what it is for (see `TransactionSource`). */
+export interface MoneyBack {
+  /** What was paid, to name the line. */
+  name: string;
+  expectedOn: string;
+  intoAccountId: number;
+  /** What is still to come back. */
+  owedCents: number;
+  /** The account it comes out of, like an FSA; `null` when it comes from outside. */
+  fromAccountId: number | null;
+  source: TransactionSource;
 }
 
 /** The statement a card payment that follows its card was sized from. */
@@ -247,7 +265,11 @@ export interface AccountTransaction {
 
 /** Where a line of an account's transactions came from. */
 export interface TransactionSource {
-  type: "entry" | "occurrence" | "paycheck";
+  /**
+   * `paid_back`: money planned to come back, for a one-off expense (`entryId`), a flagged recurring payment (`itemId` and
+   * `scheduledDate`) or a flagged pack still to buy (`itemId` and its `dueDate` only).
+   */
+  type: "entry" | "occurrence" | "paycheck" | "paid_back";
   entryId: number | null;
   /** The recurring item's or the income source's id. */
   itemId: number | null;

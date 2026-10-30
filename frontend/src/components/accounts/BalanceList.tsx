@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { type Account, type BalanceChange, type BalanceEntry, useDeleteBalance } from "../../api/accounts";
-import { formatDate } from "../../lib/dates";
+import { formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { Amount } from "../Amount";
 import { EditButton } from "../EditButton";
@@ -36,6 +36,7 @@ export function BalanceList({
 }) {
   const remove = useDeleteBalance(account.id);
   const [editing, setEditing] = useState<BalanceEntry>();
+  const today = todayIso();
   return (
     <>
       <div aria-hidden className={`${ROW} hidden border-b border-line pt-0 text-sm font-semibold text-muted md:grid`}>
@@ -55,7 +56,15 @@ export function BalanceList({
           const split = changes.find((candidate) => candidate.entryId === entry.id);
           return (
             <li key={entry.id} className={ROW}>
-              <span className="font-medium">{formatDate(entry.date)}</span>
+              <span className="font-medium">
+                {formatDate(entry.date)}
+                {/* A balance for a day still to come: the projection starts from it then, nothing counts it before. */}
+                {entry.date > today && (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-accent px-2 py-0.5 align-middle text-xs font-semibold text-on-accent">
+                    Planned
+                  </span>
+                )}
+              </span>
               <span className="text-right">
                 <Amount cents={entry.amountCents} className="font-semibold" />
               </span>

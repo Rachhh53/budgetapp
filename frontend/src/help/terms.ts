@@ -56,6 +56,16 @@ export const TERMS = {
     about:
       "Paid from the paycheck before the pay period it's due in, so the money is there in time.",
   },
+  countsFromPaid: {
+    term: "Count the next one from the day it's paid",
+    about:
+      "For something that comes round every so many weeks or months, like a haircut. Paid late or early, the dates after it move to match, counted on from the day it was paid. Off for a bill with a fixed due date.",
+  },
+  fromLastYear: {
+    term: "Last year's amounts",
+    about:
+      "Each date still to come is estimated from what it really came to in the same month a year before, so a bill that's higher in winter is planned higher in winter. A month with nothing a year before uses the amount here. An amount you type for one date always wins.",
+  },
   withdrawalRate: {
     term: "Withdrawal rate",
     about:

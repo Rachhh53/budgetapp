@@ -1,6 +1,7 @@
 package app.budget.server.entries;
 
 import app.budget.engine.reports.Reimbursement.Status;
+import app.budget.server.accounts.Account;
 import app.budget.server.accounts.AccountType;
 import app.budget.server.accounts.AccountsRepository;
 import app.budget.server.api.ApiException;
@@ -14,17 +15,23 @@ import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.entries.EntriesRepository.Entry;
 import app.budget.server.entries.EntriesRepository.Fields;
+import app.budget.server.entries.EntriesRepository.Plan;
+import app.budget.server.entries.EntriesRepository.Repayment;
 import app.budget.server.entries.EntriesRepository.Split;
+import app.budget.server.items.ReimbursementViews;
+import app.budget.server.items.ReimbursementViews.PaymentView;
 import app.budget.server.ledger.Ledger;
 import io.javalin.http.Context;
 import io.javalin.router.JavalinDefaultRoutingApi;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * One-off money in, money out and transfers: {@code /api/entries} and {@code /api/entries/{id}}, with
@@ -40,6 +47,8 @@ public final class EntriesRoutes {
     private static final int CHECK_NUMBER_MAX = 20;
     private static final String CHOOSE_BUCKETS = "Please choose each bucket once, from the list.";
     private static final String CHOOSE_EXPENSE = "Please choose the expense this pays back from the list.";
+    /** About a month: when an expense's money is planned to come back until another day is said. */
+    private static final int USUAL_DAYS_BACK = 30;
 
     private final EntriesRepository entries;
     private final AccountsRepository accounts;
@@ -47,6 +56,7 @@ public final class EntriesRoutes {
     private final TagsRepository tags;
     private final BucketsRepository buckets;
     private final Ledger ledger;
+    private final ReimbursementViews payments;
     private final Clock clock;
 
     public EntriesRoutes(
@@ -56,7 +66,9 @@ public final class EntriesRoutes {
             TagsRepository tags,
             BucketsRepository buckets,
             Ledger ledger,
+            ReimbursementViews payments,
             Clock clock) {
+        this.payments = payments;
         this.entries = entries;
         this.accounts = accounts;
         this.categories = categories;
@@ -73,7 +85,7 @@ public final class EntriesRoutes {
         routes.put("/api/entries/{id}", this::update);
         routes.delete("/api/entries/{id}", this::delete);
         routes.put("/api/entries/{id}/reimbursement", this::setReimbursement);
-        routes.get("/api/expense-years", ctx -> ApiResponse.ok(ctx, new Years(entries.yearsWithExpenses())));
+        routes.get("/api/expense-years", ctx -> ApiResponse.ok(ctx, new Years(years())));
         routes.get("/api/payees", ctx -> ApiResponse.ok(ctx, new Names(entries.payees(), entries.reimbursers())));
     }
 
@@ -83,6 +95,7 @@ public final class EntriesRoutes {
      * @param reimbursementStatus money going out: {@code none}, {@code to_submit}, {@code submitted} or
      *                            {@code reimbursed}; left out, it stays as it was (none, when new)
      * @param reimbursesEntryId   money coming in: the expense it pays back, if any
+     * @param reimbursesPaymentId money coming in: the flagged recurring payment it pays back instead, if any
      */
     public record EntryInput(
             String kind,
@@ -99,15 +112,29 @@ public final class EntriesRoutes {
             List<SplitInput> bucketSplits,
             String checkNumber,
             String reimbursementStatus,
-            Long reimbursesEntryId) {}
+            Long reimbursesEntryId,
+            Long reimbursesPaymentId) {}
 
     /**
-     * Request body for where an expense stands on being paid back.
+     * Request body for where an expense stands on being paid back, and how the rest is planned to come back.
      *
-     * @param submittedOn the day it was sent in; kept only once it has been
-     * @param to          who pays it back, e.g. "HSA"; optional
+     * @param submittedOn   the day it was sent in; kept only once it has been
+     * @param to            who pays it back, e.g. "HSA"; optional
+     * @param amountCents   what comes back, no more than the expense; left out, what was set before (all of it, until
+     *                      something else is)
+     * @param intoAccountId the account it comes back into; with {@code expectedOn}, left out for the usual one (see
+     *                      {@link #usualPlan})
+     * @param expectedOn    about when it comes back
+     * @param fromAccountId with {@code intoAccountId}: the account it comes out of, like an FSA; left out, from outside
      */
-    public record ReimbursementInput(String status, LocalDate submittedOn, String to) {}
+    public record ReimbursementInput(
+            String status,
+            LocalDate submittedOn,
+            String to,
+            Long amountCents,
+            Long intoAccountId,
+            LocalDate expectedOn,
+            Long fromAccountId) {}
 
     /**
      * One entry with what it is linked to.
@@ -115,8 +142,9 @@ public final class EntriesRoutes {
      * @param paybacks   an expense: the money that came in to pay it back, oldest first
      * @param reimburses money coming in: the expense it pays back; {@code null} when it pays none back
      * @param movesOut   an expense: the money moved out of a bucket to pay it back, oldest first
+     * @param reimbursesPayment money coming in: the flagged recurring payment it pays back; {@code null} when it pays none back
      */
-    public record EntryDetail(Entry entry, List<Entry> paybacks, Entry reimburses, List<MoveOut> movesOut) {}
+    public record EntryDetail(Entry entry, List<Entry> paybacks, Entry reimburses, List<MoveOut> movesOut, PaymentView reimbursesPayment) {}
 
     /** @param years the years that have one-off spending in them, newest first */
     public record Years(List<Integer> years) {}
@@ -149,13 +177,19 @@ public final class EntriesRoutes {
                 entry,
                 entry.kind() == EntryKind.MONEY_OUT ? entries.paybacksOf(entry.id()) : List.of(),
                 entry.reimbursesEntryId() == null ? null : entries.find(entry.reimbursesEntryId()).orElse(null),
-                entry.kind() == EntryKind.MONEY_OUT ? buckets.movesOutPayingBack(entry.id()) : List.of()));
+                entry.kind() == EntryKind.MONEY_OUT ? buckets.movesOutPayingBack(entry.id()) : List.of(),
+                entry.reimbursesPaymentId() == null ? null : payments.find(entry.reimbursesPaymentId()).orElse(null)));
     }
 
     private void create(Context ctx) {
         Fields fields = fields(Inputs.body(ctx, EntryInput.class), null);
         requireTheMoneyIsThere(fields, null);
         long id = entries.create(fields);
+        // Marked to be paid back as it is added: the money coming back is planned the usual way, to change on its page.
+        if (fields.reimbursementStatus() != null && fields.reimbursementStatus() != Status.NONE) {
+            Entry added = view(id);
+            entries.setReimbursement(id, fields.reimbursementStatus(), null, null, usualPlan(added));
+        }
         ApiResponse.send(ctx, 201, view(id));
     }
 
@@ -167,7 +201,27 @@ public final class EntriesRoutes {
         if (!entries.update(id, fields)) {
             throw ApiException.notFound();
         }
+        keepThePlanInStep(view(id));
         ApiResponse.ok(ctx, view(id));
+    }
+
+    /**
+     * After an expense is changed: marked to be paid back from its own form, the money coming back is planned the usual
+     * way; made smaller than what was set to come back, all of it comes back. In the same request, so Undo takes both.
+     */
+    private void keepThePlanInStep(Entry expense) {
+        Repayment back = expense.reimbursement();
+        if (back == null || back.status() == Status.NONE || back.status() == Status.REIMBURSED) {
+            return;
+        }
+        boolean tooMuch = back.amountCents() > expense.amountCents();
+        if (back.planned() && !tooMuch) {
+            return;
+        }
+        Plan usual = usualPlan(expense);
+        Long amount = tooMuch || back.amountCents() == expense.amountCents() ? null : back.amountCents();
+        entries.setReimbursement(expense.id(), back.status(), back.submittedOn(), back.to(),
+                new Plan(amount, usual.intoAccountId(), usual.expectedOn(), usual.fromAccountId()));
     }
 
     private void delete(Context ctx) {
@@ -194,8 +248,74 @@ public final class EntriesRoutes {
                 id,
                 status,
                 sent ? input.submittedOn() : null,
-                status == Status.NONE ? null : Inputs.optionalText(input.to(), "who pays this back", TEXT_MAX));
+                status == Status.NONE ? null : Inputs.optionalText(input.to(), "who pays this back", TEXT_MAX),
+                status == Status.NONE ? Plan.NONE : plan(existing, input));
         ApiResponse.ok(ctx, view(id));
+    }
+
+    /**
+     * How the rest of an expense comes back (Rachel, 2026-10-24: one-off expenses paid back are planned too; "partials are
+     * possible"). Without an account and a day, the usual plan.
+     */
+    private Plan plan(Entry expense, ReimbursementInput input) {
+        // Only saying where it stands keeps what comes back as it was.
+        Repayment before = expense.reimbursement();
+        Long amount = before != null && before.amountCents() != expense.amountCents() ? before.amountCents() : null;
+        if (input.amountCents() != null) {
+            long cents = Inputs.amount(input.amountCents(), "What comes back");
+            if (cents == 0 || cents > expense.amountCents()) {
+                throw ApiException.badRequest("Please enter how much comes back, more than $0.00 and no more than the expense.");
+            }
+            amount = cents == expense.amountCents() ? null : cents;
+        }
+        if (input.intoAccountId() == null && input.expectedOn() == null) {
+            Plan usual = usualPlan(expense);
+            return new Plan(amount, usual.intoAccountId(), usual.expectedOn(), usual.fromAccountId());
+        }
+        if (input.intoAccountId() == null || accounts.find(input.intoAccountId()).filter(account -> !account.archived()).isEmpty()) {
+            throw ApiException.badRequest("Please choose the account it comes back into.");
+        }
+        if (input.expectedOn() == null || !Inputs.inSupportedYears(input.expectedOn())) {
+            throw ApiException.badRequest("Please choose about when it comes back.");
+        }
+        // Out of one of her own accounts, like an FSA, it is a transfer between the two (Rachel, 2026-10-25).
+        Long from = input.fromAccountId();
+        if (from != null && (from.equals(input.intoAccountId())
+                || accounts.find(from).filter(account -> !account.archived()).isEmpty())) {
+            throw ApiException.badRequest("Please choose an account it comes out of other than the one it comes back into.");
+        }
+        return new Plan(amount, input.intoAccountId(), input.expectedOn(), from);
+    }
+
+    /**
+     * Where and when an expense's money is planned to come back until it is said: all of it, about a month after it was
+     * spent, into the account it was paid from when that holds cash, or else the first checking account. What was said
+     * before is kept.
+     */
+    private Plan usualPlan(Entry expense) {
+        Repayment before = expense.reimbursement();
+        if (before != null && before.planned()) {
+            return new Plan(before.amountCents() == expense.amountCents() ? null : before.amountCents(), before.intoAccountId(),
+                    before.expectedOn(), before.fromAccountId());
+        }
+        List<Account> open = accounts.all().stream().filter(account -> !account.archived()).toList();
+        long into = open.stream()
+                .filter(account -> account.id() == expense.accountId() && AccountType.holdsCash(account))
+                .findFirst()
+                .or(() -> open.stream().filter(account -> account.type().equals(Inputs.code(AccountType.CHECKING))).findFirst())
+                .map(Account::id)
+                .orElse(expense.accountId());
+        return new Plan(null, into, expense.date().plusDays(USUAL_DAYS_BACK), null);
+    }
+
+    /** The years with one-off spending in them, or a recurring payment flagged to be paid back, newest first. */
+    private List<Integer> years() {
+        return Stream.concat(
+                        entries.yearsWithExpenses().stream(),
+                        payments.all().stream().map(payment -> payment.date().getYear()))
+                .distinct()
+                .sorted(Comparator.reverseOrder())
+                .toList();
     }
 
     private Entry view(long id) {
@@ -252,12 +372,32 @@ public final class EntriesRoutes {
                 kind != EntryKind.MONEY_OUT || input.reimbursementStatus() == null
                         ? null
                         : Inputs.choice(Status.class, input.reimbursementStatus(), "where this stands on being paid back"),
-                paysBack(input.reimbursesEntryId(), kind, id));
+                paysBack(input.reimbursesEntryId(), kind, id),
+                paysBackPayment(input.reimbursesPaymentId(), input.reimbursesEntryId(), kind));
+    }
+
+    /** The flagged recurring payment that money coming in pays back: one that is flagged, and only when no expense is named. */
+    private Long paysBackPayment(Long paymentId, Long expenseId, EntryKind kind) {
+        if (paymentId == null || !canPayBack(kind)) {
+            return null;
+        }
+        if (expenseId != null || payments.find(paymentId).isEmpty()) {
+            throw ApiException.badRequest(CHOOSE_EXPENSE);
+        }
+        return paymentId;
+    }
+
+    /**
+     * Money coming in pays something back, and so does a transfer out of one of her own accounts, like an FSA (Rachel,
+     * 2026-10-25: "take it out of the fsa").
+     */
+    private static boolean canPayBack(EntryKind kind) {
+        return kind == EntryKind.MONEY_IN || kind == EntryKind.TRANSFER;
     }
 
     /** The expense that money coming in pays back: one that exists, is money going out, and is not itself. */
     private Long paysBack(Long expenseId, EntryKind kind, Long id) {
-        if (expenseId == null || kind != EntryKind.MONEY_IN) {
+        if (expenseId == null || !canPayBack(kind)) {
             return null;
         }
         if (expenseId.equals(id) || entries.find(expenseId).filter(expense -> expense.kind() == EntryKind.MONEY_OUT).isEmpty()) {

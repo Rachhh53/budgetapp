@@ -15,6 +15,7 @@ import app.budget.server.buckets.BucketsRepository.Fields;
 import app.budget.server.categories.CategoriesRepository;
 import app.budget.server.categories.TagsRepository;
 import app.budget.server.entries.EntriesRepository;
+import app.budget.server.items.ReimbursementsRepository;
 import app.budget.server.entries.EntryKind;
 import app.budget.server.ledger.Ledger;
 import io.javalin.http.Context;
@@ -50,11 +51,13 @@ public final class BucketsRoutes {
     private final CategoriesRepository categories;
     private final TagsRepository tags;
     private final EntriesRepository entries;
+    private final ReimbursementsRepository reimbursements;
 
     public BucketsRoutes(
             BucketsRepository buckets, AccountsRepository accounts, Ledger ledger, Clock clock, CategoriesRepository categories,
-            TagsRepository tags, EntriesRepository entries) {
+            TagsRepository tags, EntriesRepository entries, ReimbursementsRepository reimbursements) {
         this.entries = entries;
+        this.reimbursements = reimbursements;
         this.buckets = buckets;
         this.accounts = accounts;
         this.ledger = ledger;
@@ -115,9 +118,11 @@ public final class BucketsRoutes {
      * @param note              what it is, as it is listed under Income
      * @param reimbursesEntryId the expense it pays back, when the bucket pays yourself back for one (Rachel,
      *                          2026-10-21); {@code null} for none
+     * @param reimbursesPaymentId the flagged recurring payment it pays back instead (Rachel, 2026-10-24); {@code null} for none
      */
     public record MoveOutInput(
-            LocalDate date, Long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId) {}
+            LocalDate date, Long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId,
+            Long reimbursesPaymentId) {}
 
     /** A move out of a bucket as it was saved. */
     public record MovedOut(long id, BucketDetail bucket) {}
@@ -324,8 +329,10 @@ public final class BucketsRoutes {
         MoveOutInput input = Inputs.body(ctx, MoveOutInput.class);
         MoveOut move = moveOut(bucket, input, 0);
         long changeId = buckets.addMoveOut(
-                id, move.date(), move.amountCents(), move.note(), move.categoryId(), move.tagIds(), move.reimbursesEntryId());
+                id, move.date(), move.amountCents(), move.note(), move.categoryId(), move.tagIds(), move.reimbursesEntryId(),
+                move.reimbursesPaymentId());
         entries.settle(move.reimbursesEntryId());
+        reimbursements.settle(move.reimbursesPaymentId());
         ApiResponse.send(ctx, 201, new MovedOut(changeId, detail(id)));
     }
 
@@ -340,14 +347,18 @@ public final class BucketsRoutes {
         // What the move already took out is back in the bucket while it is checked again.
         MoveOut move = moveOut(bucket, input, input.date() != null && !input.date().isBefore(before.date()) ? -before.amountCents() : 0);
         if (!buckets.updateMoveOut(
-                id, changeId, move.date(), move.amountCents(), move.note(), move.categoryId(), move.tagIds(), move.reimbursesEntryId())) {
+                id, changeId, move.date(), move.amountCents(), move.note(), move.categoryId(), move.tagIds(), move.reimbursesEntryId(),
+                move.reimbursesPaymentId())) {
             throw ApiException.notFound();
         }
         entries.settle(move.reimbursesEntryId());
+        reimbursements.settle(move.reimbursesPaymentId());
         ApiResponse.ok(ctx, new MovedOut(changeId, detail(id)));
     }
 
-    private record MoveOut(LocalDate date, long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId) {}
+    private record MoveOut(
+            LocalDate date, long amountCents, String note, Long categoryId, List<Long> tagIds, Long reimbursesEntryId,
+            Long reimbursesPaymentId) {}
 
     /**
      * Checks a move out of a bucket.
@@ -374,12 +385,17 @@ public final class BucketsRoutes {
                 && entries.find(input.reimbursesEntryId()).filter(entry -> entry.kind() == EntryKind.MONEY_OUT).isEmpty()) {
             throw ApiException.badRequest("Please choose the expense this pays back from the list.");
         }
+        // One thing paid back: a one-off expense or a flagged recurring payment, never both.
+        if (input.reimbursesPaymentId() != null
+                && (input.reimbursesEntryId() != null || reimbursements.find(input.reimbursesPaymentId()).isEmpty())) {
+            throw ApiException.badRequest("Please choose the expense this pays back from the list.");
+        }
         long held = ledger.bucketBalances(input.date()).getOrDefault(bucket.id(), 0L) + givenBack;
         if (amount > held) {
             throw ApiException.conflict(
                     "That is more than " + bucket.name() + " holds on that day. Please enter a smaller amount, or choose a later day.");
         }
-        return new MoveOut(input.date(), amount, note, input.categoryId(), tagIds, input.reimbursesEntryId());
+        return new MoveOut(input.date(), amount, note, input.categoryId(), tagIds, input.reimbursesEntryId(), input.reimbursesPaymentId());
     }
 
     private void heldOn(Context ctx) {

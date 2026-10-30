@@ -119,6 +119,8 @@ export interface PricePoint {
   effectiveFrom: string;
   perOccurrenceCents: number;
   perYearCents: number;
+  /** The category it had; `null` for none. */
+  categoryId: number | null;
 }
 
 /** A recurring item as it stands today, plus what it works out to. */
@@ -151,6 +153,10 @@ export interface Item extends ItemTerms {
   followsCard?: boolean;
   /** How much a card's own payment pays; `null` for any other item. */
   cardPaymentMode?: CardPaymentMode | null;
+  /** True when its next dates count on from the day it was last paid, not its schedule's own. */
+  countsFromPaid?: boolean;
+  /** True when what is still to come is estimated from what the same month came to a year before. */
+  fromLastYear?: boolean;
 }
 
 export interface ItemInput extends ItemTerms {
@@ -165,6 +171,12 @@ export interface ItemInput extends ItemTerms {
   effectiveFrom?: string;
   /** A card payment: how much it pays. Anything but `fixed` follows the card, and the amount sent means nothing. */
   cardPaymentMode?: CardPaymentMode | null;
+  /** Count its next dates on from the day it was last paid. Left out, as it was. */
+  countsFromPaid?: boolean;
+  /** A bill or budget: estimate what is still to come from the same month a year before. Left out, as it was. */
+  fromLastYear?: boolean;
+  /** When changing an item: the category reaches back over every earlier date too, not only from `effectiveFrom`. */
+  categoryEveryDate?: boolean;
 }
 
 export const ITEMS_KEY = ["items"] as const;
@@ -270,6 +282,8 @@ export function itemAsInput(item: Item): ItemInput {
     packSchedule: item.packSchedule ?? null,
     usesHundredths: item.usesHundredths ?? null,
     usesPer: item.usesPer ?? null,
+    countsFromPaid: item.countsFromPaid ?? false,
+    fromLastYear: item.fromLastYear ?? false,
     categoryId: item.categoryId,
     payFromAccountId: item.payFromAccountId,
     payToAccountId: item.payToAccountId,

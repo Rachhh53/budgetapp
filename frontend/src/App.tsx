@@ -18,6 +18,7 @@ import { CategoriesPage } from "./pages/CategoriesPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ExpenseDetailPage } from "./pages/ExpenseDetailPage";
+import { PaymentReimbursementPage } from "./pages/PaymentReimbursementPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { HelpPage } from "./pages/HelpPage";
 import { HelpTopicPage } from "./pages/HelpTopicPage";
@@ -158,6 +159,7 @@ function Screens() {
         <Route path="/income/:id/stubs/:stubId" element={<PayStubPage />} />
         <Route path="/expenses/:id" element={<ExpenseDetailPage />} />
         <Route path="/recurring/:id" element={<RecurringItemDetailPage />} />
+        <Route path="/recurring/:id/payments/:date" element={<PaymentReimbursementPage />} />
         <Route path="/plan/:id/:step?" element={<PlanYearPage />} />
         <Route path="/help/:topic" element={<HelpTopicPage />} />
         <Route path="*" element={<NotFoundPage />} />

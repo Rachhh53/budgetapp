@@ -20,7 +20,7 @@ import java.util.Objects;
  * @param to            last day, for {@link Range#CUSTOM} only
  * @param include       never empty
  * @param categoryIds   a category chosen here also stands for the categories under it
- * @param reimbursement expenses that stand at any of these; bills and budgets never match one
+ * @param reimbursement expenses that stand at any of these; a bill or budget only when that payment is flagged to be paid back
  * @param kind          what the report is of: spending, income, or what was projected against what it was
  *                      (decided 2026-10-12: a report is one of them, never a mix)
  * @param incomeInclude for an income report: what counts as income; never empty then

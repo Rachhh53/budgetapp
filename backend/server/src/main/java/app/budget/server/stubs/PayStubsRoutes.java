@@ -112,6 +112,7 @@ public final class PayStubsRoutes {
         routes.put("/api/pay-stubs/{id}", this::change);
         routes.post("/api/pay-stubs/{id}/save", this::save);
         routes.post("/api/pay-stubs/{id}/reopen", this::reopen);
+        routes.post("/api/pay-stubs/{id}/cancel-edit", this::cancelEdit);
         routes.delete("/api/pay-stubs/{id}", this::delete);
         routes.get("/api/pay-stubs/{id}/file", this::download);
         routes.post("/api/pay-stubs/{id}/copy", this::saveCopy);
@@ -186,6 +187,7 @@ public final class PayStubsRoutes {
             LocalDate payDate,
             Status status,
             Applied applied,
+            boolean editingSaved,
             int pages,
             long sizeBytes,
             List<LineView> lines,
@@ -278,6 +280,18 @@ public final class PayStubsRoutes {
         Stub stub = found(ctx);
         if (stub.status() == Status.SAVED) {
             stubs.reopen(stub.id());
+        }
+        ApiResponse.ok(ctx, view(stubs.find(stub.id()).orElseThrow()));
+    }
+
+    /**
+     * Stops editing a saved stub without saving: it is put back exactly as it was saved (Rachel, 2026-10-24). 409 for a
+     * stub that is not a saved one being edited, such as one added and never saved, which Discard is for.
+     */
+    private void cancelEdit(Context ctx) {
+        Stub stub = found(ctx);
+        if (!stubs.cancelEdit(stub.id())) {
+            throw ApiException.conflict("This stub isn't being edited after it was saved, so there is nothing to go back to.");
         }
         ApiResponse.ok(ctx, view(stubs.find(stub.id()).orElseThrow()));
     }
@@ -476,7 +490,7 @@ public final class PayStubsRoutes {
         }
         return new StubView(
                 stub.id(), source.id(), source.name(), stub.name(), stub.payDate(), stub.status(), stub.applied(),
-                stub.pages(), stub.sizeBytes(), stub.lines().stream().map(LineView::of).toList(), TotalsView.of(stub.lines()),
+                stub.savedApplied() != null, stub.pages(), stub.sizeBytes(), stub.lines().stream().map(LineView::of).toList(), TotalsView.of(stub.lines()),
                 toCheck(stub), paycheck, wouldSet);
     }
 

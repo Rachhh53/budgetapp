@@ -25,6 +25,9 @@ import app.budget.server.items.ItemCalendar.Occurrence;
 import app.budget.server.items.ItemKind;
 import app.budget.server.items.ItemsRepository;
 import app.budget.server.items.ItemsRepository.Item;
+import app.budget.server.items.ReimbursementsRepository;
+import app.budget.server.items.ReimbursementsRepository.Flagged;
+import app.budget.server.items.ReimbursementsRepository.PaymentKey;
 import app.budget.server.reports.ReportDefinition.Dates;
 import app.budget.server.reports.ReportDefinition.Include;
 import java.time.LocalDate;
@@ -59,6 +62,7 @@ public final class ReportRunner {
     private final CategoriesRepository categories;
     private final TagsRepository tags;
     private final AttachmentsRepository attachments;
+    private final ReimbursementsRepository reimbursements;
 
     public ReportRunner(
             EntriesRepository entries,
@@ -68,7 +72,9 @@ public final class ReportRunner {
             AccountsRepository accounts,
             CategoriesRepository categories,
             TagsRepository tags,
-            AttachmentsRepository attachments) {
+            AttachmentsRepository attachments,
+            ReimbursementsRepository reimbursements) {
+        this.reimbursements = reimbursements;
         this.entries = entries;
         this.items = items;
         this.calendar = calendar;
@@ -89,7 +95,8 @@ public final class ReportRunner {
      * @param date            the day it counts on: the day a bill was paid once it has been, its due date until then
      * @param estimate        true while the amount is not final, or the day has not come yet
      * @param unpaid          true while the day has not come yet and it has not been marked paid
-     * @param reimbursement   where a one-off expense stands; {@code null} for anything nobody pays back
+     * @param reimbursement   where a one-off expense, or a recurring payment flagged to be paid back, stands; {@code null}
+     *                        for anything nobody pays back
      * @param reimbursedCents how much of it counts as having come back
      * @param owedCents       how much is still to come back
      */
@@ -167,7 +174,7 @@ public final class ReportRunner {
                 if (entry.kind() != EntryKind.MONEY_OUT) {
                     continue;
                 }
-                Share share = entry.reimbursement().share(entry.amountCents());
+                Share share = entry.reimbursement().share();
                 Row row = new Row(
                         "one_off", entry.id(), null, null, entry.date(), entry.description(), entry.payee(), entry.categoryId(),
                         entry.tagIds(), entry.accountId(), entry.amountCents(), entry.estimate() || entry.date().isAfter(today),
@@ -181,6 +188,8 @@ public final class ReportRunner {
         }
         if (definition.include().contains(Include.BILLS) || definition.include().contains(Include.BUDGETS)) {
             Map<Long, List<Long>> tagsByItem = items.all().stream().collect(Collectors.toMap(Item::id, Item::tagIds));
+            // A payment flagged to be paid back stands where a one-off expense would (Rachel, 2026-10-24).
+            Map<PaymentKey, Flagged> flagged = reimbursements.byPayment();
             Map<Owner.Occurrence, Integer> files = attachments.countsByOccurrence(
                     dates.from().minusYears(1), dates.to().plusYears(1));
             // A visit not billed yet is listed as still to come, at what it costs (spec §4.6).
@@ -195,6 +204,8 @@ public final class ReportRunner {
                 if (!wanted || occurrence.skipped() || date.isBefore(dates.from()) || date.isAfter(dates.to())) {
                     continue;
                 }
+                Flagged paidBack = flagged.get(new PaymentKey(occurrence.itemId(), occurrence.scheduledDate()));
+                Share share = paidBack == null ? Share.NONE : paidBack.share();
                 Row row = new Row(
                         occurrence.kind() == ItemKind.BILL ? "bill" : "budget",
                         null, occurrence.itemId(), occurrence.scheduledDate(), date, occurrence.name(), occurrence.name(),
@@ -202,12 +213,12 @@ public final class ReportRunner {
                         occurrence.payFromAccountId(), occurrence.amountCents(),
                         occurrence.estimate() || !occurrence.paid() && date.isAfter(today) || notYetBilled.contains(occurrence),
                         !occurrence.paid() && (date.isAfter(today) || notYetBilled.contains(occurrence)),
-                        null, 0, 0,
+                        paidBack == null ? null : paidBack.status(), share.reimbursed().cents(), share.owed().cents(),
                         // A visit keeps no receipts: they are on its invoice.
                         notYetBilled.contains(occurrence) ? 0 : files.getOrDefault(new Owner.Occurrence(occurrence.itemId(), occurrence.scheduledDate()), 0));
                 if (filter.lets(row)) {
                     rows.add(row);
-                    lines.add(line(row, Share.NONE));
+                    lines.add(line(row, share));
                 }
             }
         }

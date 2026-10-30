@@ -1,6 +1,8 @@
 import { useId, useState } from "react";
+import { useNavigate } from "react-router";
 import type { Account } from "../../api/accounts";
 import { type AccountTransaction, TYPED_OVER_KINDS, useAccountTransactions } from "../../api/periods";
+import { moneyBackPath } from "../../api/reimbursements";
 import { addDays, formatDate, todayIso } from "../../lib/dates";
 import { formatCents } from "../../lib/money";
 import { EditName } from "../EditButton";
@@ -29,6 +31,7 @@ const KIND_LABELS: Record<string, string> = {
   escrow: "Part of your payment that does not lower the loan",
   loan_payment: "Payment, before a recurring item paid it",
   balance: "Balance",
+  paid_back: "Paid back, planned",
 };
 
 /** A month ahead, so what is about to happen shows with the year so far. */
@@ -49,6 +52,7 @@ export function TransactionsCard({ account, title = "Transactions" }: { account:
   const [from, setFrom] = useState(`${today.slice(0, 4)}-01-01`);
   const [to, setTo] = useState(addDays(today, DAYS_AHEAD));
   const [page, setPage] = useState(0);
+  const navigate = useNavigate();
   // The interest line open to be typed over.
   const [editing, setEditing] = useState<AccountTransaction>();
   // A cleared or backwards pair of dates asks for nothing, and says why instead.
@@ -118,14 +122,17 @@ export function TransactionsCard({ account, title = "Transactions" }: { account:
         {onPage.length > 0 && (
           <>
             <ul className="divide-y divide-line">
-              {onPage.map((line, index) => (
-                <TransactionRow
-                  key={`${line.date}-${line.kind}-${line.label}-${first + index}`}
-                  line={line}
-                  upcoming={line.date > today}
-                  onEdit={canTypeOver(line, today) ? () => setEditing(line) : undefined}
-                />
-              ))}
+              {onPage.map((line, index) => {
+                const path = opensTo(line);
+                return (
+                  <TransactionRow
+                    key={`${line.date}-${line.kind}-${line.label}-${first + index}`}
+                    line={line}
+                    upcoming={line.date > today}
+                    onEdit={canTypeOver(line, today) ? () => setEditing(line) : path !== undefined ? () => void navigate(path) : undefined}
+                  />
+                );
+              })}
             </ul>
             <nav aria-label="Transaction pages" className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p aria-live="polite" className="text-sm text-muted">
@@ -149,6 +156,11 @@ export function TransactionsCard({ account, title = "Transactions" }: { account:
       {editing && <InterestForm account={account} line={editing} upcoming={editing.date > today} onClose={() => setEditing(undefined)} />}
     </section>
   );
+}
+
+/** Money planned to come back opens what it pays back, where it is recorded once it comes. */
+function opensTo(line: AccountTransaction): string | undefined {
+  return line.source?.type === "paid_back" ? moneyBackPath(line.source) : undefined;
 }
 
 /**
@@ -178,7 +190,9 @@ function TransactionRow({ line, upcoming, onEdit }: { line: AccountTransaction; 
   const typedOver = line.estimatedCents !== null;
   // Words, not just a colour or a sign, say what state a line is in. Interest typed over is no longer an estimate.
   const kind = typedOver ? "Typed over" : (KIND_LABELS[line.kind] ?? line.kind);
-  const notes = [kind, upcoming && "Upcoming", line.unpaid && "Not paid yet"].filter(Boolean).join(" · ");
+  const notes = [kind, upcoming && "Upcoming", line.unpaid && (line.kind === "paid_back" ? "Not back yet" : "Not paid yet")]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <li onClick={clickRowToEdit} className={`-mx-2 flex items-start justify-between gap-3 rounded-md px-2 py-2 ${ROW_OPENS}`}>
       <span className="min-w-0">
