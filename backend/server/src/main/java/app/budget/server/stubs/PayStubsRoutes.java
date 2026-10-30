@@ -15,6 +15,7 @@ import app.budget.server.api.ApiResponse;
 import app.budget.server.api.Inputs;
 import app.budget.server.files.FileStore.Kind;
 import app.budget.server.files.FileStore.Stored;
+import app.budget.server.files.PdfWords;
 import app.budget.server.files.StoredFiles;
 import app.budget.server.income.IncomeRepository;
 import app.budget.server.income.IncomeRepository.Deduction;
@@ -68,6 +69,8 @@ public final class PayStubsRoutes {
     private static final int LABEL_MAX = 80;
     /** The same limit the income form keeps. */
     private static final int MAX_DEDUCTIONS = 30;
+    /** A stub is a page or two. More than this is some other document, and not worth reading through. */
+    private static final int MOST_PAGES = 6;
     /** A payday moved for a weekend or a holiday is still within this many days of the date on its stub. */
     private static final int DAYS_AROUND_PAYDAY = 4;
     /** What a one-off paycheck saved from a stub is called until it is given a name. */
@@ -508,7 +511,7 @@ public final class PayStubsRoutes {
     private PayStub.Read read(Stored kept, Map<String, Layout> layout) {
         List<PayStub.Row> rows;
         try {
-            rows = StubPdf.rows(files.path(kept.hash()));
+            rows = PdfWords.rows(files.path(kept.hash()), MOST_PAGES);
         } catch (IOException | RuntimeException e) {
             // The cause says nothing of the stub's contents: only why the PDF library gave up.
             log.warn("A pay stub's text could not be read: {}", e.getClass().getSimpleName());

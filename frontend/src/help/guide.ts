@@ -229,6 +229,17 @@ export const TOPICS: readonly Topic[] = [
         ],
       },
       {
+        heading: "Statement uploads",
+        body: [
+          "On a checking, savings or card account's page, Statement uploads reads a statement you downloaded from your bank: a CSV, OFX or QFX file, or a PDF. It's read on this PC, and nothing changes until you choose to. + Add item › Upload a pay stub, statement or receipt does the same from anywhere.",
+          "The first time a bank's CSV is added, Budget asks which column holds the date, the description and the amount, and remembers it for the next download.",
+          "Charges lists every line, by pay period: the day a charge was made decides which one. Give a payee a category and tags once and Budget fills them in for its other charges and on the next statement. Payments to the card and transfers are left out; Put back counts one.",
+          "What changes totals the charges in each pay period by category and by tag. For each total, choose under Replaces which budget or recurring item of that pay period it changes, then Replace (the amount becomes the total) or Add (the total goes on top of what it is now). Nothing is chosen for you; an item chosen last time is suggested with Use.",
+          "Apply changes only the amounts, just for those dates, as typing them in would: the date, the paid tick and the rest stay as they are, and hovering an amount shows what it was. Undo takes it back.",
+          "Statements of the same account add together in a pay period, so a card statement that closes partway through and the next one make one total; a line on both is counted once. Another account's charges are a total of their own. Charges nothing takes can be added as one-offs instead.",
+        ],
+      },
+      {
         heading: "Credit cards",
         body: [
           "A card's page has its Statements (Save statement for each one), Promo rates with warnings before they end, a Payoff helper that works out what to pay each paycheck, and If it's not paid off.",
@@ -243,7 +254,7 @@ export const TOPICS: readonly Topic[] = [
         ],
       },
     ],
-    terms: ["enteredBalance", "bucket", "available", "netWorth"],
+    terms: ["enteredBalance", "bucket", "available", "netWorth", "statementUpload"],
   },
   {
     id: "income",
@@ -273,7 +284,7 @@ export const TOPICS: readonly Topic[] = [
       {
         heading: "Pay stubs",
         body: [
-          "+ Add item › Upload a pay stub or receipt… reads a PDF pay stub. Check the lines it read, then save it to correct your amounts, record a pay change, set just that paycheck, or add it as a one-off paycheck (a bonus).",
+          "+ Add item › Upload a pay stub, statement or receipt… reads a PDF pay stub. Check the lines it read, then save it to correct your amounts, record a pay change, set just that paycheck, or add it as a one-off paycheck (a bonus).",
         ],
       },
     ],
@@ -535,7 +546,7 @@ export const TASKS: readonly Task[] = [
   { question: "How do I track a 0% promo rate?", answer: "Open the card on Accounts, then Add promo rate. Budget warns you before it ends, and the Payoff helper works out what to pay.", to: "/accounts", button: "Go to Accounts", topic: "accounts", keywords: "promo promotion 0% balance transfer deferred interest" },
   { question: "How do I record a raise?", answer: "On Income, open the source and press Record a pay change, from the date it starts.", to: "/income", button: "Go to Income", topic: "income", keywords: "raise pay change salary deductions new job" },
   { question: "How do I record a bonus?", answer: "On Income, open the source and press + Add on One-off paychecks: its deductions and match work like a paycheck's. A bonus stub can be saved as one too.", to: "/income", button: "Go to Income", topic: "income", keywords: "bonus one-off extra paycheck commission award stub" },
-  { question: "How do I read a pay stub?", answer: "Press + Add item, then Upload a pay stub or receipt…, and drop the PDF.", to: "/income", button: "Go to Income", topic: "income", keywords: "pay stub paystub pdf upload payslip" },
+  { question: "How do I read a pay stub?", answer: "Press + Add item, then Upload a pay stub, statement or receipt…, and drop the PDF.", to: "/income", button: "Go to Income", topic: "income", keywords: "pay stub paystub pdf upload payslip" },
   { question: "How do I handle a bill that's invoiced later?", answer: "Edit the bill and tick Billed later. Visits add up on the pay period until you press Mark as invoiced.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "billed later invoice visits therapy appointment accumulate quarterly" },
   { question: "How do I make a recurring payment stop on a date?", answer: "Open the item, press Edit on its Schedule card and choose a Last date. Nothing is planned after it. Once that day has gone by, the item moves from All to Ended on Recurring items.", to: "/recurring", button: "Go to Recurring items", topic: "recurring", keywords: "end stop last date finish cancel until ends ended archive" },
   { question: "How do I skip a bill just this once?", answer: "On the pay period, open its row and press Skip this one. It shows under Skipped this pay period, where Put back undoes it.", to: "/", button: "Go to Pay periods", topic: "pay-periods", keywords: "skip delete remove this month once not happening" },

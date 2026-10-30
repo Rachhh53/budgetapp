@@ -199,8 +199,18 @@ public final class TestServer implements AutoCloseable {
 
     /** Uploads {@code files} to {@code path} the way the browser does: one multipart form, each under "file". */
     public Reply upload(String path, String cookie, FilePart... files) throws IOException, InterruptedException {
+        return upload(path, cookie, java.util.Map.of(), files);
+    }
+
+    /** As {@link #upload(String, String, FilePart...)}, with plain form fields sent beside the files. */
+    public Reply upload(String path, String cookie, java.util.Map<String, String> fields, FilePart... files)
+            throws IOException, InterruptedException {
         String boundary = "----budget-test-" + System.nanoTime();
         ByteArrayOutputStream body = new ByteArrayOutputStream();
+        for (var field : fields.entrySet()) {
+            body.write(("--" + boundary + CRLF + "Content-Disposition: form-data; name=\"" + field.getKey() + "\"" + CRLF + CRLF
+                    + field.getValue() + CRLF).getBytes(StandardCharsets.UTF_8));
+        }
         for (FilePart file : files) {
             body.write(("--" + boundary + CRLF + "Content-Disposition: form-data; name=\"file\"; filename=\"" + file.fileName()
                     + "\"" + CRLF + "Content-Type: application/octet-stream" + CRLF + CRLF).getBytes(StandardCharsets.UTF_8));

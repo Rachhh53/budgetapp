@@ -1,4 +1,4 @@
-package app.budget.server.stubs;
+package app.budget.server.files;
 
 import app.budget.engine.stubs.PayStub.Row;
 import app.budget.engine.stubs.PayStub.Word;
@@ -14,28 +14,29 @@ import org.apache.pdfbox.text.TextPosition;
 
 /**
  * Reads the words of a PDF and where each sits on its page, on this PC (spec §1: nothing is
- * sent anywhere). Making sense of them is the engine's job ({@code StubReader}).
+ * sent anywhere). Making sense of them is the engine's job: {@code StubReader} for a pay stub,
+ * {@code PdfStatement} for a card or bank statement.
  *
- * <p>Only text that is in the PDF as text is read. A scan or a photo of a stub has none, and
- * comes back as no rows at all; reading those needs text recognition, which is not built.
+ * <p>Only text that is in the PDF as text is read. A scan or a photo has none, and comes back
+ * as no rows at all; reading those needs text recognition, which is not built.
  */
-final class StubPdf {
+public final class PdfWords {
 
-    private StubPdf() {}
+    private PdfWords() {}
 
-    /** Words whose baselines are within this many points share a row. Stub type is 7 to 10 points tall. */
+    /** Words whose baselines are within this many points share a row. Stub and statement type is 7 to 10 points tall. */
     private static final float SAME_ROW = 3;
-    /** A stub is a page or two. More than this is some other document, and not worth reading through. */
-    private static final int MOST_PAGES = 6;
 
     private record Placed(int page, float y, Word word) {}
 
     /**
      * The PDF's words, row by row from the top of its first page.
      *
+     * @param mostPages how far into the document to read: a stub is a page or two, a statement a dozen at most, and
+     *                  anything longer is some other document not worth reading through
      * @throws IOException when the PDF cannot be read
      */
-    static List<Row> rows(Path pdf) throws IOException {
+    public static List<Row> rows(Path pdf, int mostPages) throws IOException {
         List<Placed> placed = new ArrayList<>();
         try (PDDocument document = Loader.loadPDF(pdf.toFile())) {
             PDFTextStripper stripper = new PDFTextStripper() {
@@ -45,7 +46,7 @@ final class StubPdf {
                 }
             };
             stripper.setSortByPosition(true);
-            stripper.setEndPage(MOST_PAGES);
+            stripper.setEndPage(mostPages);
             // The text itself is thrown away: the words are gathered, with their places, as it is written.
             stripper.getText(document);
         }

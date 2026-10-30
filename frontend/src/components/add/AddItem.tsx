@@ -42,7 +42,7 @@ interface AddItemContext {
    * move that pays yourself back for that expense.
    */
   moveOut: (move?: MoveOut, paysBack?: PaysBackTarget) => void;
-  /** Opens "Upload a pay stub or receipt…". */
+  /** Opens "Upload a pay stub, statement or receipt…". */
   upload: () => void;
   menuOpen: boolean;
   setMenuOpen: (open: boolean) => void;
@@ -371,7 +371,7 @@ export function AddItemButton() {
                 <Upload className="size-5" />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block font-semibold">Upload a pay stub or receipt…</span>
+                <span className="block font-semibold">Upload a pay stub, statement or receipt…</span>
                 <span className="block text-sm text-muted">Read and kept on this PC</span>
               </span>
             </button>

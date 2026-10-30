@@ -261,6 +261,11 @@ export const TERMS = {
     term: "Primary paycheck",
     about: "The income source whose paydays set your pay periods. The first one you add is primary.",
   },
+  statementUpload: {
+    term: "Statement upload",
+    about:
+      "A statement downloaded from your bank, read on this PC. Its charges are totalled by pay period and category or tag, and each total changes only the budget or recurring item you choose for it.",
+  },
   enteredBalance: {
     term: "Balance you entered",
     about: "The real number from your bank's website or statement. Budget works forward from the latest one, so entering one now and then keeps everything right.",

@@ -1025,7 +1025,7 @@ describe("+ Add item", () => {
       expect.stringContaining("Transfer"),
       expect.stringContaining("Recurring item"),
       expect.stringContaining("Out of a bucket"),
-      expect.stringContaining("Upload a pay stub or receipt…"),
+      expect.stringContaining("Upload a pay stub, statement or receipt…"),
     ]);
     expect(items[0]).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
@@ -1520,6 +1520,22 @@ describe("pay period screen: a paycheck and its stub", () => {
   const withPaycheck = (overrides: Parameters<typeof fakeBackend>[0] = {}) =>
     withPeriod(WITH_CONTRIBUTION, { "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, VISA, RETIREMENT] }), ...overrides });
   const STUB = { id: 7, incomeSourceId: 1 };
+  /** A statement just read, with nothing in it yet; its page has its own tests. */
+  const JUST_READ = {
+    id: 5,
+    accountId: 1,
+    accountName: "Everyday Checking",
+    onCard: false,
+    name: "september.csv",
+    format: "csv",
+    from: "2026-09-01",
+    to: "2026-09-30",
+    appliedAt: null,
+    pages: null,
+    lines: [],
+    toCheck: 0,
+    skippedRows: [],
+  };
 
   it("says what else goes to your accounts with a paycheck, and opens it from its row", async () => {
     const fetchMock = withPaycheck({
@@ -1634,9 +1650,11 @@ describe("pay period screen: a paycheck and its stub", () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub or receipt…/ }));
-    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub or receipt" });
-    expect(within(dialog).getByRole("button", { name: "Add the expense it is for" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub, statement or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub, statement or receipt" });
+    // A pay stub is offered first; one kind shows at a time, so the dialog fits one screen.
+    expect(within(dialog).getByRole("radio", { name: "Pay stub" })).toBeChecked();
+    expect(within(dialog).queryByRole("button", { name: "Add the expense it is for" })).not.toBeInTheDocument();
     // The primary paycheck is offered first; another source can be chosen.
     const whose = await within(dialog).findByLabelText("Whose stub it is");
     expect(whose).toHaveValue("1");
@@ -1647,15 +1665,60 @@ describe("pay period screen: a paycheck and its stub", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("uploads a statement from the + Add item menu, asking about a CSV's columns inside the same dialog", async () => {
+    withPaycheck({
+      "POST /api/accounts/1/statement-uploads/columns": () => ({
+        status: 200,
+        data: {
+          headers: ["Date", "Description", "Amount"],
+          sample: [["09/02/2026", "KROGER #123", "80.00"]],
+          guess: {
+            hasHeader: true,
+            dateColumn: 0,
+            postedColumn: null,
+            descriptionColumn: 1,
+            amountColumn: 2,
+            debitColumn: null,
+            creditColumn: null,
+            dateOrder: "mdy",
+            chargesNegative: false,
+          },
+          known: false,
+        },
+      }),
+      "POST /api/accounts/1/statement-uploads": () => ({ status: 201, data: JUST_READ, changed: true }),
+      // The statement page is covered by its own tests; here it only has to be where we land.
+      "GET /api/statement-uploads/5/changes": () => ({ status: 404, error: "We couldn't find that." }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub, statement or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub, statement or receipt" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Statement" }));
+    expect(await within(dialog).findByLabelText("Which account it's for")).toHaveValue("1");
+    await userEvent.upload(within(dialog).getByLabelText("Drop a statement here or browse"), new File(["Date,Description,Amount"], "september.csv"));
+
+    // The column question replaces the rest of the dialog rather than opening a second one over it.
+    expect(await within(dialog).findByText("09/02/2026 · KROGER #123 · $80.00 spent")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(within(dialog).queryByRole("radio", { name: "Pay stub" })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Read the statement" }));
+
+    expect(await screen.findByRole("heading", { name: /Statement · Sep 1 – Sep 30, 2026/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("points to the Income screen when there is no income to give a stub to", async () => {
     withPaycheck();
     renderApp();
 
     await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub or receipt…/ }));
-    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub or receipt" });
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub, statement or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub, statement or receipt" });
 
     expect(await within(dialog).findByRole("link", { name: "Add your paycheck on the Income screen" })).toHaveAttribute("href", "/income");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Receipt" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add the expense it is for" }));
     expect(await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" })).toBeInTheDocument();
   });

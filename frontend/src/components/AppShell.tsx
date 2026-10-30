@@ -24,7 +24,9 @@ export function AppShell() {
         {/* relative: visually hidden text is absolutely positioned, and without this it is placed against
             the window, which then grows a second scroll bar beside this one. */}
         {/* On an iPhone from the Home Screen, also clear of the notch above and the home bar below. */}
-        <main className="relative min-w-0 flex-1 overflow-y-auto p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-8 md:pb-8 md:short:p-5">
+        {/* overflow-x-hidden: scrolling up and down would otherwise let it be dragged sideways too; what is
+            wider than a phone (the pay period strip, a table) scrolls inside its own box instead. */}
+        <main className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-8 md:pb-8 md:short:p-5">
           <Outlet />
         </main>
         <PhoneNav />
