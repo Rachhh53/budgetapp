@@ -6,7 +6,7 @@ import { Amount } from "../Amount";
 import { EditButton } from "../EditButton";
 import { BUTTON_LINK } from "../ui";
 import { BalanceForm } from "./BalanceForm";
-import { dayBefore, Reconcile } from "./Reconcile";
+import { between, Reconcile } from "./Reconcile";
 
 /* One row of "Balances you entered": stacked on a phone, columns from `md` up. */
 const ROW = "grid grid-cols-2 gap-x-4 gap-y-1 py-3 md:grid-cols-[8rem_8rem_8rem_8rem_8rem_1fr_auto] md:items-center";
@@ -98,8 +98,7 @@ export function BalanceList({
                 <div className="col-span-full">
                   <Reconcile
                     account={account}
-                    from={previous.date}
-                    through={dayBefore(entry.date)}
+                    {...between(previous, entry)}
                     recordsCents={split.recordsCents}
                     enteredCents={entry.amountCents}
                   />

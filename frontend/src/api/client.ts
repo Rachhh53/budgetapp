@@ -42,12 +42,14 @@ export function onDataChanged(listener: () => void): () => void {
   };
 }
 
-/** Files to send as one upload, each under the form field the backend reads. */
+/** Files to send as one upload, each under the form field the backend reads, with any plain fields beside them. */
 export class Upload {
   readonly files: readonly File[];
+  readonly fields: Readonly<Record<string, string>>;
 
-  constructor(files: readonly File[]) {
+  constructor(files: readonly File[], fields: Readonly<Record<string, string>> = {}) {
     this.files = files;
+    this.fields = fields;
   }
 }
 
@@ -80,6 +82,7 @@ async function call(method: string, path: string, body?: unknown): Promise<Respo
   try {
     if (body instanceof Upload) {
       const form = new FormData();
+      Object.entries(body.fields).forEach(([name, value]) => form.append(name, value));
       body.files.forEach((file) => form.append("file", file, file.name));
       // No Content-Type here: the browser writes it, with the boundary between the files.
       return await fetch(path, { method, credentials: "same-origin", body: form });
@@ -220,7 +223,8 @@ export const api = {
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
   delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, body),
   /** Sends files, as the browser sends a form with files in it. */
-  upload: <T>(path: string, files: readonly File[]) => request<T>("POST", path, new Upload(files)),
+  upload: <T>(path: string, files: readonly File[], fields?: Readonly<Record<string, string>>) =>
+    request<T>("POST", path, new Upload(files, fields)),
   /** Asks for a file to save: a GET, or a POST when `body` says what the file should hold. */
   download: (path: string, body?: unknown) => request<Download>(body === undefined ? "GET" : "POST", path, body, fetchFile),
   /** Asks for a file, saved on this PC when the backend can do that (see `Handed`). */

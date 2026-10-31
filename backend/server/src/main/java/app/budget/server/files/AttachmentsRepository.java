@@ -181,9 +181,10 @@ public final class AttachmentsRepository {
                     DELETE FROM files
                     WHERE id NOT IN (SELECT file_id FROM attachments)
                       AND id NOT IN (SELECT file_id FROM pay_stubs)
+                      AND id NOT IN (SELECT file_id FROM statement_uploads WHERE file_id IS NOT NULL)
                       AND id NOT IN (
                           SELECT json_extract(before, '$.file_id') FROM change_log
-                          WHERE table_name IN ('attachments', 'pay_stubs') AND before IS NOT NULL)
+                          WHERE table_name IN ('attachments', 'pay_stubs', 'statement_uploads') AND before IS NOT NULL)
                     """);
             return new HashSet<>(handle.createQuery("SELECT hash FROM files").mapTo(String.class).list());
         });

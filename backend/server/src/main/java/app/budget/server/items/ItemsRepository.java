@@ -248,6 +248,15 @@ public final class ItemsRepository {
         public static Override untouched(long itemId, LocalDate originalDueDate) {
             return new Override(itemId, originalDueDate, null, null, null, false, null, null, null, false, null, null, null);
         }
+
+        /**
+         * This occurrence at a typed amount, everything else as it was. What it showed before is kept the first time
+         * only, as "just this one" keeps it, so the original stays on record however often it is changed.
+         */
+        public Override withAmount(long cents, long shownBefore) {
+            return new Override(itemId, originalDueDate, cents, dueDate, periodOverride, paid, paidDate, confirmationCode, note, skipped,
+                    projectedCents != null ? projectedCents : shownBefore, checkNumber, payFromAccountId);
+        }
     }
 
     /** Every item, by name. */

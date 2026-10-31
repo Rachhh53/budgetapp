@@ -324,8 +324,8 @@ class CardsApiTest extends ApiTestBase {
         @BeforeEach
         void payAndBalances() throws Exception {
             createSalary(checking);
-            enterBalance(checking, "2026-10-01", 300000);
-            enterBalance(card, "2026-10-01", 68248);
+            enterBalance(checking, "2026-09-30", 300000);
+            enterBalance(card, "2026-09-30", 68248);
         }
 
         @Test

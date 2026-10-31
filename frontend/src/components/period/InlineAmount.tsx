@@ -13,6 +13,8 @@ interface InlineAmountProps {
   estimate?: boolean;
   /** What the app showed before the amount was typed over; `null` if untouched. */
   projectedCents?: number | null;
+  /** Said on hover in place of "Projected …", for an amount with more to say about where it came from. */
+  peek?: string;
   /** Offer "This and all future" beside "Just this one". Leave out for something that happens once. */
   canChangeFuture?: boolean;
   /** The backend's message if the last save failed. */
@@ -33,7 +35,7 @@ const PEEK_MS = 2500;
  * told otherwise (spec §5.10). What the app projected before stays on record and shows
  * on hover or keyboard focus, and on a long press on a phone.
  */
-export function InlineAmount({ name, cents, estimate = false, projectedCents = null, canChangeFuture = false, error, onSave }: InlineAmountProps) {
+export function InlineAmount({ name, cents, estimate = false, projectedCents = null, peek, canChangeFuture = false, error, onSave }: InlineAmountProps) {
   const id = useId();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
@@ -55,6 +57,7 @@ export function InlineAmount({ name, cents, estimate = false, projectedCents = n
   }, [editing]);
 
   const wasProjected = projectedCents !== null && projectedCents !== cents;
+  const said = peek ?? (wasProjected ? `Projected ${formatCents(projectedCents)}` : undefined);
 
   const start = () => {
     if (pressed.current) {
@@ -162,16 +165,14 @@ export function InlineAmount({ name, cents, estimate = false, projectedCents = n
         onPointerUp={() => window.clearTimeout(pressTimer.current)}
         onPointerLeave={() => window.clearTimeout(pressTimer.current)}
         // The long press is ours; without this a phone would open its own menu over it.
-        onContextMenu={(event) => wasProjected && event.preventDefault()}
-        aria-label={`${name}: ${formatCents(cents)}${estimate ? ", estimate" : ""}${
-          wasProjected ? `, projected ${formatCents(projectedCents)}` : ""
-        }. Edit amount`}
+        onContextMenu={(event) => said !== undefined && event.preventDefault()}
+        aria-label={`${name}: ${formatCents(cents)}${estimate ? ", estimate" : ""}${said ? `, ${said.toLowerCase()}` : ""}. Edit amount`}
         // Tall enough to tap on a phone; on a wide screen the row itself gives the height.
         className="flex min-h-11 items-center rounded-md hover:bg-bg lg:min-h-0"
       >
         <Amount cents={cents} estimate={estimate} className="w-28 font-semibold" />
       </button>
-      {wasProjected && (
+      {said && (
         <span
           aria-hidden
           data-amount
@@ -181,7 +182,7 @@ export function InlineAmount({ name, cents, estimate = false, projectedCents = n
             peeking ? "block" : "hidden"
           }`}
         >
-          Projected {formatCents(projectedCents)}
+          {said}
         </span>
       )}
       {error && (

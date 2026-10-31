@@ -24,6 +24,7 @@ import { HelpPage } from "./pages/HelpPage";
 import { HelpTopicPage } from "./pages/HelpTopicPage";
 import { IncomeDetailPage } from "./pages/IncomeDetailPage";
 import { PayStubPage } from "./pages/PayStubPage";
+import { StatementUploadPage } from "./pages/StatementUploadPage";
 import { IncomePage } from "./pages/IncomePage";
 import { PayPeriodPage } from "./pages/PayPeriodPage";
 import { PlannerPage } from "./pages/PlannerPage";
@@ -151,6 +152,7 @@ function Screens() {
         <Route path="/reports" element={<Navigate to="/dashboard/reports" replace />} />
         <Route path="/annual" element={<Navigate to="/dashboard/annual" replace />} />
         <Route path="/accounts/:id" element={<AccountDetailPage />} />
+        <Route path="/accounts/:id/statements/:uploadId" element={<StatementUploadPage />} />
         {/* Cards live under Accounts; an address that names a card still lands on its page. */}
         <Route path="/cards" element={<Navigate to="/accounts" replace />} />
         <Route path="/cards/:id" element={<CardRedirect />} />

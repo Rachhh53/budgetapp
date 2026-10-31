@@ -241,8 +241,8 @@ class InvestmentsApiTest extends ApiTestBase {
         @BeforeEach
         void addTheSalaryAndABalance() throws Exception {
             addSalary(15000, halfUpToSixPercent());
-            enterBalance(checking, "2026-10-01", 284512);
-            enterBalance(retirement, "2026-10-01", 4000000);
+            enterBalance(checking, "2026-09-30", 284512);
+            enterBalance(retirement, "2026-09-30", 4000000);
         }
 
         @Test
@@ -273,7 +273,7 @@ class InvestmentsApiTest extends ApiTestBase {
 
         @Test
         void theAccountsTransactionsNameThem() throws Exception {
-            JsonNode lines = server.get("/api/accounts/" + retirement + "/transactions?from=2026-10-01&to=2026-10-01", cookie).data();
+            JsonNode lines = server.get("/api/accounts/" + retirement + "/transactions?from=2026-09-30&to=2026-10-01", cookie).data();
 
             assertThat(StreamSupport.stream(lines.spliterator(), false)
                     .map(line -> line.get("label").asText() + " | " + line.get("kind").asText() + " | " + line.get("amountCents").asLong()))
@@ -327,17 +327,18 @@ class InvestmentsApiTest extends ApiTestBase {
 
             JsonNode period = period("2026-10-15");
 
-            // The period's seventeen days are one line, dated the last of them: about 7.50 a day on a little over 40,300.
+            // The period's seventeen days are one line, dated the last of them: about 7.50 a day on a little over 40,200.
+            // The balance entered for the end of Oct 1 already holds that payday's 225.00.
             assertThat(period.get("interest")).hasSize(1);
             JsonNode growth = period.get("interest").get(0);
             assertThat(growth.get("accountId").asLong()).isEqualTo(retirement);
             assertThat(growth.get("date").asText()).isEqualTo("2026-10-31");
-            assertThat(growth.get("amountCents").asLong()).isEqualTo(12794);
+            assertThat(growth.get("amountCents").asLong()).isEqualTo(12722);
             assertThat(growth.get("rateBp").asInt()).isEqualTo(700);
             JsonNode held = account(period, retirement);
             // One payday's 225.00 and the growth are all that came in.
-            assertThat(held.get("inCents").asLong()).isEqualTo(22500 + 12794);
-            assertThat(held.get("endingCents").asLong()).isEqualTo(held.get("startingCents").asLong() + 22500 + 12794);
+            assertThat(held.get("inCents").asLong()).isEqualTo(22500 + 12722);
+            assertThat(held.get("endingCents").asLong()).isEqualTo(held.get("startingCents").asLong() + 22500 + 12722);
             // The period before had its share too, and so does the one after: none is left without.
             assertThat(period("2026-10-01").get("interest")).hasSize(1);
             assertThat(period("2026-11-01").get("interest")).hasSize(1);
@@ -434,10 +435,11 @@ class InvestmentsApiTest extends ApiTestBase {
 
             assertThat(thisYear.get("since").asText()).isEqualTo("2026-09-01");
             assertThat(thisYear.get("startCents").asLong()).isEqualTo(3900000);
-            // Today's payday has arrived on top of the balance entered this morning.
-            assertThat(thisYear.get("nowCents").asLong()).isEqualTo(4022500);
-            assertThat(thisYear.get("changeCents").asLong()).isEqualTo(122500);
-            assertThat(thisYear.get("depositsCents").asLong()).isEqualTo(67500);
+            // Both balances ended their paydays, so each already holds that day's 225.00: only Sep 15's and today's
+            // came in between, and today's is in what it holds now.
+            assertThat(thisYear.get("nowCents").asLong()).isEqualTo(4000000);
+            assertThat(thisYear.get("changeCents").asLong()).isEqualTo(100000);
+            assertThat(thisYear.get("depositsCents").asLong()).isEqualTo(45000);
             assertThat(thisYear.get("growthCents").asLong()).isEqualTo(55000);
         }
 

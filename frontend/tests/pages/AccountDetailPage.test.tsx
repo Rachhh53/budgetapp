@@ -15,13 +15,13 @@ const CHECKING: Account = {
   color: "#0f766e",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 11, date: "2026-10-02", amountCents: 170510, note: "From statement" },
+  latestBalance: { id: 11, date: "2026-10-02", amountCents: 170510, note: "From statement", endOfDay: true },
 };
 const DETAIL: AccountDetail = {
   account: CHECKING,
   balances: [
-    { id: 11, date: "2026-10-02", amountCents: 170510, note: "From statement" },
-    { id: 10, date: "2026-09-01", amountCents: 180000, note: null },
+    { id: 11, date: "2026-10-02", amountCents: 170510, note: "From statement", endOfDay: true },
+    { id: 10, date: "2026-09-01", amountCents: 180000, note: null, endOfDay: true },
   ],
   interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null },
   rates: [],
@@ -96,7 +96,7 @@ describe("account detail screen", () => {
 
     // The date can be any day: one still to come is planned.
     await userEvent.click(within(rows[0]!).getByRole("button", { name: "Edit the balance from Jan 1, 2999" }));
-    const date = within(screen.getByRole("dialog")).getByLabelText("As of");
+    const date = within(screen.getByRole("dialog")).getByLabelText("At the end of");
     expect(date).not.toHaveAttribute("max");
     expect(screen.getByRole("dialog")).toHaveTextContent("A day still to come is planned");
   });
@@ -341,7 +341,7 @@ describe("account detail screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Update balance" }));
     const dialog = screen.getByRole("dialog", { name: "Update balance — Everyday Checking" });
-    const asOf = within(dialog).getByLabelText("As of");
+    const asOf = within(dialog).getByLabelText("At the end of");
     expect(asOf).toHaveValue("2026-01-01");
     expect(within(dialog).getByText(/Opened on Jan 1, 2026, the day chosen in/)).toBeInTheDocument();
     expect(within(dialog).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
@@ -364,7 +364,7 @@ describe("account detail screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Update balance" }));
     const dialog = screen.getByRole("dialog", { name: "Update balance — Everyday Checking" });
-    expect(within(dialog).getByLabelText("As of")).toHaveValue(todayIso());
+    expect(within(dialog).getByLabelText("At the end of")).toHaveValue(todayIso());
     await userEvent.type(within(dialog).getByLabelText("Balance"), "1,705.10");
     await userEvent.type(within(dialog).getByLabelText("Note (optional)"), "From statement");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save balance" }));

@@ -17,7 +17,7 @@ const CHECKING: Account = {
   archived: false,
   archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 1, date: "2026-09-01", amountCents: 500000, note: null },
+  latestBalance: { id: 1, date: "2026-09-01", amountCents: 500000, note: null, endOfDay: true },
 };
 const HSA: Account = { ...CHECKING, id: 2, name: "Health Savings", type: "savings", latestBalance: null };
 

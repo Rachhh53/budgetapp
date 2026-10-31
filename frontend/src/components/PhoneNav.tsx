@@ -31,7 +31,7 @@ export function PhoneNav() {
           id="more-screens"
           role="dialog"
           aria-label="More screens"
-          className="fixed inset-x-0 top-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-10 overflow-y-auto bg-surface p-4 pt-[max(1rem,env(safe-area-inset-top))]"
+          className="fixed inset-x-0 top-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-10 overflow-x-hidden overflow-y-auto bg-surface p-4 pt-[max(1rem,env(safe-area-inset-top))]"
         >
           <ul className="space-y-1">
             {MORE.map(({ path, label, icon: Icon }) => (

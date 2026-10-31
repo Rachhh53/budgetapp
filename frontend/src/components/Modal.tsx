@@ -148,7 +148,7 @@ export function Modal({
         onClickCapture={noteChoice}
         // Never the full height: a strip of the page stays in view above and below, so it reads as a dialog over the page.
         // The strip is kept thin, because a form has to fit a 768px-high laptop screen without scrolling.
-        className="max-h-[calc(100dvh-2rem)] w-full overflow-y-auto sm:max-h-[calc(100dvh-3rem)] rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
+        className="max-h-[calc(100dvh-2rem)] w-full overflow-x-hidden overflow-y-auto sm:max-h-[calc(100dvh-3rem)] rounded-t-card bg-surface p-5 sm:max-w-xl sm:rounded-card sm:p-6"
       >
         <div
           // Reaches the panel's edges through its padding; a light tint, so the title keeps its contrast.

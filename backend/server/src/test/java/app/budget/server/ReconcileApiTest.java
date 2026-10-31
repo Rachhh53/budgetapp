@@ -55,15 +55,15 @@ class ReconcileApiTest extends ApiTestBase {
                 .get("adjustments").get(0);
 
         assertThat(adjustment.get("since").asText()).isEqualTo("2026-09-01");
-        // Expected Sep 10: Sep 1's balance and paycheck.
-        assertThat(adjustment.get("differenceCents").asLong()).isEqualTo(790000 - (553834 + 248620));
+        // Expected Sep 10: what Sep 1 ended with, its paycheck already in it.
+        assertThat(adjustment.get("differenceCents").asLong()).isEqualTo(790000 - 553834);
     }
 
     @Test
     void anEnteredStatementSaysWhatTheRecordsCameToAndSinceWhen() throws Exception {
         long card = createAccount("Visa", "credit_card");
         server.put("/api/cards/" + card + "/settings", "{\"statementCloseDay\":20,\"dueDay\":13}", cookie);
-        enterBalance(card, "2026-08-21", 0);
+        enterBalance(card, "2026-08-20", 0);
         created("/api/entries",
                 "{\"kind\":\"money_out\",\"date\":\"2026-08-25\",\"amountCents\":6000,\"description\":\"Gas\",\"accountId\":%d}".formatted(card));
         // August matched; September is $8.00 more than the records.

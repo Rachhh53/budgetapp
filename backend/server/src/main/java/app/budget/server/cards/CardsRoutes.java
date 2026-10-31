@@ -801,15 +801,15 @@ public final class CardsRoutes {
 
     /**
      * For each entered statement the records don't match: where to start looking. A balance entered for the card
-     * puts the records right from its day, and a statement that matched says everything up to its close was right.
+     * puts the records right up to the moment it stands for (the end of its day, or for one entered before 2026-10-30,
+     * the start), and a statement that matched says everything up to its close was right.
      */
     private Map<LocalDate, LocalDate> reconcileFrom(
             Account account, List<Statement> entered, Map<LocalDate, Long> records, LocalDate today) {
         // A balance planned for a day still to come puts nothing right yet.
-        List<LocalDate> balancesEntered = accounts.balances(account.id()).stream()
-                .map(BalanceEntry::date)
-                .filter(date -> !date.isAfter(today))
-                .sorted()
+        List<BalanceEntry> balancesEntered = accounts.balances(account.id()).stream()
+                .filter(entry -> !entry.date().isAfter(today))
+                .sorted(Comparator.comparing(BalanceEntry::date))
                 .toList();
         List<Statement> oldestFirst = entered.stream().sorted(Comparator.comparing(Statement::closeDate)).toList();
         Map<LocalDate, LocalDate> from = new HashMap<>();
@@ -820,8 +820,8 @@ public final class CardsRoutes {
                 matched = statement.closeDate().plusDays(1);
                 continue;
             }
-            LocalDate balance = balancesEntered.stream().filter(date -> !date.isAfter(statement.closeDate()))
-                    .reduce((earlier, later) -> later).orElse(null);
+            LocalDate balance = balancesEntered.stream().filter(entry -> !entry.date().isAfter(statement.closeDate()))
+                    .reduce((earlier, later) -> later).map(BalanceEntry::settlesFrom).orElse(null);
             // Never matched and no balance: the month the statement covers.
             LocalDate start = matched != null ? matched : statement.closeDate().minusMonths(1).plusDays(1);
             if (balance != null && balance.isAfter(start)) {

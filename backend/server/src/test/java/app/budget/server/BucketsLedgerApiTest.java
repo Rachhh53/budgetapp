@@ -31,8 +31,8 @@ class BucketsLedgerApiTest extends ApiTestBase {
         savings = createAccount("Rainy Day Savings", "savings");
         visa = createAccount("Visa", "credit_card");
         createSalary(checking);
-        enterBalance(checking, "2026-10-01", 121438);
-        enterBalance(savings, "2026-10-01", 500000);
+        enterBalance(checking, "2026-09-30", 121438);
+        enterBalance(savings, "2026-09-30", 500000);
     }
 
     private long bucket(long accountId, String name, long startingCents) throws Exception {
@@ -1009,19 +1009,19 @@ class BucketsLedgerApiTest extends ApiTestBase {
         @Test
         void aBalanceEnteredOnTheCreditDayIsNotToppedUpWithThatDaysInterest() throws Exception {
             addRate(savings, 410, "2026-01-01");
-            enterBalance(savings, "2026-09-01", 498000);
+            enterBalance(savings, "2026-10-01", 500000);
             long emergency = bucket(savings, "Emergency fund", 0);
             interest("{\"creditDay\":1,\"destination\":\"bucket\",\"destinationBucketId\":%d}".formatted(emergency));
 
             JsonNode period = period("2026-10-01");
 
-            // The 5,000.00 typed in for October 1 is what the account holds: nothing is listed or added.
+            // The 5,000.00 typed in for the end of October 1 is what the account holds: nothing is listed or added.
             assertThat(period.get("interest")).isEmpty();
             assertThat(account(period, savings).get("inCents").asLong()).isZero();
             assertThat(account(period, savings).get("endingCents").asLong()).isEqualTo(500000);
-            // The bucket is still owed the month's interest, worked out on September's 4,980.00: 16.70.
-            assertThat(moves(period, "interest")).containsExactly("2026-10-01 1670");
-            assertThat(bucketIn(period, emergency).get("endingCents").asLong()).isEqualTo(1670);
+            // The bucket is still owed the month's interest, worked out on the 5,000.00 held as the day began: 16.77.
+            assertThat(moves(period, "interest")).containsExactly("2026-10-01 1677");
+            assertThat(bucketIn(period, emergency).get("endingCents").asLong()).isEqualTo(1677);
         }
 
         @Test
@@ -1220,9 +1220,9 @@ class BucketsLedgerApiTest extends ApiTestBase {
 
             JsonNode lines = server.get("/api/accounts/" + checking + "/transactions?from=2026-09-14&to=2026-10-14", cookie).data();
 
-            // The Sep 15 paycheck is listed although the balance was only entered on Oct 1: it still happened.
+            // The Sep 15 paycheck is listed although the balance was only entered for Sep 30: it still happened.
             assertThat(lines.findValuesAsText("date"))
-                    .containsExactly("2026-10-03", "2026-10-02", "2026-10-01", "2026-10-01", "2026-09-15");
+                    .containsExactly("2026-10-03", "2026-10-02", "2026-10-01", "2026-09-30", "2026-09-15");
             assertThat(lines.get(0).get("label").asText()).isEqualTo("Vet");
             assertThat(lines.get(0).get("kind").asText()).isEqualTo("money_out");
             assertThat(lines.get(0).get("amountCents").asLong()).isEqualTo(-4500);

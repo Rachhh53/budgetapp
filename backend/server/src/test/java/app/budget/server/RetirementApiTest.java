@@ -23,7 +23,7 @@ class RetirementApiTest extends ApiTestBase {
         checking = createAccount("Everyday Checking", "checking");
         createSalary(checking);
         k401 = createAccount("Fidelity 401(k)", "investment");
-        enterBalance(k401, "2026-10-01", 10_000_000);
+        enterBalance(k401, "2026-09-30", 10_000_000);
         created("/api/items", """
                 {"name":"Into the 401(k)","kind":"transfer","amountCents":50000,"payFromAccountId":%d,"payToAccountId":%d,"autopay":true,
                  "schedule":{"frequency":"monthly","day1":1,"startDate":"2026-01-01","weekendRule":"none"}}""".formatted(checking, k401));

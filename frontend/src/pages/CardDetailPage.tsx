@@ -22,6 +22,7 @@ import { BalanceList } from "../components/accounts/BalanceList";
 import { ProjectionChart } from "../components/accounts/ProjectionChart";
 import { RateCard } from "../components/accounts/RateCard";
 import { TransactionsCard } from "../components/accounts/TransactionsCard";
+import { StatementUploadsCard } from "../components/statements/StatementUploadsCard";
 import { useAddItem } from "../components/add/AddItem";
 import { Amount } from "../components/Amount";
 import { Card } from "../components/Card";
@@ -330,6 +331,7 @@ export function CardDetailPage({ detail: asAccount }: { detail: AccountDetail })
           suggestion={afterPromo}
         />
 
+        <StatementUploadsCard accountId={account.id} />
         <TransactionsCard account={account} title="Charges and payments" />
         <Card title="Balances you entered" tip="enteredBalance">
           {asAccount.balances.length === 0 ? (

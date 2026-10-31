@@ -36,8 +36,10 @@ public record PeriodBalance(
     /**
      * A balance the user entered during a period that it did not start from.
      *
-     * @param balance    what was entered: what the account held as {@code date} began
+     * @param balance    what was entered: what the account held as {@code date} ended, or for one entered before
+     *                   2026-10-30, as it began
      * @param difference that less what the account was expected to hold then, signed
+     * @param endOfDay   true when {@code balance} is what the day ended with
      */
-    public record Adjustment(LocalDate date, Money balance, Money difference) {}
+    public record Adjustment(LocalDate date, Money balance, Money difference, boolean endOfDay) {}
 }

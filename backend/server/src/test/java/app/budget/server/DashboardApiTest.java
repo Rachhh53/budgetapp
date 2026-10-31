@@ -44,9 +44,9 @@ class DashboardApiTest extends ApiTestBase {
                  "schedule":{"frequency":"semi_monthly","day1":1,"day2":15,"startDate":"2026-01-01","weekendRule":"none"},
                  "deductions":[{"name":"401(k)","amountCents":15000,"toAccountId":%d}],
                  "match":{"toAccountId":%d,"mode":"fixed","fixedCents":5000}}""".formatted(checking, retirement, retirement));
-        enterBalance(checking, "2026-09-15", 10_000);
+        enterBalance(checking, "2026-09-14", 10_000);
         enterBalance(savings, "2026-08-15", 500_000);
-        enterBalance(visa, "2026-09-15", 80_000);
+        enterBalance(visa, "2026-09-14", 80_000);
 
         housing = created("/api/categories", "{\"name\":\"Housing\",\"color\":\"#0f766e\"}");
         food = created("/api/categories", "{\"name\":\"Food\",\"color\":\"#15803d\"}");

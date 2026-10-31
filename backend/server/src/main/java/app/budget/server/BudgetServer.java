@@ -87,6 +87,9 @@ import app.budget.server.settings.SettingKey;
 import app.budget.server.settings.SettingsRepository;
 import app.budget.server.settings.SettingsRoutes;
 import app.budget.server.stubs.PayStubsRepository;
+import app.budget.server.uploads.CsvLayouts;
+import app.budget.server.uploads.StatementUploadsRepository;
+import app.budget.server.uploads.StatementUploadsRoutes;
 import app.budget.server.stubs.PayStubsRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -267,6 +270,9 @@ public final class BudgetServer {
             StoredFiles storedFiles = new StoredFiles(fileStore, savedCopies);
             new AttachmentsRoutes(attachments, storedFiles, entries, items, itemCalendar, cards, accounts, clock).register(routes);
             new PayStubsRoutes(payStubs, storedFiles, income, oneOffs, payCalendar, accounts, clock)
+                    .register(routes);
+            new StatementUploadsRoutes(new StatementUploadsRepository(database.jdbi(), clock), storedFiles, accounts, categories, tags,
+                    items, itemCalendar, payCalendar, entries, new CsvLayouts(database.jdbi()))
                     .register(routes);
             new ReportsRoutes(reports, reportRunner, incomeReportRunner, projectedRunner, attachments, fileStore, accounts, categories, tags, config.fontsDir(), savedCopies)
                     .register(routes);

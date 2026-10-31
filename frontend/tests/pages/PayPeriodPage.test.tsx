@@ -20,7 +20,7 @@ const CHECKING: Account = {
   color: "#0f766e",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null },
+  latestBalance: { id: 1, date: "2026-10-01", amountCents: 121438, note: null, endOfDay: true },
 };
 const SAVINGS: Account = { ...CHECKING, id: 2, name: "Rainy Day Savings", type: "savings" };
 const VISA: Account = { ...CHECKING, id: 3, name: "Visa", type: "credit_card" };
@@ -353,7 +353,7 @@ describe("pay period screen", () => {
     // Nothing is in buckets, so all of it is available; the lowest point is in the note.
     const available = within(figures).getByText("Available after buckets").closest("div");
     expect(available).toHaveTextContent("$3,096.10");
-    expect(available).toHaveTextContent("$0.00 in buckets · lowest $313.90 on Oct 8");
+    expect(available).toHaveTextContent("$3,096.10 − $0.00 in buckets at end · lowest $313.90 on Oct 8");
   });
 
   it("sorts what is in the period into its panels", async () => {
@@ -411,7 +411,7 @@ describe("pay period screen", () => {
           ...OCTOBER.accounts[0]!,
           entered: false,
           adjustedCents: -12500,
-          adjustments: [{ entryId: 44, date: "2026-10-06", balanceCents: 250000, differenceCents: -12500, note: null, since: null }],
+          adjustments: [{ entryId: 44, date: "2026-10-06", balanceCents: 250000, differenceCents: -12500, note: null, since: null, endOfDay: true, sinceEndOfDay: false }],
           endingCents: 297110,
         },
         OCTOBER.accounts[1]!,
@@ -710,13 +710,16 @@ describe("pay period screen", () => {
     // The period starts with what is not in a bucket (Rachel, 2026-10-20).
     const starting = within(figures).getByText("Starting available").closest("div");
     expect(starting).toHaveTextContent("$1,064.38");
-    expect(starting).toHaveTextContent("Everyday Checking $1,214.38 − $150.00 in buckets");
+    expect(starting).toHaveTextContent("Everyday Checking $1,214.38 − $150.00 in buckets at start");
     const available = within(figures).getByText("Available after buckets").closest("div");
     expect(available).toHaveTextContent("$2,896.10");
-    expect(available).toHaveTextContent("$200.00 in buckets");
+    expect(available).toHaveTextContent("$3,096.10 − $200.00 in buckets at end");
 
     const accounts = await panel("Accounts & buckets");
-    expect(within(accounts).getByText("In buckets").closest("div")).toHaveTextContent("−$200.00");
+    // Both bucket totals are named, and the one at the end is what is taken off (Rachel, 2026-10-30).
+    expect(within(accounts).getByText("Buckets at start · Oct 1").closest("div")).toHaveTextContent("$150.00");
+    expect(within(accounts).getByText("Buckets at end · Oct 14").closest("div")).toHaveTextContent(/^Buckets at end · Oct 14\$200\.00$/);
+    expect(within(accounts).getByText("Available after buckets").closest("div")).toHaveTextContent("$2,896.10");
     const buckets = within(accounts).getByRole("region", { name: "Buckets in Everyday Checking" });
     expect(within(buckets).getByText("Holiday gifts").closest("li")).toHaveTextContent("$200.00");
     // What the period moved, and how far along the goal is, in words.
@@ -877,6 +880,54 @@ describe("pay period screen", () => {
     expect(screen.getByText("Projected $140.00")).toBeInTheDocument();
   });
 
+  it("says what a budget a statement set was budgeted and spent, and opens the charges behind it", async () => {
+    // Rachel, 2026-10-30: "on pay period, hover on a budget shows budgeted amount. maybe we can click into it to see the actual row level items".
+    let saved = false;
+    const fetchMock = withPeriod({ ...OCTOBER, occurrences: [{ ...GROCERIES, amountCents: 8000, projectedCents: 30000 }] }, {
+      "GET /api/statement-budgets": () => ({
+        status: 200,
+        data: [
+          {
+            itemId: 3,
+            scheduledDate: "2026-10-01",
+            budgetedCents: 30000,
+            actualCents: 6000,
+            stillToComeCents: 2000,
+            // A charge from another card on it too, which is a one-off on that card (Rachel, 2026-10-30).
+            elsewhereCents: 1500,
+            // Once saved, the figures come back before the period's amount does, so for a moment they don't agree.
+            appliedCents: saved ? 6000 : 8000,
+            charges: [
+              { id: 11, uploadId: 5, uploadName: "october.csv", accountId: 1, txnDate: "2026-10-02", description: "KROGER #123", amountCents: 6000 },
+              { id: 12, uploadId: 7, uploadName: "discover-oct.pdf", accountId: 2, txnDate: "2026-10-03", description: "FARMERS MARKET", amountCents: 1500 },
+            ],
+          },
+        ],
+      }),
+      "PUT /api/statement-budgets/3/2026-10-01/still-to-come": () => {
+        saved = true;
+        return { status: 200, data: {}, changed: true };
+      },
+      "GET /api/items": () => ({ status: 200, data: [ELECTRIC_ITEM, { ...ELECTRIC_ITEM, id: 3, name: "Groceries", kind: "budget" }] }),
+    });
+    renderApp();
+
+    expect(await screen.findByText("Budgeted $300.00 · spent $60.00 · $15.00 on other accounts · still to come $20.00")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Edit Groceries" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /From statements · 2 charges/ }));
+    const panel = screen.getByRole("dialog", { name: "Groceries — from statements" });
+    expect(within(panel).getByRole("list", { name: "Charges" })).toHaveTextContent("KROGER #123");
+    expect(within(panel).getByRole("link", { name: "october.csv" })).toHaveAttribute("href", "/accounts/1/statements/5");
+    expect(within(panel).getByRole("link", { name: "discover-oct.pdf" })).toHaveAttribute("href", "/accounts/2/statements/7");
+    expect(within(panel).getByText("Spent on other accounts, as one-offs there").nextElementSibling).toHaveTextContent("$15.00");
+    await userEvent.clear(within(panel).getByLabelText("Still to come"));
+    await userEvent.type(within(panel).getByLabelText("Still to come"), "0");
+    await userEvent.click(within(panel).getByRole("button", { name: "Save still to come" }));
+    await waitFor(() => expect(bodiesSentTo(fetchMock, "PUT /api/statement-budgets/3/2026-10-01/still-to-come")).toEqual([{ cents: 0 }]));
+    // Saved, the dialog closes (Rachel, 2026-10-30: it stayed open and empty, and asked to discard).
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("types over a one-off, which stops it being an estimate, and a paycheck", async () => {
     const fetchMock = withPeriod(OCTOBER, {
       "PUT /api/entries/10": () => ({ status: 200, data: BONUS, changed: true }),
@@ -1025,7 +1076,7 @@ describe("+ Add item", () => {
       expect.stringContaining("Transfer"),
       expect.stringContaining("Recurring item"),
       expect.stringContaining("Out of a bucket"),
-      expect.stringContaining("Upload a pay stub or receipt…"),
+      expect.stringContaining("Upload a pay stub, statement or receipt…"),
     ]);
     expect(items[0]).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
@@ -1520,6 +1571,23 @@ describe("pay period screen: a paycheck and its stub", () => {
   const withPaycheck = (overrides: Parameters<typeof fakeBackend>[0] = {}) =>
     withPeriod(WITH_CONTRIBUTION, { "GET /api/accounts": () => ({ status: 200, data: [CHECKING, SAVINGS, VISA, RETIREMENT] }), ...overrides });
   const STUB = { id: 7, incomeSourceId: 1 };
+  /** A statement just read, with nothing in it yet; its page has its own tests. */
+  const JUST_READ = {
+    id: 5,
+    accountId: 1,
+    accountName: "Everyday Checking",
+    onCard: false,
+    name: "september.csv",
+    format: "csv",
+    from: "2026-09-01",
+    to: "2026-09-30",
+    appliedAt: null,
+    pages: null,
+    lines: [],
+    toCheck: 0,
+    skippedRows: [],
+    check: { previousCents: null, newCents: null, statementChargesCents: null, statementCreditsCents: null, spentCents: 0, backCents: 0, expectedNewCents: null, differenceCents: null },
+  };
 
   it("says what else goes to your accounts with a paycheck, and opens it from its row", async () => {
     const fetchMock = withPaycheck({
@@ -1634,9 +1702,11 @@ describe("pay period screen: a paycheck and its stub", () => {
     renderApp();
 
     await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub or receipt…/ }));
-    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub or receipt" });
-    expect(within(dialog).getByRole("button", { name: "Add the expense it is for" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub, statement or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub, statement or receipt" });
+    // A pay stub is offered first; one kind shows at a time, so the dialog fits one screen.
+    expect(within(dialog).getByRole("radio", { name: "Pay stub" })).toBeChecked();
+    expect(within(dialog).queryByRole("button", { name: "Add the expense it is for" })).not.toBeInTheDocument();
     // The primary paycheck is offered first; another source can be chosen.
     const whose = await within(dialog).findByLabelText("Whose stub it is");
     expect(whose).toHaveValue("1");
@@ -1647,15 +1717,60 @@ describe("pay period screen: a paycheck and its stub", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("uploads a statement from the + Add item menu, asking about a CSV's columns inside the same dialog", async () => {
+    withPaycheck({
+      "POST /api/accounts/1/statement-uploads/columns": () => ({
+        status: 200,
+        data: {
+          headers: ["Date", "Description", "Amount"],
+          sample: [["09/02/2026", "KROGER #123", "80.00"]],
+          guess: {
+            hasHeader: true,
+            dateColumn: 0,
+            postedColumn: null,
+            descriptionColumn: 1,
+            amountColumn: 2,
+            debitColumn: null,
+            creditColumn: null,
+            dateOrder: "mdy",
+            chargesNegative: false,
+          },
+          known: false,
+        },
+      }),
+      "POST /api/accounts/1/statement-uploads": () => ({ status: 201, data: JUST_READ, changed: true }),
+      // The statement page is covered by its own tests; here it only has to be where we land.
+      "GET /api/statement-uploads/5/changes": () => ({ status: 404, error: "We couldn't find that." }),
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub, statement or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub, statement or receipt" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Statement" }));
+    expect(await within(dialog).findByLabelText("Which account it's for")).toHaveValue("1");
+    await userEvent.upload(within(dialog).getByLabelText("Drop a statement here or browse"), new File(["Date,Description,Amount"], "september.csv"));
+
+    // The column question replaces the rest of the dialog rather than opening a second one over it.
+    expect(await within(dialog).findByText("09/02/2026 · KROGER #123 · $80.00 spent")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(within(dialog).queryByRole("radio", { name: "Pay stub" })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Read the statement" }));
+
+    expect(await screen.findByRole("heading", { name: /Statement · Sep 1 – Sep 30, 2026/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("points to the Income screen when there is no income to give a stub to", async () => {
     withPaycheck();
     renderApp();
 
     await userEvent.click(await screen.findByRole("button", { name: "Add item" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub or receipt…/ }));
-    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub or receipt" });
+    await userEvent.click(screen.getByRole("menuitem", { name: /Upload a pay stub, statement or receipt…/ }));
+    const dialog = screen.getByRole("dialog", { name: "Upload a pay stub, statement or receipt" });
 
     expect(await within(dialog).findByRole("link", { name: "Add your paycheck on the Income screen" })).toHaveAttribute("href", "/income");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Receipt" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add the expense it is for" }));
     expect(await screen.findByRole("dialog", { name: "Add to Oct 1 – Oct 14 pay period" })).toBeInTheDocument();
   });

@@ -165,8 +165,8 @@ class LoansApiTest extends ApiTestBase {
         void aMortgagePaidFromChecking() throws Exception {
             checking = createAccount("Everyday Checking", "checking");
             createSalary(checking);
-            enterBalance(checking, "2026-10-01", 500000);
-            enterBalance(mortgage, "2026-10-01", 28640000);
+            enterBalance(checking, "2026-09-30", 500000);
+            enterBalance(mortgage, "2026-09-30", 28640000);
             setRate(625);
             saveTerms(TERMS);
             created("/api/items", """

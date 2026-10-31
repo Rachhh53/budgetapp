@@ -103,10 +103,15 @@
  * The window itself never scrolls (each screen scrolls inside its own area), so a touchpad
  * swipe past an edge has nothing to move. Without this the desktop shell's browser view
  * rubber-bands the whole app sideways and springs back.
+ *
+ * Nothing is ever meant to be reached by moving the whole window sideways either. On an
+ * iPhone added to the Home Screen it could still be dragged left and right into blank space
+ * (Rachel, 2026-10-25), and Safari only honors this on both html and body.
  */
 html,
 body {
   overscroll-behavior: none;
+  overflow-x: hidden;
 }
 
 body {

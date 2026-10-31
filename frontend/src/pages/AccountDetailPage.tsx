@@ -12,6 +12,7 @@ import {
 import { useIncomeSources } from "../api/income";
 import { useAccountBalances } from "../api/periods";
 import { TransactionsCard } from "../components/accounts/TransactionsCard";
+import { StatementUploadsCard } from "../components/statements/StatementUploadsCard";
 import { useBuckets } from "../api/buckets";
 import { AccountForm } from "../components/accounts/AccountForm";
 import { BalanceList, signed } from "../components/accounts/BalanceList";
@@ -224,6 +225,7 @@ export function AccountDetailPage() {
         {investment && <GrowthCard detail={detail.data} />}
         {account.type === "loan" && <LoanCards account={account} rates={detail.data.rates} />}
 
+        {cash && <StatementUploadsCard accountId={account.id} />}
         <TransactionsCard account={account} />
 
         <Card title="Balances you entered" tip="enteredBalance">

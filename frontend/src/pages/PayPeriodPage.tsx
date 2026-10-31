@@ -12,6 +12,7 @@ import type { Unbilled } from "../api/invoices";
 import type { RunningOut } from "../api/paidAhead";
 import { type PayPeriod, type Paycheck, paycheckKey, paycheckName, useEditPaycheck, usePayPeriods } from "../api/income";
 import { type Item, useChangeItemAmount, useItems } from "../api/items";
+import { type StatementBudget, useStatementBudgets } from "../api/statementUploads";
 import { usePlans } from "../api/plans";
 import { useSettings } from "../api/settings";
 import {
@@ -43,6 +44,7 @@ import { InvoiceForm } from "../components/period/InvoiceForm";
 import { OccurrenceForm } from "../components/period/OccurrenceForm";
 import { PaycheckForm } from "../components/period/PaycheckForm";
 import { BalanceAdjustments } from "../components/period/BalanceAdjustments";
+import { statementBudgetSummary } from "../components/statements/StatementBudgetPanel";
 import { CHECK_NUMBER, ConfirmationCode } from "../components/period/ConfirmationCode";
 import { type EditScope, InlineAmount } from "../components/period/InlineAmount";
 import { BUTTON_PRIMARY, INPUT } from "../components/ui";
@@ -107,6 +109,7 @@ export function PayPeriodPage() {
   }, [detail, setPeriod]);
 
   const [editingOccurrence, setEditingOccurrence] = useState<Occurrence>();
+  const statementBudgets = useStatementBudgets(detail?.start, detail?.end);
   // Narrows what goes out to what one account pays (Rachel, 2026-10-22: "make filters on the pay period page so I can
   // sort or filter by account it was paid out of - they're all mixed in now").
   const [paidFrom, setPaidFrom] = useState<number | null>(null);
@@ -174,6 +177,11 @@ export function PayPeriodPage() {
     items: items.data,
     editOccurrence: setEditingOccurrence,
     paidDateFor: (occurrence) => paidDateWithin(detail.start, detail.end, occurrence.payBy, todayIso()),
+    statementBudget: (occurrence) =>
+      (statementBudgets.data ?? []).find(
+        (budget) =>
+          budget.itemId === occurrence.itemId && budget.scheduledDate === occurrence.scheduledDate && budget.appliedCents === occurrence.amountCents,
+      ),
     statementFor: (occurrence) => {
       const paid = (detail.statementsPaid ?? []).find(
         (candidate) => candidate.itemId === occurrence.itemId && candidate.scheduledDate === occurrence.scheduledDate,
@@ -203,9 +211,17 @@ export function PayPeriodPage() {
           <div className="min-w-0 flex-1 text-center lg:flex-none lg:text-left">
             <p className="text-xs font-semibold tracking-wide text-muted uppercase">{detail.current ? "Current pay period" : "Pay period"}</p>
             <div className="flex min-w-0 items-center justify-center gap-1 lg:justify-start">
-              <h1 className="text-xl font-bold md:text-2xl">
-                {formatDay(detail.start)} – {formatDate(detail.end)}
-              </h1>
+              {/* The dates sit over an invisible copy of the widest ones there can be, so the box is always that
+                  wide and the arrow after it stays put from one pay period to the next (Rachel, 2026-10-30). Digits
+                  are all one width, so only the month names differ, and May is the widest. */}
+              <div className="grid">
+                <h1 className="col-start-1 row-start-1 text-xl font-bold tabular-nums md:text-2xl">
+                  {formatDay(detail.start)} – {formatDate(detail.end)}
+                </h1>
+                <span aria-hidden className="invisible col-start-1 row-start-1 text-xl font-bold tabular-nums md:text-2xl">
+                  May 28 – May 28, 2028
+                </span>
+              </div>
               {/* On a phone the ? sits in the row below, so the dates stay on one line between the arrows. */}
               <span className="hidden lg:inline-flex">
                 <HelpLink />
@@ -318,6 +334,7 @@ export function PayPeriodPage() {
           byHand={editingOccurrence.kind !== "budget" && !editingOccurrence.autopay}
           fromChecking={context.isChecking(editingOccurrence.payFromAccountId)}
           paidDate={context.paidDateFor(editingOccurrence)}
+          statement={context.statementBudget(editingOccurrence)}
           onClose={() => setEditingOccurrence(undefined)}
         />
       )}
@@ -343,6 +360,8 @@ interface RowContext {
   statementFor: (occurrence: Occurrence) => string | undefined;
   /** The day a bill ticked paid from this period is dated, unless another is chosen: one inside the period. */
   paidDateFor: (occurrence: Occurrence) => string;
+  /** What a budget date a statement set is made of, while its amount is still what the statement set. */
+  statementBudget: (occurrence: Occurrence) => StatementBudget | undefined;
 }
 
 /** The account chosen in Accounts & buckets, kept in the address so it goes along from one pay period to the next. */
@@ -598,7 +617,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
         note={`${formatDay(balance.startingOn)}${
           balance.entered ? " · set by you" : balance.startingOn > detail.end ? " · first balance, entered later" : ""
         } · ${account.name} ${formatCents(balance.startingCents)}${
-          balance.startingBucketsCents === 0 ? "" : ` − ${formatCents(balance.startingBucketsCents)} in buckets`
+          balance.startingBucketsCents === 0 ? "" : ` − ${formatCents(balance.startingBucketsCents)} in buckets at start`
         }`}
         className="order-2 lg:order-1"
       />
@@ -640,7 +659,7 @@ function Figures({ balance, account, detail }: { balance: AccountPeriod; account
         note={
           balance.lowBalance
             ? `Low balance: dips to ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
-            : `${formatCents(balance.bucketsCents)} in buckets · lowest ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
+            : `${formatCents(balance.endingCents)} − ${formatCents(balance.bucketsCents)} in buckets at end · lowest ${formatCents(balance.lowestCents)} on ${formatDay(balance.lowestOn)}`
         }
         warn={balance.lowBalance}
         className="order-5"
@@ -899,6 +918,8 @@ function OccurrenceAmount({ occurrence, context }: { occurrence: Occurrence; con
   // A yearly total is shared out by the app, so one occurrence's amount cannot stand for the item's.
   // Nor can a payment that follows its card: it has no amount of its own to change from here on.
   const canChangeFuture = item !== undefined && item.amountMode === "per_occurrence" && !item.followsCard;
+  // A budget a statement set says what it was budgeted and what was spent, in place of "Projected".
+  const statement = context.statementBudget(occurrence);
 
   const save = (amountCents: number, scope: EditScope) => {
     if (scope === "future" && item !== undefined) {
@@ -918,6 +939,7 @@ function OccurrenceAmount({ occurrence, context }: { occurrence: Occurrence; con
       cents={occurrence.amountCents}
       estimate={occurrence.estimate}
       projectedCents={occurrence.projectedCents}
+      peek={statement ? statementBudgetSummary(statement) : undefined}
       canChangeFuture={canChangeFuture}
       error={editOne.error?.message ?? changeFuture.error?.message}
       onSave={save}
@@ -1817,7 +1839,11 @@ function AccountsPanel({
         )}
         {held.length > 0 && (
           <>
-            <AccountLine label="In buckets" cents={balance.bucketsCents} sign="−" />
+            {/* Both bucket totals, named apart, so it is plain which one is taken off (Rachel, 2026-10-30: "you need a
+                beginning buckets and ending buckets number and you need to use the ending buckets number"). Available
+                after buckets is the ending balance less what the buckets hold at the end. */}
+            <AccountLine label={`Buckets at start · ${formatDay(balance.startingOn)}`} cents={balance.startingBucketsCents} />
+            <AccountLine label={`Buckets at end · ${formatDay(periodEnd)}`} cents={balance.bucketsCents} />
             <AccountLine label="Available after buckets" cents={balance.availableCents} />
           </>
         )}

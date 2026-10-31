@@ -15,11 +15,11 @@ const MORTGAGE: Account = {
   color: "#b45309",
   archived: false, archivedOn: null,
   lowBalanceThresholdCents: null,
-  latestBalance: { id: 21, date: "2026-10-01", amountCents: 24000000, note: null },
+  latestBalance: { id: 21, date: "2026-10-01", amountCents: 24000000, note: null, endOfDay: true },
 };
 const DETAIL: AccountDetail = {
   account: MORTGAGE,
-  balances: [{ id: 21, date: "2026-10-01", amountCents: 24000000, note: null }],
+  balances: [{ id: 21, date: "2026-10-01", amountCents: 24000000, note: null, endOfDay: true }],
   interest: { creditDay: 31, destination: "unassigned", destinationBucketId: null },
   rates: [{ id: 3, kind: "loan_rate", rateBp: 625, effectiveDate: "2024-06-01" }] as AccountDetail["rates"],
 };
