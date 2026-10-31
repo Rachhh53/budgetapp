@@ -84,5 +84,13 @@ class EndOfDayBalanceApiTest extends ApiTestBase {
         // Not gone when the day ended, so the balance matches; the bill still leaves after it.
         assertThat(account.get("adjustments").get(0).get("differenceCents").asLong()).isZero();
         assertThat(account.get("endingCents").asLong()).isEqualTo(422489 + 248620 - 12750);
+
+        // The account's balances agree (Rachel, 2026-10-30: "Growth" showed the day's unticked bills as gained): what was
+        // put in is the paycheck only, and nothing is left unexplained.
+        JsonNode balances = server.get("/api/accounts/" + checking + "/performance", cookie).data().get("balances");
+        JsonNode latest = balances.get(0);
+        assertThat(latest.get("date").asText()).isEqualTo("2026-10-01");
+        assertThat(latest.get("depositsCents").asLong()).isEqualTo(248620);
+        assertThat(latest.get("growthCents").asLong()).isZero();
     }
 }

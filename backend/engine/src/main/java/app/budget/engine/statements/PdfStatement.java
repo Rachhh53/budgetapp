@@ -44,6 +44,47 @@ public final class PdfStatement {
                     + "(\\d{1,2}/\\d{1,2}/\\d{2,4}|[A-Za-z]{3,9}\\.? \\d{1,2},? \\d{4})",
             Pattern.CASE_INSENSITIVE);
 
+    /** The balance a statement starts from, and the one it ends with, as its summary names them. */
+    private static final Pattern PREVIOUS_BALANCE = Pattern.compile("(previous|opening|beginning|starting) balance", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NEW_BALANCE = Pattern.compile("(new|closing|ending) balance", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * A card's account summary: payments and credits, and each kind of thing that adds to what is owed, as Discover
+     * prints them ("Payments and Credits -$500.00", "Purchases +$92.20", "Fees Charged +$0.00") and as Synchrony prints
+     * them for the Amazon Store Card, a sign before each and payments apart from other credits ("(-) Payments $500.00",
+     * "(-) Other Credits $12.10", "(+) Purchases/Debits $92.20"; Rachel, 2026-10-30). The first row naming each with an
+     * amount after it is the summary, which comes before the lines.
+     */
+    private static final String SUMMARY_START = "^(?:\\(?[-+=−]\\)?\\s*)?(?:total\\s+)?";
+    private static final Pattern CREDITS_TOTAL = Pattern.compile(SUMMARY_START + "payments?,? (and|&) (other )?credits", Pattern.CASE_INSENSITIVE);
+    private static final List<Pattern> CREDIT_PARTS = List.of(
+            Pattern.compile(SUMMARY_START + "payments?\\b(?! (and|&|due))", Pattern.CASE_INSENSITIVE),
+            Pattern.compile(SUMMARY_START + "(other )?credits\\b", Pattern.CASE_INSENSITIVE));
+    private static final List<Pattern> CHARGE_TOTALS = List.of(
+            Pattern.compile(SUMMARY_START + "purchases?\\b", Pattern.CASE_INSENSITIVE),
+            // What some summaries call the purchases (Rachel, 2026-10-30: "total charges says 0. it's transactions on the
+            // statement probably? plus the other things you named").
+            Pattern.compile(SUMMARY_START + "(new )?transactions\\b", Pattern.CASE_INSENSITIVE),
+            Pattern.compile(SUMMARY_START + "balance transfers?\\b", Pattern.CASE_INSENSITIVE),
+            Pattern.compile(SUMMARY_START + "cash advances?\\b", Pattern.CASE_INSENSITIVE),
+            Pattern.compile(SUMMARY_START + "fees charged\\b", Pattern.CASE_INSENSITIVE),
+            Pattern.compile(SUMMARY_START + "interest charged\\b", Pattern.CASE_INSENSITIVE));
+
+    /**
+     * The order code on the row under an Amazon Store Card charge ("BrrRTxVYnMRq", "BCaaypvfqjgg"): known by where it is,
+     * one word of eight or more letters and digits on a row of its own, not by how it is scrambled (Rachel, 2026-10-30:
+     * "why not just do it on line breaks or whatever").
+     */
+    private static final Pattern ORDER_CODE = Pattern.compile("[A-Za-z0-9]{8,}");
+
+    /** A charge on Synchrony's Amazon Store Card, whose next rows are its order code and what was bought. */
+    private static final Pattern AMAZON = Pattern.compile("\\bAMAZON\\b", Pattern.CASE_INSENSITIVE);
+
+    /** Words a statement's headings and summary lines use, so they are never read as a charge's code or description. */
+    private static boolean heading(String text) {
+        return MONEY_BACK_HEADING.matcher(text).find() || SPENDING_HEADING.matcher(text).find() || SUMMARY.matcher(text).find();
+    }
+
     private static final Pattern WHOLE_DATE = Pattern.compile("\\d{1,2}/\\d{1,2}/\\d{2,4}|[A-Za-z]{3,9}\\.? \\d{1,2},? \\d{4}");
 
     /**
@@ -56,6 +97,8 @@ public final class PdfStatement {
         List<StatementRead.Line> lines = new ArrayList<>();
         boolean moneyBackSection = false;
         boolean balanceColumn = false;
+        // How far into a charge written over three rows: 0 on the row right after a line, 1 after its order code.
+        int afterLine = -1;
         for (Row row : rows) {
             if (lines.size() >= CsvStatement.MAX_LINES) {
                 break;
@@ -64,6 +107,22 @@ public final class PdfStatement {
             String text = String.join(" ", words);
             Optional<Parsed> parsed = parse(words, end, today);
             if (parsed.isEmpty()) {
+                // Synchrony's Amazon Store Card writes each charge on three rows: the date, a reference, "AMAZON RETAIL"
+                // and the amount; then a scrambled order code; then what was bought, which is what says what the charge
+                // was (Rachel, 2026-10-30). Taken by the rows' places under an Amazon charge, never a heading's words.
+                if (afterLine == 0 && AMAZON.matcher(lines.getLast().description()).find() && words.size() == 1
+                        && ORDER_CODE.matcher(text).matches() && !heading(text)) {
+                    afterLine = 1;
+                    continue;
+                }
+                if (afterLine == 1 && !text.isBlank() && words.stream().noneMatch(StatementText::looksLikeMoney) && !heading(text)) {
+                    StatementRead.Line first = lines.removeLast();
+                    lines.add(new StatementRead.Line(
+                            first.txnDate(), first.postedDate(), text, first.amount(), first.kind(), first.sure(), first.externalId()));
+                    afterLine = -1;
+                    continue;
+                }
+                afterLine = -1;
                 // A heading: what follows it is money back or spending until the next one says otherwise.
                 if (text.length() < 80) {
                     if (MONEY_BACK_HEADING.matcher(text).find() && !SPENDING_HEADING.matcher(text).find()) {
@@ -76,6 +135,7 @@ public final class PdfStatement {
                 continue;
             }
             Parsed line = parsed.get();
+            afterLine = -1;
             if (SUMMARY.matcher(line.description()).find() || line.description().isBlank()) {
                 continue;
             }
@@ -84,8 +144,60 @@ public final class PdfStatement {
             boolean sure = line.yearKnown() && (!line.twoAmounts() || balanceColumn);
             lines.add(new StatementRead.Line(
                     line.txnDate(), line.posted(), line.description(), spent, LineKinds.guess(line.description(), spent, onCard), sure, null));
+            afterLine = 0;
         }
-        return StatementRead.of(lines, period[0], period[1]);
+        StatementRead read = StatementRead.of(lines, period[0], period[1]).withBalances(balance(rows, PREVIOUS_BALANCE), balance(rows, NEW_BALANCE));
+        if (!onCard) {
+            return read;
+        }
+        // One line for payments and credits together when the summary has it, otherwise its parts added up.
+        Money credits = positive(balance(rows, CREDITS_TOTAL));
+        return read.withTotals(summed(rows, CHARGE_TOTALS), credits != null ? credits : summed(rows, CREDIT_PARTS));
+    }
+
+    /**
+     * The summary lines named, added up; null when it names none of them. Each is read as a positive amount, however
+     * its sign is printed.
+     */
+    private static Money summed(List<Row> rows, List<Pattern> lines) {
+        Money total = null;
+        for (Pattern named : lines) {
+            Money each = positive(balance(rows, named));
+            if (each != null) {
+                total = total == null ? each : total.plus(each);
+            }
+        }
+        return total;
+    }
+
+    private static Money positive(Money amount) {
+        return amount == null || !amount.isNegative() ? amount : amount.negate();
+    }
+
+    /**
+     * The first amount after the first place the statement names this balance ("New Balance $1,234.56"), as written: on a
+     * card what is owed, on a bank account what it holds. Null when it never says.
+     */
+    private static Money balance(List<Row> rows, Pattern named) {
+        for (Row row : rows) {
+            List<String> words = joinedMarks(row.words().stream().map(Word::text).toList());
+            Matcher matcher = named.matcher(String.join(" ", words));
+            if (!matcher.find()) {
+                continue;
+            }
+            // Count the words up to the end of the name, then take the first amount after it.
+            int seen = 0;
+            for (String word : words) {
+                seen += word.length() + 1;
+                if (seen > matcher.end() && StatementText.looksLikeMoney(word)) {
+                    Optional<Money> amount = StatementText.amount(word);
+                    if (amount.isPresent()) {
+                        return amount.get();
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /**

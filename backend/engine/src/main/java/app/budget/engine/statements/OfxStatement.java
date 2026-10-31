@@ -22,6 +22,10 @@ public final class OfxStatement {
 
     private OfxStatement() {}
 
+    /** The balance at the end of the statement, as the bank reckons it. */
+    private static final Pattern LEDGER_BALANCE = Pattern.compile("<LEDGERBAL>(.*?)(?:</LEDGERBAL>|(?=<AVAILBAL>)|$)",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
     private static final Pattern TRANSACTION = Pattern.compile("<STMTTRN>(.*?)(?:</STMTTRN>|(?=<STMTTRN>)|(?=</BANKTRANLIST>))",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
@@ -63,7 +67,10 @@ public final class OfxStatement {
         }
         LocalDate from = value(text, "DTSTART").flatMap(day -> StatementText.date(day, DateOrder.YMD)).orElse(null);
         LocalDate to = value(text, "DTEND").flatMap(day -> StatementText.date(day, DateOrder.YMD)).orElse(null);
-        return StatementRead.of(lines, from, to);
+        // OFX gives only the closing balance. Written from the holder's side, a card's debt is negative: kept as what is owed.
+        Matcher ledger = LEDGER_BALANCE.matcher(text);
+        Money closing = ledger.find() ? value(ledger.group(1), "BALAMT").flatMap(StatementText::amount).orElse(null) : null;
+        return StatementRead.of(lines, from, to).withBalances(null, closing == null ? null : onCard ? closing.negate() : closing);
     }
 
     /** The type the bank gave settles payments and transfers; the words settle the rest. */

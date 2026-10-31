@@ -1,10 +1,7 @@
 package app.budget.server.uploads;
 
+import app.budget.engine.statements.BudgetActuals.Span;
 import app.budget.engine.statements.Duplicates;
-import app.budget.engine.statements.Replacement.Group;
-import app.budget.engine.statements.Replacement.GroupType;
-import app.budget.engine.statements.Replacement.Mode;
-import app.budget.engine.statements.Replacement.Span;
 import app.budget.engine.statements.StatementRead.Kind;
 import app.budget.server.api.Inputs;
 import app.budget.server.files.AttachmentsRepository;
@@ -23,9 +20,10 @@ import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
 /**
- * Reads and writes the statement uploads of each account (migration {@code V49}): their lines, the category and tags
- * each payee was last given, the item each category's or tag's total is pointed at in a pay period, and which item
- * dates a statement set. Every query is bound; nothing in a line is logged, since it says where someone spends.
+ * Reads and writes the statement uploads of each account (migrations {@code V49}, {@code V51}, {@code V52}): their lines
+ * and what each is chosen to be (on a budget, matched to something already in Budget, or a one-off), the category and tags
+ * and the budget each payee was last given, still to come typed for a budget date, and which item dates a statement set.
+ * Every query is bound; nothing in a line is logged, since it says where someone spends.
  */
 public final class StatementUploadsRepository {
 
@@ -44,19 +42,26 @@ public final class StatementUploadsRepository {
      * An upload.
      *
      * @param hash      the kept PDF; null for a CSV or OFX file, which is not kept
-     * @param appliedAt when its totals were last applied; null until then
+     * @param appliedAt     when it was last applied; null until then
+     * @param previousCents the balance it starts from (on a card, what was owed); null when neither read nor typed
+     * @param newCents      the balance it ends with; null when neither read nor typed
+     * @param chargesCents  the statement's own total of charges (withdrawals on a bank account), as typed; null when not
+     * @param creditsCents  the statement's own total of payments and credits (deposits on a bank account); null when not
      */
     public record Upload(
             long id, long accountId, String name, Format format, LocalDate from, LocalDate to, String createdAt, String appliedAt,
-            String hash, Long sizeBytes, Integer pages) {}
+            String hash, Long sizeBytes, Integer pages, Long previousCents, Long newCents, Long chargesCents, Long creditsCents) {}
 
     /**
      * One line, as kept.
      *
      * @param amountCents  spent as positive, money back negative
-     * @param duplicateOf  the line of an earlier upload it repeats; null when it is new
-     * @param countsToward the group chosen when two of its groups are pointed at items; null until then
-     * @param match        what Budget already has that it is, chosen by the user; null when it isn't matched
+     * @param duplicateOf   the line of an earlier upload it repeats; null when it is new
+     * @param oneOffEntryId the one-off it was added as; null until Apply adds it
+     * @param addOneOff     chosen to be added as a one-off on the next Apply
+     * @param match         what Budget already has that it is, chosen by the user; null when it isn't matched
+     * @param budgetItemId  the budget it is put on; null for none
+     * @param budgetDate    the date of that budget it counted toward when last applied; null before then
      */
     public record Line(
             long id,
@@ -73,28 +78,40 @@ public final class StatementUploadsRepository {
             Long duplicateOf,
             Long categoryId,
             List<Long> tagIds,
-            Group countsToward,
             Long oneOffEntryId,
-            Match match) {
+            boolean addOneOff,
+            Match match,
+            Long budgetItemId,
+            LocalDate budgetDate) {
 
-        /** Counted toward totals: not left out, not a repeat, not a one-off of its own and not matched to one already there. */
-        public boolean counted() {
-            return !leftOut && duplicateOf == null && oneOffEntryId == null && match == null;
+        /** Still open: not left out, not a repeat, not a one-off (added or chosen) and not matched to something already there. */
+        public boolean open() {
+            return !leftOut && duplicateOf == null && oneOffEntryId == null && !addOneOff && match == null;
+        }
+
+        /** Put on a budget, and counting toward it. */
+        public boolean onBudget() {
+            return open() && budgetItemId != null;
         }
     }
 
     /**
      * What a line was matched to: a date of a recurring item ({@code itemId} and {@code scheduledDate}) or a one-off
-     * entry ({@code entryId}), with that date as it was before, to put back when it is unmatched.
+     * entry ({@code entryId}). Once {@code applied}, a date was written and {@code before} is what it was, to put back.
      */
-    public record Match(Long itemId, LocalDate scheduledDate, Long entryId, Before before) {
+    public record Match(Long itemId, LocalDate scheduledDate, Long entryId, boolean applied, Before before) {
 
-        public static Match item(long itemId, LocalDate scheduledDate, Before before) {
-            return new Match(itemId, scheduledDate, null, before);
+        public static Match item(long itemId, LocalDate scheduledDate) {
+            return new Match(itemId, scheduledDate, null, false, Before.NOTHING);
         }
 
         public static Match entry(long entryId) {
-            return new Match(null, null, entryId, Before.NOTHING);
+            return new Match(null, null, entryId, false, Before.NOTHING);
+        }
+
+        /** The bill's date, or null for a one-off. */
+        public ItemDate itemDate() {
+            return itemId == null ? null : new ItemDate(itemId, scheduledDate);
         }
     }
 
@@ -116,35 +133,48 @@ public final class StatementUploadsRepository {
     /** What a payee was last given. */
     public record PayeeRule(Long categoryId, List<Long> tagIds) {}
 
-    /** A total pointed at an item in one pay period of an account. */
-    public record Target(LocalDate periodStart, Group group, long itemId, Mode mode) {}
+    /**
+     * What a statement set a budget's date to, and what it was before any statement did.
+     *
+     * @param actualCents what the charges on it came to then; null for a date set before V52
+     * @param stillCents  what was still to come then; null for a date set before V52
+     */
+    public record Replaced(long baseCents, long appliedCents, Long actualCents, Long stillCents) {}
 
-    /** What a statement set an item's date to, and what it was before any statement did. */
-    public record Replaced(long baseCents, long appliedCents) {}
+    /** A bill's date whose applied match was let go of, put back as {@code before} on its pay period's next Apply. */
+    public record Restore(ItemDate date, LocalDate periodStart, Before before) {}
 
     /** An item's date, as occurrence_overrides keys it. */
     public record ItemDate(long itemId, LocalDate scheduledDate) {}
 
     private static final String UPLOAD_SELECT = """
-            SELECT u.id, u.account_id, u.name, u.format, u.from_date, u.to_date, u.created_at, u.applied_at, f.hash, f.size, f.pages
+            SELECT u.id, u.account_id, u.name, u.format, u.from_date, u.to_date, u.created_at, u.applied_at, f.hash, f.size, f.pages,
+                   u.previous_balance, u.new_balance, u.statement_charges, u.statement_credits
             FROM statement_uploads u LEFT JOIN files f ON f.id = u.file_id
             """;
 
     private static final String LINE_SELECT = """
             SELECT l.id, l.upload_id, l.txn_date, l.posted_date, l.description, l.payee_key, l.amount, l.kind, l.left_out, l.sure,
-                   l.external_id, l.duplicate_of, l.category_id, l.counts_toward, l.counts_toward_tag_id, l.one_off_entry_id,
-                   l.matched_item_id, l.matched_date, l.matched_entry_id, l.before_amount, l.before_paid, l.before_paid_date,
-                   l.before_projected
+                   l.external_id, l.duplicate_of, l.category_id, l.one_off_entry_id, l.add_one_off, l.matched_item_id, l.matched_date,
+                   l.matched_entry_id, l.match_applied, l.before_amount, l.before_paid, l.before_paid_date, l.before_projected,
+                   l.budget_item_id, l.budget_date
             FROM statement_upload_lines l
             """;
 
-    /** Adds an upload with its lines. {@code file} is the kept PDF, or null for a file that is not kept. */
-    public long create(long accountId, Stored file, String name, Format format, LocalDate from, LocalDate to, List<NewLine> lines) {
+    /**
+     * Adds an upload with its lines. {@code file} is the kept PDF, or null for a file that is not kept; the balances and
+     * totals are those the file says, or null.
+     */
+    public long create(
+            long accountId, Stored file, String name, Format format, LocalDate from, LocalDate to, Long previousCents, Long newCents,
+            Long chargesCents, Long creditsCents, List<NewLine> lines) {
         return jdbi.inTransaction(handle -> {
             String now = clock.instant().toString();
             long id = handle.createQuery("""
-                            INSERT INTO statement_uploads (account_id, file_id, name, format, from_date, to_date, created_at)
-                            VALUES (:accountId, :fileId, :name, :format, :from, :to, :now)
+                            INSERT INTO statement_uploads
+                                (account_id, file_id, name, format, from_date, to_date, created_at, previous_balance, new_balance,
+                                 statement_charges, statement_credits)
+                            VALUES (:accountId, :fileId, :name, :format, :from, :to, :now, :previous, :new, :charges, :credits)
                             RETURNING id
                             """)
                     .bind("accountId", accountId)
@@ -154,6 +184,10 @@ public final class StatementUploadsRepository {
                     .bind("from", from.toString())
                     .bind("to", to.toString())
                     .bind("now", now)
+                    .bind("previous", previousCents)
+                    .bind("new", newCents)
+                    .bind("charges", chargesCents)
+                    .bind("credits", creditsCents)
                     .mapTo(Long.class)
                     .one();
             for (int position = 0; position < lines.size(); position++) {
@@ -244,10 +278,103 @@ public final class StatementUploadsRepository {
         return ofAccount(accountId).stream().map(upload -> new Span(upload.from(), upload.to())).toList();
     }
 
+    /** The days every account's statements cover, by account: a budget date is covered by its own account's alone. */
+    public Map<Long, List<Span>> spansByAccount() {
+        Map<Long, List<Span>> spans = new HashMap<>();
+        jdbi.withHandle(handle -> handle.createQuery(UPLOAD_SELECT).map((rs, ctx) -> upload(rs)).list())
+                .forEach(upload -> spans.computeIfAbsent(upload.accountId(), key -> new ArrayList<>()).add(new Span(upload.from(), upload.to())));
+        return spans;
+    }
+
+    /** A line with the account whose statement it is on. */
+    public record AccountLine(Line line, long accountId) {}
+
+    /**
+     * Every line of any account's statements put on a budget: a budget can take charges from a card other than the one it
+     * is paid from (Rachel, 2026-10-30).
+     */
+    public List<AccountLine> onBudgets() {
+        return jdbi.withHandle(handle -> {
+            Map<Long, Long> accountOf = new HashMap<>();
+            handle.createQuery("SELECT id, account_id FROM statement_uploads")
+                    .map((rs, ctx) -> Map.entry(rs.getLong("id"), rs.getLong("account_id")))
+                    .forEach(entry -> accountOf.put(entry.getKey(), entry.getValue()));
+            List<Line> lines = withTags(handle, handle
+                    .createQuery(LINE_SELECT + "WHERE l.budget_item_id IS NOT NULL ORDER BY l.txn_date, l.upload_id, l.position")
+                    .map((rs, ctx) -> line(rs))
+                    .list());
+            return lines.stream().map(line -> new AccountLine(line, accountOf.get(line.uploadId()))).toList();
+        });
+    }
+
+    /** The one-off on each other account holding what was spent on a budget date there, by account. */
+    public Map<Long, Long> elsewhere(ItemDate date) {
+        Map<Long, Long> entries = new HashMap<>();
+        jdbi.withHandle(handle -> handle.createQuery("""
+                        SELECT account_id, entry_id FROM statement_budget_elsewhere WHERE item_id = :itemId AND original_due_date = :date
+                        """)
+                .bind("itemId", date.itemId())
+                .bind("date", date.scheduledDate().toString())
+                .map((rs, ctx) -> Map.entry(rs.getLong("account_id"), rs.getLong("entry_id")))
+                .list())
+                .forEach(entry -> entries.put(entry.getKey(), entry.getValue()));
+        return entries;
+    }
+
+    /** The budget dates with a one-off on this account for what was spent on them here. */
+    public List<ItemDate> elsewhereOn(long accountId) {
+        return jdbi.withHandle(handle -> handle.createQuery("""
+                        SELECT item_id, original_due_date FROM statement_budget_elsewhere WHERE account_id = :accountId
+                        """)
+                .bind("accountId", accountId)
+                .map((rs, ctx) -> new ItemDate(rs.getLong("item_id"), LocalDate.parse(rs.getString("original_due_date"))))
+                .list());
+    }
+
+    public void saveElsewhere(ItemDate date, long accountId, long entryId) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        INSERT INTO statement_budget_elsewhere (item_id, original_due_date, account_id, entry_id)
+                        VALUES (:itemId, :date, :accountId, :entryId)
+                        ON CONFLICT (item_id, original_due_date, account_id) DO UPDATE SET entry_id = excluded.entry_id
+                        """)
+                .bind("itemId", date.itemId())
+                .bind("date", date.scheduledDate().toString())
+                .bind("accountId", accountId)
+                .bind("entryId", entryId)
+                .execute());
+    }
+
+    public void deleteElsewhere(ItemDate date, long accountId) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        DELETE FROM statement_budget_elsewhere WHERE item_id = :itemId AND original_due_date = :date AND account_id = :accountId
+                        """)
+                .bind("itemId", date.itemId())
+                .bind("date", date.scheduledDate().toString())
+                .bind("accountId", accountId)
+                .execute());
+    }
+
+    /**
+     * Gives several lines the same category and tags at once (Rachel, 2026-10-30: "I can't just mass categorize and tag
+     * them"); what a line had is replaced.
+     */
+    public void file(Collection<Long> lineIds, Long categoryId, List<Long> tagIds) {
+        jdbi.useTransaction(handle -> {
+            for (long lineId : lineIds) {
+                handle.createUpdate("UPDATE statement_upload_lines SET category_id = :categoryId WHERE id = :id")
+                        .bind("categoryId", categoryId)
+                        .bind("id", lineId)
+                        .execute();
+                handle.createUpdate("DELETE FROM statement_upload_line_tags WHERE line_id = :id").bind("id", lineId).execute();
+                insertTags(handle, lineId, tagIds);
+            }
+        });
+    }
+
     /** A line as it is changed on the review page. */
     public record LineFields(
             LocalDate txnDate, String description, String payeeKey, long amountCents, Kind kind, boolean leftOut, Long categoryId,
-            List<Long> tagIds, Group countsToward) {}
+            List<Long> tagIds) {}
 
     /** Changes a line; looked at, it is no longer one to check. */
     public void updateLine(long lineId, LineFields fields) {
@@ -255,8 +382,7 @@ public final class StatementUploadsRepository {
             handle.createUpdate("""
                             UPDATE statement_upload_lines
                             SET txn_date = :txnDate, description = :description, payee_key = :payeeKey, amount = :amount, kind = :kind,
-                                left_out = :leftOut, category_id = :categoryId, counts_toward = :countsToward,
-                                counts_toward_tag_id = :countsTowardTag, sure = 1
+                                left_out = :leftOut, category_id = :categoryId, sure = 1
                             WHERE id = :id
                             """)
                     .bind("txnDate", fields.txnDate().toString())
@@ -266,9 +392,6 @@ public final class StatementUploadsRepository {
                     .bind("kind", Inputs.code(fields.kind()))
                     .bind("leftOut", fields.leftOut())
                     .bind("categoryId", fields.categoryId())
-                    .bind("countsToward", fields.countsToward() == null ? null : Inputs.code(fields.countsToward().type()))
-                    .bind("countsTowardTag", fields.countsToward() != null && fields.countsToward().type() == GroupType.TAG
-                            ? fields.countsToward().id() : null)
                     .bind("id", lineId)
                     .execute();
             handle.createUpdate("DELETE FROM statement_upload_line_tags WHERE line_id = :id").bind("id", lineId).execute();
@@ -308,43 +431,217 @@ public final class StatementUploadsRepository {
         });
     }
 
-    /** Marks a line as added as a one-off of its own, so it counts as that and no longer toward any total. */
+    /** Marks a line as added as a one-off of its own, the entry it became, so it is no longer chosen to be. */
     public void setOneOff(long lineId, long entryId) {
-        jdbi.useHandle(handle -> handle.createUpdate("UPDATE statement_upload_lines SET one_off_entry_id = :entryId WHERE id = :id")
+        jdbi.useHandle(handle -> handle.createUpdate("UPDATE statement_upload_lines SET one_off_entry_id = :entryId, add_one_off = 0 WHERE id = :id")
                 .bind("entryId", entryId)
                 .bind("id", lineId)
                 .execute());
     }
 
-    /** Records what a line is. Matching it to something else replaces what it was matched to. */
+    /** Chooses a line to be added as a one-off on the next Apply, or not. */
+    public void setAddOneOff(long lineId, boolean add) {
+        jdbi.useHandle(handle -> handle.createUpdate("UPDATE statement_upload_lines SET add_one_off = :add WHERE id = :id")
+                .bind("add", add)
+                .bind("id", lineId)
+                .execute());
+    }
+
+    /** Puts lines on a budget, or with a null {@code itemId} on none. */
+    public void setBudget(Collection<Long> lineIds, Long itemId) {
+        if (lineIds.isEmpty()) {
+            return;
+        }
+        jdbi.useHandle(handle -> handle.createUpdate("UPDATE statement_upload_lines SET budget_item_id = :itemId WHERE id IN (<ids>)")
+                .bind("itemId", itemId)
+                .bindList("ids", List.copyOf(lineIds))
+                .execute());
+    }
+
+    /** Records the budget date lines counted toward when applied. */
+    public void setBudgetDate(Collection<Long> lineIds, LocalDate date) {
+        if (lineIds.isEmpty()) {
+            return;
+        }
+        jdbi.useHandle(handle -> handle.createUpdate("UPDATE statement_upload_lines SET budget_date = :date WHERE id IN (<ids>)")
+                .bind("date", date.toString())
+                .bindList("ids", List.copyOf(lineIds))
+                .execute());
+    }
+
+    /** The lines of every statement that counted toward a budget's date when it was last applied, by day. */
+    public List<Line> onBudgetDate(long itemId, LocalDate date) {
+        return jdbi.withHandle(handle -> withTags(handle, handle
+                .createQuery(LINE_SELECT + "WHERE l.budget_item_id = :itemId AND l.budget_date = :date ORDER BY l.txn_date, l.id")
+                .bind("itemId", itemId)
+                .bind("date", date.toString())
+                .map((rs, ctx) -> line(rs))
+                .list()));
+    }
+
+    /** Chooses what a line is: not yet written to the bill's date, which Apply does. */
     public void setMatch(long lineId, Match match) {
         jdbi.useHandle(handle -> handle.createUpdate("""
                         UPDATE statement_upload_lines
-                        SET matched_item_id = :itemId, matched_date = :date, matched_entry_id = :entryId, before_amount = :amount,
-                            before_paid = :paid, before_paid_date = :paidDate, before_projected = :projected
+                        SET matched_item_id = :itemId, matched_date = :date, matched_entry_id = :entryId, match_applied = 0,
+                            before_amount = NULL, before_paid = 0, before_paid_date = NULL, before_projected = NULL
                         WHERE id = :id
                         """)
                 .bind("itemId", match.itemId())
                 .bind("date", match.scheduledDate() == null ? null : match.scheduledDate().toString())
                 .bind("entryId", match.entryId())
-                .bind("amount", match.before().amountCents())
-                .bind("paid", match.before().paid())
-                .bind("paidDate", match.before().paidDate() == null ? null : match.before().paidDate().toString())
-                .bind("projected", match.before().projectedCents())
                 .bind("id", lineId)
                 .execute());
     }
 
-    /** Lets go of what a line was matched to, so it counts toward its totals again. */
+    /** Records that a line's match was written to its bill's date, and what that date was before. */
+    public void setMatchApplied(long lineId, Before before) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        UPDATE statement_upload_lines
+                        SET match_applied = 1, before_amount = :amount, before_paid = :paid, before_paid_date = :paidDate,
+                            before_projected = :projected
+                        WHERE id = :id
+                        """)
+                .bind("amount", before.amountCents())
+                .bind("paid", before.paid())
+                .bind("paidDate", before.paidDate() == null ? null : before.paidDate().toString())
+                .bind("projected", before.projectedCents())
+                .bind("id", lineId)
+                .execute());
+    }
+
+    /** Lets go of what a line was matched to, so it is open again. */
     public void clearMatch(long lineId) {
         jdbi.useHandle(handle -> handle.createUpdate("""
                         UPDATE statement_upload_lines
-                        SET matched_item_id = NULL, matched_date = NULL, matched_entry_id = NULL, before_amount = NULL, before_paid = 0,
-                            before_paid_date = NULL, before_projected = NULL
+                        SET matched_item_id = NULL, matched_date = NULL, matched_entry_id = NULL, match_applied = 0, before_amount = NULL,
+                            before_paid = 0, before_paid_date = NULL, before_projected = NULL
                         WHERE id = :id
                         """)
                 .bind("id", lineId)
                 .execute());
+    }
+
+    /** Remembers a bill's date to put back on its pay period's next Apply. */
+    public void saveRestore(long accountId, Restore restore) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        INSERT INTO statement_match_restores
+                            (item_id, original_due_date, account_id, period_start, amount, paid, paid_date, projected)
+                        VALUES (:itemId, :date, :accountId, :period, :amount, :paid, :paidDate, :projected)
+                        ON CONFLICT (item_id, original_due_date) DO UPDATE SET
+                            account_id = excluded.account_id, period_start = excluded.period_start, amount = excluded.amount,
+                            paid = excluded.paid, paid_date = excluded.paid_date, projected = excluded.projected
+                        """)
+                .bind("itemId", restore.date().itemId())
+                .bind("date", restore.date().scheduledDate().toString())
+                .bind("accountId", accountId)
+                .bind("period", restore.periodStart().toString())
+                .bind("amount", restore.before().amountCents())
+                .bind("paid", restore.before().paid())
+                .bind("paidDate", restore.before().paidDate() == null ? null : restore.before().paidDate().toString())
+                .bind("projected", restore.before().projectedCents())
+                .execute());
+    }
+
+    /** An account's bill dates waiting to be put back. */
+    public List<Restore> restores(long accountId) {
+        return jdbi.withHandle(handle -> handle.createQuery("""
+                        SELECT item_id, original_due_date, period_start, amount, paid, paid_date, projected
+                        FROM statement_match_restores WHERE account_id = :id
+                        """)
+                .bind("id", accountId)
+                .map((rs, ctx) -> {
+                    String paidDate = rs.getString("paid_date");
+                    return new Restore(
+                            new ItemDate(rs.getLong("item_id"), LocalDate.parse(rs.getString("original_due_date"))),
+                            LocalDate.parse(rs.getString("period_start")),
+                            new Before(nullableLong(rs, "amount"), rs.getBoolean("paid"), paidDate == null ? null : LocalDate.parse(paidDate),
+                                    nullableLong(rs, "projected")));
+                })
+                .list());
+    }
+
+    public void deleteRestore(ItemDate date) {
+        jdbi.useHandle(handle -> handle.createUpdate("DELETE FROM statement_match_restores WHERE item_id = :itemId AND original_due_date = :date")
+                .bind("itemId", date.itemId())
+                .bind("date", date.scheduledDate().toString())
+                .execute());
+    }
+
+    /** Records the statement's balances and totals as typed, or null to leave one unsaid. */
+    public void setBalances(long uploadId, Long previousCents, Long newCents, Long chargesCents, Long creditsCents) {
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        UPDATE statement_uploads
+                        SET previous_balance = :previous, new_balance = :new, statement_charges = :charges, statement_credits = :credits
+                        WHERE id = :id
+                        """)
+                .bind("previous", previousCents)
+                .bind("new", newCents)
+                .bind("charges", chargesCents)
+                .bind("credits", creditsCents)
+                .bind("id", uploadId)
+                .execute());
+    }
+
+    /** The budget each payee's charges were last put on, on an account, by payee key. */
+    public Map<String, Long> budgetHints(long accountId) {
+        Map<String, Long> hints = new HashMap<>();
+        jdbi.useHandle(handle -> handle.createQuery("SELECT payee_key, item_id FROM statement_budget_hints WHERE account_id = :id")
+                .bind("id", accountId)
+                .map((rs, ctx) -> hints.put(rs.getString("payee_key"), rs.getLong("item_id")))
+                .list());
+        return hints;
+    }
+
+    /** Remembers the budget a payee's charge was put on, as a suggestion for the next one. */
+    public void rememberBudget(long accountId, String payeeKey, long itemId) {
+        if (payeeKey.isEmpty()) {
+            return;
+        }
+        jdbi.useHandle(handle -> handle.createUpdate("""
+                        INSERT INTO statement_budget_hints (account_id, payee_key, item_id) VALUES (:accountId, :key, :itemId)
+                        ON CONFLICT (account_id, payee_key) DO UPDATE SET item_id = excluded.item_id
+                        """)
+                .bind("accountId", accountId)
+                .bind("key", payeeKey)
+                .bind("itemId", itemId)
+                .execute());
+    }
+
+    /** Still to come as typed, for these items' dates. */
+    public Map<ItemDate, Long> typedStill(Collection<Long> itemIds) {
+        Map<ItemDate, Long> typed = new HashMap<>();
+        if (itemIds.isEmpty()) {
+            return typed;
+        }
+        jdbi.useHandle(handle -> handle
+                .createQuery("SELECT item_id, original_due_date, amount FROM statement_still_to_come WHERE item_id IN (<ids>)")
+                .bindList("ids", List.copyOf(itemIds))
+                .map((rs, ctx) -> typed.put(new ItemDate(rs.getLong("item_id"), LocalDate.parse(rs.getString("original_due_date"))),
+                        rs.getLong("amount")))
+                .list());
+        return typed;
+    }
+
+    /** Types still to come for a budget's date, or with null goes back to working it out. */
+    public void setTypedStill(ItemDate date, Long cents) {
+        jdbi.useHandle(handle -> {
+            if (cents == null) {
+                handle.createUpdate("DELETE FROM statement_still_to_come WHERE item_id = :itemId AND original_due_date = :date")
+                        .bind("itemId", date.itemId())
+                        .bind("date", date.scheduledDate().toString())
+                        .execute();
+                return;
+            }
+            handle.createUpdate("""
+                            INSERT INTO statement_still_to_come (item_id, original_due_date, amount) VALUES (:itemId, :date, :amount)
+                            ON CONFLICT (item_id, original_due_date) DO UPDATE SET amount = excluded.amount
+                            """)
+                    .bind("itemId", date.itemId())
+                    .bind("date", date.scheduledDate().toString())
+                    .bind("amount", cents)
+                    .execute();
+        });
     }
 
     /** Removes an upload and its lines. What it changed stays, as for a pay stub; Undo brings it back. */
@@ -398,70 +695,6 @@ public final class StatementUploadsRepository {
         });
     }
 
-    /** The items an account's totals are pointed at, in every pay period. */
-    public List<Target> targets(long accountId) {
-        return jdbi.withHandle(handle -> handle
-                .createQuery("SELECT period_start, category_id, tag_id, item_id, mode FROM statement_targets WHERE account_id = :id")
-                .bind("id", accountId)
-                .map((rs, ctx) -> new Target(
-                        LocalDate.parse(rs.getString("period_start")),
-                        group(rs),
-                        rs.getLong("item_id"),
-                        choice(Mode.class, rs.getString("mode"))))
-                .list());
-    }
-
-    /** Points a total at an item, or with a null {@code itemId} at nothing. */
-    public void setTarget(long accountId, LocalDate periodStart, Group group, Long itemId, Mode mode) {
-        jdbi.useTransaction(handle -> {
-            handle.createUpdate("DELETE FROM statement_targets WHERE account_id = :accountId AND period_start = :period AND "
-                            + groupColumn(group) + " = :groupId")
-                    .bind("accountId", accountId)
-                    .bind("period", periodStart.toString())
-                    .bind("groupId", group.id())
-                    .execute();
-            if (itemId == null) {
-                return;
-            }
-            handle.createUpdate("""
-                            INSERT INTO statement_targets (account_id, period_start, category_id, tag_id, item_id, mode)
-                            VALUES (:accountId, :period, :categoryId, :tagId, :itemId, :mode)
-                            """)
-                    .bind("accountId", accountId)
-                    .bind("period", periodStart.toString())
-                    .bind("categoryId", group.type() == GroupType.CATEGORY ? group.id() : null)
-                    .bind("tagId", group.type() == GroupType.TAG ? group.id() : null)
-                    .bind("itemId", itemId)
-                    .bind("mode", Inputs.code(mode))
-                    .execute();
-            // Remembered as a suggestion for the next pay period; never chosen by itself.
-            handle.createUpdate("DELETE FROM statement_target_hints WHERE account_id = :accountId AND " + groupColumn(group) + " = :groupId")
-                    .bind("accountId", accountId)
-                    .bind("groupId", group.id())
-                    .execute();
-            handle.createUpdate("""
-                            INSERT INTO statement_target_hints (account_id, category_id, tag_id, item_id)
-                            VALUES (:accountId, :categoryId, :tagId, :itemId)
-                            """)
-                    .bind("accountId", accountId)
-                    .bind("categoryId", group.type() == GroupType.CATEGORY ? group.id() : null)
-                    .bind("tagId", group.type() == GroupType.TAG ? group.id() : null)
-                    .bind("itemId", itemId)
-                    .execute();
-        });
-    }
-
-    /** The item each category or tag was last pointed at on an account. */
-    public Map<Group, Long> hints(long accountId) {
-        Map<Group, Long> hints = new HashMap<>();
-        jdbi.useHandle(handle -> handle
-                .createQuery("SELECT category_id, tag_id, item_id FROM statement_target_hints WHERE account_id = :id")
-                .bind("id", accountId)
-                .map((rs, ctx) -> hints.put(group(rs), rs.getLong("item_id")))
-                .list());
-        return hints;
-    }
-
     /** Which of these item dates a statement set, and to what. */
     public Map<ItemDate, Replaced> replaced(Collection<Long> itemIds) {
         Map<ItemDate, Replaced> replaced = new HashMap<>();
@@ -469,37 +702,63 @@ public final class StatementUploadsRepository {
             return replaced;
         }
         jdbi.useHandle(handle -> handle
-                .createQuery("SELECT item_id, original_due_date, base_amount, applied_amount FROM statement_replacements WHERE item_id IN (<ids>)")
+                .createQuery("""
+                        SELECT item_id, original_due_date, base_amount, applied_amount, actual_amount, still_to_come
+                        FROM statement_replacements WHERE item_id IN (<ids>)
+                        """)
                 .bindList("ids", List.copyOf(itemIds))
                 .map((rs, ctx) -> replaced.put(
-                        new ItemDate(rs.getLong("item_id"), LocalDate.parse(rs.getString("original_due_date"))),
-                        new Replaced(rs.getLong("base_amount"), rs.getLong("applied_amount"))))
+                        new ItemDate(rs.getLong("item_id"), LocalDate.parse(rs.getString("original_due_date"))), replaced(rs)))
                 .list());
         return replaced;
     }
 
+    /** The item dates a statement set from {@code from} through {@code to}, by their scheduled date. */
+    public Map<ItemDate, Replaced> replacedBetween(LocalDate from, LocalDate to) {
+        Map<ItemDate, Replaced> replaced = new HashMap<>();
+        jdbi.useHandle(handle -> handle
+                .createQuery("""
+                        SELECT item_id, original_due_date, base_amount, applied_amount, actual_amount, still_to_come
+                        FROM statement_replacements WHERE original_due_date BETWEEN :from AND :to
+                        """)
+                .bind("from", from.toString())
+                .bind("to", to.toString())
+                .map((rs, ctx) -> replaced.put(
+                        new ItemDate(rs.getLong("item_id"), LocalDate.parse(rs.getString("original_due_date"))), replaced(rs)))
+                .list());
+        return replaced;
+    }
+
+    private static Replaced replaced(ResultSet rs) throws SQLException {
+        return new Replaced(rs.getLong("base_amount"), rs.getLong("applied_amount"), nullableLong(rs, "actual_amount"),
+                nullableLong(rs, "still_to_come"));
+    }
+
     public void saveReplaced(ItemDate date, Replaced replaced) {
         jdbi.useHandle(handle -> handle.createUpdate("""
-                        INSERT INTO statement_replacements (item_id, original_due_date, base_amount, applied_amount, applied_at)
-                        VALUES (:itemId, :date, :base, :applied, :now)
+                        INSERT INTO statement_replacements
+                            (item_id, original_due_date, base_amount, applied_amount, applied_at, actual_amount, still_to_come)
+                        VALUES (:itemId, :date, :base, :applied, :now, :actual, :still)
                         ON CONFLICT (item_id, original_due_date) DO UPDATE SET
-                            base_amount = excluded.base_amount, applied_amount = excluded.applied_amount, applied_at = excluded.applied_at
+                            base_amount = excluded.base_amount, applied_amount = excluded.applied_amount, applied_at = excluded.applied_at,
+                            actual_amount = excluded.actual_amount, still_to_come = excluded.still_to_come
                         """)
                 .bind("itemId", date.itemId())
                 .bind("date", date.scheduledDate().toString())
                 .bind("base", replaced.baseCents())
                 .bind("applied", replaced.appliedCents())
+                .bind("actual", replaced.actualCents())
+                .bind("still", replaced.stillCents())
                 .bind("now", clock.instant().toString())
                 .execute());
     }
 
-    private static String groupColumn(Group group) {
-        return group.type() == GroupType.CATEGORY ? "category_id" : "tag_id";
-    }
-
-    private static Group group(ResultSet rs) throws SQLException {
-        Long category = nullableLong(rs, "category_id");
-        return category != null ? new Group(GroupType.CATEGORY, category) : new Group(GroupType.TAG, rs.getLong("tag_id"));
+    /** Forgets that a statement set an item's date, which is back to what was budgeted. */
+    public void deleteReplaced(ItemDate date) {
+        jdbi.useHandle(handle -> handle.createUpdate("DELETE FROM statement_replacements WHERE item_id = :itemId AND original_due_date = :date")
+                .bind("itemId", date.itemId())
+                .bind("date", date.scheduledDate().toString())
+                .execute());
     }
 
     private static void insertTags(Handle handle, long lineId, List<Long> tagIds) {
@@ -524,8 +783,8 @@ public final class StatementUploadsRepository {
         return lines.stream()
                 .map(line -> new Line(line.id(), line.uploadId(), line.txnDate(), line.postedDate(), line.description(), line.payeeKey(),
                         line.amountCents(), line.kind(), line.leftOut(), line.sure(), line.externalId(), line.duplicateOf(),
-                        line.categoryId(), List.copyOf(tags.getOrDefault(line.id(), List.of())), line.countsToward(), line.oneOffEntryId(),
-                        line.match()))
+                        line.categoryId(), List.copyOf(tags.getOrDefault(line.id(), List.of())), line.oneOffEntryId(), line.addOneOff(),
+                        line.match(), line.budgetItemId(), line.budgetDate()))
                 .toList();
     }
 
@@ -542,20 +801,16 @@ public final class StatementUploadsRepository {
                 rs.getString("applied_at"),
                 hash,
                 hash == null ? null : rs.getLong("size"),
-                hash == null ? null : nullableInt(rs, "pages"));
+                hash == null ? null : nullableInt(rs, "pages"),
+                nullableLong(rs, "previous_balance"),
+                nullableLong(rs, "new_balance"),
+                nullableLong(rs, "statement_charges"),
+                nullableLong(rs, "statement_credits"));
     }
 
     private static Line line(ResultSet rs) throws SQLException {
         String posted = rs.getString("posted_date");
-        String countsToward = rs.getString("counts_toward");
-        Group chosen = null;
-        if ("category".equals(countsToward)) {
-            Long category = nullableLong(rs, "category_id");
-            chosen = category == null ? null : new Group(GroupType.CATEGORY, category);
-        } else if ("tag".equals(countsToward)) {
-            Long tag = nullableLong(rs, "counts_toward_tag_id");
-            chosen = tag == null ? null : new Group(GroupType.TAG, tag);
-        }
+        String budgetDate = rs.getString("budget_date");
         return new Line(
                 rs.getLong("id"),
                 rs.getLong("upload_id"),
@@ -571,9 +826,11 @@ public final class StatementUploadsRepository {
                 nullableLong(rs, "duplicate_of"),
                 nullableLong(rs, "category_id"),
                 List.of(),
-                chosen,
                 nullableLong(rs, "one_off_entry_id"),
-                match(rs));
+                rs.getBoolean("add_one_off"),
+                match(rs),
+                nullableLong(rs, "budget_item_id"),
+                budgetDate == null ? null : LocalDate.parse(budgetDate));
     }
 
     /** What the line was matched to; null when nothing is, or what it was matched to has since been deleted. */
@@ -581,14 +838,15 @@ public final class StatementUploadsRepository {
         Long itemId = nullableLong(rs, "matched_item_id");
         String date = rs.getString("matched_date");
         Long entryId = nullableLong(rs, "matched_entry_id");
+        boolean applied = rs.getBoolean("match_applied");
         if (entryId != null) {
-            return Match.entry(entryId);
+            return new Match(null, null, entryId, applied, Before.NOTHING);
         }
         if (itemId == null || date == null) {
             return null;
         }
         String paidDate = rs.getString("before_paid_date");
-        return Match.item(itemId, LocalDate.parse(date), new Before(
+        return new Match(itemId, LocalDate.parse(date), null, applied, new Before(
                 nullableLong(rs, "before_amount"), rs.getBoolean("before_paid"), paidDate == null ? null : LocalDate.parse(paidDate),
                 nullableLong(rs, "before_projected")));
     }

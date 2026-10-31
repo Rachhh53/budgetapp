@@ -5,10 +5,12 @@ import { useAccounts } from "../../api/accounts";
 import { type AttachmentOwner, useAttachments } from "../../api/attachments";
 import { REIMBURSEMENT_LABELS } from "../../api/entries";
 import { type Occurrence, type OccurrenceEdit, useEditOccurrence } from "../../api/periods";
+import type { StatementBudget } from "../../api/statementUploads";
 import { useItemReimbursement } from "../../api/reimbursements";
 import { formatDay, todayIso } from "../../lib/dates";
 import { centsToInput, parseDollars } from "../../lib/money";
 import { Receipts } from "../files/Receipts";
+import { StatementBudgetPanel, statementBudgetSummary } from "../statements/StatementBudgetPanel";
 import { PaidBackPanel } from "../reimbursements/PaidBackPanel";
 import { KIND_ICONS } from "../items/labels";
 import { Modal } from "../Modal";
@@ -29,6 +31,8 @@ interface OccurrenceFormProps {
    * Left out (opened from Coming up, outside any period), today: the day it really is being paid.
    */
   paidDate?: string;
+  /** For a budget a statement set: what it was budgeted, the charges spent on it and what is still to come. */
+  statement?: StatementBudget;
   onClose: () => void;
 }
 
@@ -40,7 +44,7 @@ interface OccurrenceFormProps {
  * The item itself (its name, schedule, accounts, the amount from now on) is changed on its own
  * page, a card at a time, which this links to. That keeps the form short enough never to scroll.
  */
-export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: paidDateWithin, onClose }: OccurrenceFormProps) {
+export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: paidDateWithin, statement, onClose }: OccurrenceFormProps) {
   const id = useId();
   const save = useEditOccurrence();
   const today = todayIso();
@@ -73,6 +77,10 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
   const reimbursement = useItemReimbursement(occurrence.itemId, canBePaidBack);
   const flagged = reimbursement.data?.payments.find((payment) => payment.scheduledDate === occurrence.scheduledDate);
   const [showingPaidBack, setShowingPaidBack] = useState(false);
+  // The statement figures as they were when opened. The pay period reloads the amount and these figures separately
+  // after still to come is saved, and for a moment they don't agree; kept here, the panel stays while it saves.
+  const [openStatement, setOpenStatement] = useState<StatementBudget>();
+  const showingStatement = openStatement !== undefined;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -137,7 +145,15 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
 
   return (
     <Modal
-      title={showingFiles ? `Receipts for ${occurrence.name}` : showingPaidBack ? `Paid back — ${occurrence.name}` : `Edit ${occurrence.name}`}
+      title={
+        showingFiles
+          ? `Receipts for ${occurrence.name}`
+          : showingPaidBack
+            ? `Paid back — ${occurrence.name}`
+            : showingStatement
+              ? `${occurrence.name} — from statements`
+              : `Edit ${occurrence.name}`
+      }
       icon={showingPaidBack ? HandCoins : KIND_ICONS[occurrence.kind]}
       onClose={onClose}
     >
@@ -155,7 +171,8 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
         </div>
       )}
       {showingPaidBack && <PaidBackPanel occurrence={occurrence} onBack={() => setShowingPaidBack(false)} />}
-      <form onSubmit={submit} hidden={showingFiles || showingPaidBack} className="space-y-4">
+      {openStatement && <StatementBudgetPanel budget={openStatement} onBack={() => setOpenStatement(undefined)} onSaved={onClose} />}
+      <form onSubmit={submit} hidden={showingFiles || showingPaidBack || showingStatement} className="space-y-4">
         <p className="text-muted">
           {occurrence.coversThrough
             ? `The invoice for visits through ${formatDay(occurrence.coversThrough)}, due ${formatDay(occurrence.dueDate)}.`
@@ -163,6 +180,21 @@ export function OccurrenceForm({ occurrence, byHand, fromChecking, paidDate: pai
         </p>
 
         <MoneyField label={occurrence.invoiceId != null ? "Amount billed" : "Amount this time"} value={amount} onChange={setAmount} required />
+        {statement && (
+          <button
+            type="button"
+            onClick={() => setOpenStatement(statement)}
+            className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-line bg-surface px-4 py-2 text-left"
+          >
+            <span>
+              <span className="block font-semibold">
+                From statements · {statement.charges.length === 1 ? "1 charge" : `${statement.charges.length} charges`}
+              </span>
+              <span className="block text-sm text-muted">{statementBudgetSummary(statement)}</span>
+            </span>
+            <span aria-hidden>›</span>
+          </button>
+        )}
 
         {/* Side by side on a phone too, so the form stays one screen: the day it is due, and the day it was paid. */}
         <div className={byHand ? "grid grid-cols-2 gap-3" : undefined}>

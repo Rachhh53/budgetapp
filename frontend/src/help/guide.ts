@@ -233,10 +233,10 @@ export const TOPICS: readonly Topic[] = [
         body: [
           "On a checking, savings or card account's page, Statement uploads reads a statement you downloaded from your bank: a CSV, OFX or QFX file, or a PDF. It's read on this PC, and nothing changes until you choose to. + Add item › Upload a pay stub, statement or receipt does the same from anywhere.",
           "The first time a bank's CSV is added, Budget asks which column holds the date, the description and the amount, and remembers it for the next download.",
-          "Charges lists every line, by pay period: the day a charge was made decides which one. Give a payee a category and tags once and Budget fills them in for its other charges and on the next statement. Payments to the card and transfers are left out; Put back counts one.",
-          "What changes totals the charges in each pay period by category and by tag. For each total, choose under Replaces which budget or recurring item of that pay period it changes, then Replace (the amount becomes the total) or Add (the total goes on top of what it is now). Nothing is chosen for you; an item chosen last time is suggested with Use.",
-          "Apply changes only the amounts, just for those dates, as typing them in would: the date, the paid tick and the rest stay as they are, and hovering an amount shows what it was. Undo takes it back.",
-          "Statements of the same account add together in a pay period, so a card statement that closes partway through and the next one make one total; a line on both is counted once. Another account's charges are a total of their own. Charges nothing takes can be added as one-offs instead.",
+          "Charges lists every line, by pay period: the day a charge was made decides which one. Put each charge on a budget of its pay period, say it is a bill or one-off already in Budget, or add it as a one-off. Tick several to put them on a budget together, or to give them one category and the same tags with Category and tags… (Save and add as one-offs adds them all as one-offs too). A payee remembers its budget, category and tags for the next statement. Payments to the card and transfers are left out; Put back counts one.",
+          "What changes shows each budget date as it is now and what it becomes: what was spent on it plus what is still to come. Still to come is the budget less what was spent until the account's statements cover every day of the date, then nothing; Edit types your own.",
+          "A charge can go on a budget paid from another account, say groceries budgeted on checking but bought on a card. That budget keeps its total: the card's charges come off what is still to come, and become one one-off on the card for that budget date, with the budget's name, category and tags. Once checking's statements cover the date, the budget is what checking spent, and more charges can still go on it.",
+          "Apply changes only the amounts, just for those dates, as typing them in would: the date, the paid tick and the rest stay as they are, and hovering an amount shows what it was. Undo takes it back. Statements of the same account add together in a pay period, and a line on both is counted once.",
         ],
       },
       {
@@ -254,7 +254,7 @@ export const TOPICS: readonly Topic[] = [
         ],
       },
     ],
-    terms: ["enteredBalance", "bucket", "available", "netWorth", "statementUpload"],
+    terms: ["enteredBalance", "bucket", "available", "netWorth", "statementUpload", "statementCheck"],
   },
   {
     id: "income",

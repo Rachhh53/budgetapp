@@ -17,10 +17,11 @@ export const KIND_LABELS: Record<LineKind, string> = {
 };
 
 /**
- * One statement line: its category and tags (remembered for its payee, and given to the payee's other lines with
- * nothing on them yet), what it is, and whether it counts. What was read (the day, the words, the amount) can be put
- * right under Fix what was read, a second step in place of the filing fields (a CSV or OFX line is rarely wrong), so
- * the form fits one screen either way.
+ * One statement line: what it is, whether it is left out, and the category and tags it takes if it is added as a one-off
+ * (remembered for its payee, and given to the payee's other lines with nothing on them yet; Rachel, 2026-10-30: "one offs
+ * are probably the only ones that even need category/tag"). What was read (the day, the words, the amount) can be put
+ * right under Fix what was read, a second step in place of the other fields (a CSV or OFX line is rarely wrong), so the
+ * form fits one screen either way.
  */
 export function StatementLineForm({
   uploadId,
@@ -43,7 +44,7 @@ export function StatementLineForm({
   const [categoryId, setCategoryId] = useState(line.categoryId);
   const [tagIds, setTagIds] = useState<number[]>(line.tagIds);
   const [kind, setKind] = useState(line.kind);
-  const [counted, setCounted] = useState(!line.leftOut);
+  const [leftOut, setLeftOut] = useState(line.leftOut);
   const [txnDate, setTxnDate] = useState(line.txnDate);
   const [description, setDescription] = useState(line.description);
   // Typed as spent; money back has a minus.
@@ -60,16 +61,10 @@ export function StatementLineForm({
       return;
     }
     setAmountError(undefined);
-    // A choice of total that names a group the line no longer has is let go.
-    const countsToward =
-      line.countsToward &&
-      (line.countsToward.type === "category" ? line.countsToward.id === categoryId : tagIds.includes(line.countsToward.id))
-        ? line.countsToward
-        : null;
     change.mutate(
       {
         lineId: line.id,
-        input: { categoryId, tagIds, kind, leftOut: !counted, txnDate, description: description.trim(), amountCents, countsToward },
+        input: { categoryId, tagIds, kind, leftOut, txnDate, description: description.trim(), amountCents },
       },
       {
         onSuccess: ({ alsoFiled }) => {
@@ -97,9 +92,6 @@ export function StatementLineForm({
           />
         ) : (
           <>
-            <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
-            <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
-            <p className={HINT}>Remembered for this payee: its other charges and the next statement are filed the same way.</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label htmlFor={`${id}-kind`} className={LABEL}>
@@ -114,10 +106,13 @@ export function StatementLineForm({
                 </select>
               </div>
               <label className="flex min-h-11 items-center gap-2 self-end font-medium">
-                <input type="checkbox" checked={counted} onChange={(event) => setCounted(event.target.checked)} className="size-5" />
-                Count it in the totals
+                <input type="checkbox" checked={leftOut} onChange={(event) => setLeftOut(event.target.checked)} className="size-5" />
+                Leave it out
               </label>
             </div>
+            <CategoryField categories={categories} value={categoryId} onChange={setCategoryId} />
+            <TagsField tags={tags} value={tagIds} onChange={setTagIds} />
+            <p className={HINT}>Only a one-off uses these. Remembered for this payee: its other charges and the next statement get the same.</p>
             {line.duplicateOf !== null && (
               <p className={HINT}>An earlier statement of this account has this line too, so it is counted there, not here.</p>
             )}
@@ -171,7 +166,7 @@ function FixWhatWasRead({
     <>
       <button type="button" onClick={onBack} className="inline-flex min-h-11 items-center gap-1 font-semibold text-accent-ink">
         <ChevronLeft aria-hidden className="size-4" />
-        Back to category and tags
+        Back
       </button>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>

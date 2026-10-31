@@ -958,7 +958,7 @@ public final class Ledger {
             BalanceEntry before = entered.get(i - 1);
             // Only what neither balance already holds: a balance the day began with leaves that day's movements to what
             // follows it, one the day ended with already has them.
-            long deposits = depositsWithin(lines, before.settlesFrom(), entry.settlesFrom().minusDays(1));
+            long deposits = settledWithin(lines, before.settlesFrom(), entry.settlesFrom().minusDays(1));
             long growth = GainLoss.between(
                     Money.ofCents(before.amountCents()), Money.ofCents(entry.amountCents()), Money.ofCents(deposits)).cents();
             changes.add(new BalanceChange(
@@ -1014,6 +1014,15 @@ public final class Ledger {
     /** What the listed movements did to the balance within {@code from}–{@code to}, both inclusive. */
     private static long depositsWithin(List<Transaction> lines, LocalDate from, LocalDate to) {
         return lines.stream().filter(line -> within(line.date(), from, to)).mapToLong(Transaction::amountCents).sum();
+    }
+
+    /**
+     * What was put in between two balances entered: the movements within {@code from}–{@code to}, leaving out a bill paid
+     * by hand and not yet ticked off, which the balances do not hold yet (it counts after the newest of them). Counted, it
+     * would show as growth (Rachel, 2026-10-30: "Growth" of ,703.29 where the balance was 5.23 off).
+     */
+    private static long settledWithin(List<Transaction> lines, LocalDate from, LocalDate to) {
+        return lines.stream().filter(line -> !line.unpaid() && within(line.date(), from, to)).mapToLong(Transaction::amountCents).sum();
     }
 
     /**

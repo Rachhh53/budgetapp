@@ -144,7 +144,8 @@ class StatementReadersTest {
                 <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261004120000<DTUSER>20261003<TRNAMT>-54.20<FITID>A1<NAME>KROGER #123</STMTTRN>
                 <STMTTRN><TRNTYPE>PAYMENT<DTPOSTED>20261007<TRNAMT>500.00<FITID>A2<NAME>PAYMENT THANK YOU</STMTTRN>
                 <STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20261010<TRNAMT>12.10<FITID>A3<NAME>KROGER #123<MEMO>RETURN</STMTTRN>
-                </BANKTRANLIST></CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>
+                </BANKTRANLIST><LEDGERBAL><BALAMT>-1234.56<DTASOF>20261013</LEDGERBAL>
+                <AVAILBAL><BALAMT>3765.44</AVAILBAL></CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>
                 """;
         assertThat(OfxStatement.looksLikeOfx(ofx)).isTrue();
         StatementRead read = OfxStatement.read(ofx, true);
@@ -159,6 +160,9 @@ class StatementReadersTest {
         assertThat(read.lines().get(0).postedDate()).isEqualTo(LocalDate.of(2026, 10, 4));
         assertThat(read.lines().get(1).postedDate()).isNull();
         assertThat(read.lines().get(2).description()).isEqualTo("KROGER #123 RETURN");
+        // Only the closing balance is in an OFX file; on a card it is kept as what is owed, not the available credit.
+        assertThat(read.previousBalance()).isNull();
+        assertThat(read.newBalance()).isEqualTo(Money.ofCents(123456));
     }
 
     @Test
@@ -174,6 +178,7 @@ class StatementReadersTest {
                 """;
         StatementRead read = OfxStatement.read(ofx, false);
         assertThat(read.lines()).extracting(Line::description).containsExactly("CITY WATER & SEWER", "TO SAVINGS");
+        assertThat(read.newBalance()).isNull();
         assertThat(read.lines()).extracting(Line::kind).containsExactly(Kind.CHARGE, Kind.TRANSFER);
     }
 
@@ -216,6 +221,139 @@ class StatementReadersTest {
                 LocalDate.of(2027, 1, 3), LocalDate.of(2027, 1, 5));
         assertThat(read.lines().get(2).postedDate()).isEqualTo(LocalDate.of(2026, 12, 19));
         assertThat(read.lines()).allMatch(Line::sure);
+        // The statement's own balances, which its rows are checked against.
+        assertThat(read.previousBalance()).isEqualTo(Money.ofCents(100000));
+        assertThat(read.newBalance()).isEqualTo(Money.ofCents(58010));
+    }
+
+    @Test
+    void aDiscoverSummaryGivesTheStatementsOwnTotals() {
+        // Discover's account summary (Rachel, 2026-10-30): what adds to what is owed is split into five lines.
+        List<Row> rows = List.of(
+                row(1, "Open", "to", "Close", "Date:", "09/14/2026", "-", "10/13/2026"),
+                row(1, "Previous", "Balance", "$1,000.00"),
+                row(1, "Payments", "and", "Credits", "-$500.00"),
+                row(1, "Purchases", "+$92.20"),
+                row(1, "Balance", "Transfers", "+$0.00"),
+                row(1, "Cash", "Advances", "+$0.00"),
+                row(1, "Fees", "Charged", "+$0.00"),
+                row(1, "Interest", "Charged", "+$12.34"),
+                row(1, "New", "Balance", "$604.54"),
+                row(1, "PAYMENTS", "AND", "CREDITS"),
+                row(1, "09/20", "INTERNET", "PAYMENT", "-", "THANK", "YOU", "-$500.00"),
+                row(1, "PURCHASES"),
+                row(1, "09/18", "KROGER", "#123", "$54.20"),
+                row(1, "10/02", "SHELL", "OIL", "5744", "$38.00"),
+                row(1, "INTEREST", "CHARGED"),
+                row(1, "10/13", "INTEREST", "CHARGE", "ON", "PURCHASES", "$12.34"));
+        StatementRead read = PdfStatement.read(rows, true, TODAY);
+
+        assertThat(read.previousBalance()).isEqualTo(Money.ofCents(100000));
+        assertThat(read.newBalance()).isEqualTo(Money.ofCents(60454));
+        assertThat(read.charges()).isEqualTo(Money.ofCents(10454));
+        assertThat(read.credits()).isEqualTo(Money.ofCents(50000));
+        // The summary lines are not charges themselves.
+        assertThat(read.lines()).extracting(line -> line.amount().cents()).containsExactly(-50000L, 5420L, 3800L, 1234L);
+    }
+
+    @Test
+    void aSynchronySummaryWithSignsAndPaymentsApartFromCredits() {
+        // The Amazon Store Card's summary (Rachel, 2026-10-30): a sign before each line, payments and other credits apart,
+        // and a payment due date that is not a payment.
+        List<Row> rows = List.of(
+                row(1, "Billing", "Cycle", "from", "09/14/2026", "to", "10/13/2026"),
+                row(1, "Previous", "Balance", "$1,000.00"),
+                row(1, "(-)", "Payments", "$500.00"),
+                row(1, "(-)", "Other", "Credits", "$12.10"),
+                row(1, "(+)", "Purchases/Debits", "$92.20"),
+                row(1, "(+)", "Fees", "Charged", "$0.00"),
+                row(1, "(+)", "Interest", "Charged", "$12.34"),
+                row(1, "(=)", "New", "Balance", "$592.44"),
+                row(1, "Payment", "Due", "Date", "11/10/2026", "Minimum", "Payment", "Due", "$35.00"),
+                row(1, "09/20", "PAYMENT", "-", "THANK", "YOU", "-$500.00"),
+                row(1, "09/22", "AMAZON", "RETURN", "-$12.10"),
+                row(1, "09/18", "AMAZON.COM", "$92.20"),
+                row(1, "10/13", "INTEREST", "CHARGE", "ON", "PURCHASES", "$12.34"));
+        StatementRead read = PdfStatement.read(rows, true, TODAY);
+
+        assertThat(read.previousBalance()).isEqualTo(Money.ofCents(100000));
+        assertThat(read.newBalance()).isEqualTo(Money.ofCents(59244));
+        assertThat(read.charges()).isEqualTo(Money.ofCents(10454));
+        assertThat(read.credits()).isEqualTo(Money.ofCents(51210));
+    }
+
+    @Test
+    void aSummaryThatCallsThePurchasesTransactions() {
+        // Rachel, 2026-10-30: total charges said $0.00, the fees and interest alone, when the purchases line was "Transactions".
+        List<Row> rows = List.of(
+                row(1, "Billing", "Cycle", "from", "09/14/2026", "to", "10/13/2026"),
+                row(1, "Previous", "Balance", "$1,000.00"),
+                row(1, "(-)", "Payments", "$500.00"),
+                row(1, "(+)", "Transactions", "$92.20"),
+                row(1, "(+)", "Fees", "Charged", "$0.00"),
+                row(1, "(+)", "Interest", "Charged", "$0.00"),
+                row(1, "(=)", "New", "Balance", "$592.20"),
+                row(1, "TRANSACTIONS"),
+                row(1, "09/18", "AMAZON.COM", "$92.20"));
+        StatementRead read = PdfStatement.read(rows, true, TODAY);
+
+        assertThat(read.charges()).isEqualTo(Money.ofCents(9220));
+        assertThat(read.credits()).isEqualTo(Money.ofCents(50000));
+    }
+
+    @Test
+    void anAmazonStoreCardChargeIsDescribedByWhatWasBought() {
+        // Rachel, 2026-10-30: each charge on three rows, the reference and AMAZON RETAIL with the amount, a scrambled
+        // code, then what was bought.
+        List<Row> rows = List.of(
+                row(1, "Billing", "Cycle", "from", "08/14/2026", "to", "09/13/2026"),
+                row(1, "08/29", "P934200L9EHM6DF03", "AMAZON", "RETAIL", "SEATTLE", "WA", "$50.08"),
+                row(1, "BrrRTxVYnMRq"),
+                row(1, "EltaMD", "UV", "Skin", "Recovery", "Green"),
+                row(1, "09/02", "P934200L9EHM6DF04", "AMAZON", "RETAIL", "SEATTLE", "WA", "$12.99"),
+                row(1, "Kx7PqR2mWv9z"),
+                row(1, "Kitchen", "Towels"),
+                // A charge with no rows after it keeps its own words, and a heading after it is not taken as them.
+                row(1, "09/05", "P934200L9EHM6DF05", "AMAZON", "RETAIL", "SEATTLE", "WA", "$8.00"),
+                row(1, "FEES", "CHARGED"),
+                row(1, "09/10", "P934200L9EHM6DF06", "AMAZON", "RETAIL", "SEATTLE", "WA", "$5.00"),
+                row(1, "Batteries"),
+                // Rachel, 2026-10-30: a code whose only capitals start it.
+                row(1, "10/01", "P934200M5EHM6LL23", "AMAZON", "RETAIL", "SEATTLE", "WA", "$4.76"),
+                row(1, "BCaaypvfqjgg"),
+                row(1, "Clorox", "Toilet", "Bowl", "Cleaner", "Cli"),
+                // Any scramble of letters is a code there, all small or all capitals too.
+                row(1, "10/02", "P934200M5EHM6LL24", "AMAZON", "RETAIL", "SEATTLE", "WA", "$3.00"),
+                row(1, "qwhxkzmpvbtr"),
+                row(1, "Dish", "Soap"),
+                // A heading under a charge is neither, and keeps working as a heading.
+                row(1, "10/03", "P934200M5EHM6LL25", "AMAZON", "RETAIL", "SEATTLE", "WA", "$2.00"),
+                row(1, "TRANSACTIONS"),
+                row(1, "Continued", "on", "next", "page"),
+                // Under a charge that isn't Amazon's, the rows are left alone.
+                row(1, "10/04", "CORNER", "MARKET", "$1.00"),
+                row(1, "ABCDEFGHJK"),
+                row(1, "Paper", "Towels"));
+        StatementRead read = PdfStatement.read(rows, true, TODAY);
+
+        assertThat(read.lines()).extracting(Line::description).containsExactly(
+                "EltaMD UV Skin Recovery Green",
+                "Kitchen Towels",
+                "P934200L9EHM6DF05 AMAZON RETAIL SEATTLE WA",
+                "P934200L9EHM6DF06 AMAZON RETAIL SEATTLE WA",
+                "Clorox Toilet Bowl Cleaner Cli",
+                "Dish Soap",
+                "P934200M5EHM6LL25 AMAZON RETAIL SEATTLE WA",
+                "CORNER MARKET");
+        assertThat(read.lines()).extracting(line -> line.amount().cents()).containsExactly(5008L, 1299L, 800L, 500L, 476L, 300L, 200L, 100L);
+    }
+
+    @Test
+    void aStatementThatDoesNotSayItsTotalsHasNone() {
+        StatementRead read = PdfStatement.read(List.of(row(1, "Statement", "period", "09/01/26", "-", "09/30/26"), row(1, "09/02", "KROGER", "54.20")),
+                true, TODAY);
+        assertThat(read.charges()).isNull();
+        assertThat(read.credits()).isNull();
     }
 
     @Test

@@ -60,6 +60,10 @@ final class SampleStatements {
         String[][] rows = {
             {"Statement period 09/01/26 - 09/30/26"},
             {"Previous Balance", "$500.00"},
+            // The card's account summary, as Discover prints it.
+            {"Payments and Credits", "-$500.00"},
+            {"Purchases", "+$92.20"},
+            {"Fees Charged", "+$0.00"},
             {"PAYMENTS AND OTHER CREDITS"},
             {"09/10", "PAYMENT THANK YOU", "500.00"},
             {"PURCHASES"},

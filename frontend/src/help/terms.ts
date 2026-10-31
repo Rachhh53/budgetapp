@@ -40,7 +40,7 @@ export const TERMS = {
   },
   available: {
     term: "Available after buckets",
-    about: "The projected ending less what is set aside in buckets: the money that is free to spend. Lowest is the least it gets to during the period.",
+    about: "The projected ending less what the buckets hold at the end of the pay period: the money that is free to spend. Accounts & buckets shows the buckets at the start and at the end; the end is what is taken off. Lowest is the least it gets to during the period.",
   },
   bucket: {
     term: "Bucket",
@@ -264,7 +264,12 @@ export const TERMS = {
   statementUpload: {
     term: "Statement upload",
     about:
-      "A statement downloaded from your bank, read on this PC. Its charges are totalled by pay period and category or tag, and each total changes only the budget or recurring item you choose for it.",
+      "A statement downloaded from your bank, read on this PC. Put each charge on a budget, say which bill or one-off it already is, or add it as a one-off. Nothing changes in your pay periods until you apply it: then a budget becomes what was spent on it, plus what is still to come for days no statement covers yet.",
+  },
+  statementCheck: {
+    term: "Check against the statement",
+    about:
+      "From the statement: its beginning balance, total charges, payments and credits, and statement balance, read from the file when it says them or typed with Edit. From the rows Budget read: every row added up by Budget, each total beside the statement's own. Missing records is the statement balance less the beginning balance less the rows added up: $0.00 when every row was read.",
   },
   enteredBalance: {
     term: "Balance you entered",

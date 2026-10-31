@@ -10,9 +10,15 @@ import java.util.List;
  * money yet, only lines to look over.
  *
  * @param from the first day the statement covers, when it says; otherwise its first line's date. Null with no lines
- * @param to   the last day it covers, when it says; otherwise its last line's date. Null with no lines
+ * @param to              the last day it covers, when it says; otherwise its last line's date. Null with no lines
+ * @param previousBalance the balance it starts from, when it says (on a card, what was owed); null otherwise
+ * @param newBalance      the balance it ends with, when it says (on a card, what is owed); null otherwise
+ * @param charges         its own total of everything that added to what is owed (purchases, balance transfers, cash
+ *                        advances, fees and interest), when it says; null otherwise
+ * @param credits         its own total of payments and credits, as a positive amount, when it says; null otherwise
  */
-public record StatementRead(List<Line> lines, LocalDate from, LocalDate to) {
+public record StatementRead(
+        List<Line> lines, LocalDate from, LocalDate to, Money previousBalance, Money newBalance, Money charges, Money credits) {
 
     /** What a line is, as far as a statement can tell. Payments and transfers are already planned in Budget. */
     public enum Kind {
@@ -45,6 +51,16 @@ public record StatementRead(List<Line> lines, LocalDate from, LocalDate to) {
         LocalDate last = lines.stream().map(Line::txnDate).max(LocalDate::compareTo).orElse(null);
         LocalDate start = from == null ? first : first != null && first.isBefore(from) ? first : from;
         LocalDate end = to == null ? last : last != null && last.isAfter(to) ? last : to;
-        return new StatementRead(List.copyOf(lines), start, end);
+        return new StatementRead(List.copyOf(lines), start, end, null, null, null, null);
+    }
+
+    /** The same statement, with the balances it says. */
+    StatementRead withBalances(Money previous, Money next) {
+        return new StatementRead(lines, from, to, previous, next, charges, credits);
+    }
+
+    /** The same statement, with its own totals of charges and of payments and credits. */
+    StatementRead withTotals(Money totalCharges, Money totalCredits) {
+        return new StatementRead(lines, from, to, previousBalance, newBalance, totalCharges, totalCredits);
     }
 }
